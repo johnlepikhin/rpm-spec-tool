@@ -1,0 +1,36 @@
+[package]
+name         = "rpm-spec-tool"
+description  = "Pretty-printer and static analyzer CLI for RPM .spec files"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+
+[[bin]]
+name = "rpm-spec-tool"
+path = "src/main.rs"
+
+[dependencies]
+rpm-spec-analyzer = { path = "../analyzer" }
+rpm-spec.workspace   = true
+anyhow.workspace     = true
+serde.workspace      = true
+serde_json.workspace = true
+toml.workspace       = true
+tracing.workspace    = true
+
+clap               = { version = "4", features = ["derive"] }
+codespan-reporting = "0.12"
+serde_yaml         = "0.9"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ignore             = "0.4"
+rayon              = "1"
+similar            = "2"
+is-terminal        = "0.4"
+termcolor          = "1.4"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"

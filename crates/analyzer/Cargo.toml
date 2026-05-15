@@ -1,0 +1,18 @@
+[package]
+name         = "rpm-spec-analyzer"
+description  = "Visitor-based static analyzer library for RPM .spec files"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+rpm-spec.workspace   = true
+serde.workspace      = true
+thiserror.workspace  = true
+toml.workspace       = true
+
+[dev-dependencies]
+pretty_assertions = "1"
