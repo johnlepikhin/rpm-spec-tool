@@ -20,7 +20,7 @@ pub use diagnostic::{
     Applicability, Diagnostic, Edit, Label, LintCategory, Severity, Suggestion,
 };
 pub use lint::{Lint, LintMetadata};
-pub use session::{LintSession, ParseOutcome, parse};
+pub use session::{LintSession, ParseOutcome, ParserDiagnostic, ParserSeverity, analyze, parse};
 pub use visit::Visit;
 
 pub use rpm_spec::ast::Span;

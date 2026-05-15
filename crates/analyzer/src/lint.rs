@@ -8,6 +8,7 @@ use crate::visit::Visit;
 /// `id` is the stable identifier used in tooling and SARIF output; `name` is
 /// the kebab-case configuration key (more diff-friendly than the numeric id).
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct LintMetadata {
     pub id: &'static str,
     pub name: &'static str,

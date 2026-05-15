@@ -25,11 +25,9 @@ clap               = { version = "4", features = ["derive"] }
 codespan-reporting = "0.12"
 serde_yaml         = "0.9"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-ignore             = "0.4"
-rayon              = "1"
 similar            = "2"
 is-terminal        = "0.4"
-termcolor          = "1.4"
+tempfile           = "3"
 
 [dev-dependencies]
 assert_cmd = "2"

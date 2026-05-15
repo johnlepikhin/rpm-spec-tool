@@ -2,7 +2,7 @@
 //! section. Maintainers rely on the section as a tamper-evident audit log;
 //! Fedora packaging guidelines treat its absence as a build defect.
 
-use rpm_spec::ast::{Section, Span, SpecFile, SpecItem};
+use rpm_spec::ast::{Section, Span, SpecFile};
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
 use crate::lint::{Lint, LintMetadata};
@@ -52,10 +52,6 @@ impl<'ast> Visit<'ast> for MissingChangelog {
             self.has_changelog = true;
         }
         visit::walk_section(self, node);
-    }
-
-    fn visit_item(&mut self, node: &'ast SpecItem<Span>) {
-        visit::walk_item(self, node);
     }
 }
 

@@ -2,7 +2,7 @@
 
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::{Args, ValueEnum};
 use rpm_spec_analyzer::parse;
 
@@ -32,7 +32,9 @@ impl Cmd {
     pub fn run(self) -> Result<ExitCode> {
         let paths = self.path.into_iter().collect::<Vec<_>>();
         let sources = io::read_sources(&paths)?;
-        let source = sources.into_iter().next().expect("read_sources guarantees at least one");
+        let Some(source) = sources.into_iter().next() else {
+            bail!("no input source");
+        };
         let outcome = parse(&source.contents);
         match (self.format, self.pretty) {
             (DumpFormat::Json, true) => {

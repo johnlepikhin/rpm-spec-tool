@@ -21,6 +21,7 @@ pub enum Severity {
 /// Coarse-grained classification used for filtering and reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum LintCategory {
     /// Visual / stylistic conventions.
     Style,
@@ -35,6 +36,7 @@ pub enum LintCategory {
 /// How safe an automatic fix is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum Applicability {
     /// Safe to apply unattended. Reserved for fixes that preserve meaning.
     MachineApplicable,
@@ -47,21 +49,40 @@ pub enum Applicability {
 
 /// One byte-range replacement in the source string.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Edit {
     pub span: Span,
     pub replacement: String,
 }
 
+impl Edit {
+    pub fn new(span: Span, replacement: impl Into<String>) -> Self {
+        Self { span, replacement: replacement.into() }
+    }
+}
+
 /// A coherent set of edits offered together with a [`Diagnostic`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Suggestion {
     pub message: String,
     pub edits: Vec<Edit>,
     pub applicability: Applicability,
 }
 
+impl Suggestion {
+    pub fn new(
+        message: impl Into<String>,
+        applicability: Applicability,
+        edits: Vec<Edit>,
+    ) -> Self {
+        Self { message: message.into(), edits, applicability }
+    }
+}
+
 /// Auxiliary span annotation rendered next to the primary location.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Label {
     pub span: Span,
     pub message: String,
@@ -72,6 +93,7 @@ pub struct Label {
 /// `lint_id` is the stable identifier (`"RPM001"`); `lint_name` is the
 /// human-readable kebab-case name used in configuration (`"missing-changelog"`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Diagnostic {
     pub lint_id: &'static str,
     pub lint_name: &'static str,
