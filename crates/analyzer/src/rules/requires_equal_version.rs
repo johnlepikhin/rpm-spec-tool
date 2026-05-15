@@ -5,7 +5,7 @@
 //! `Requires: foo = 1.2` (no release) is fine — sometimes intentional
 //! when version-and-release semantics aren't needed.
 
-use rpm_spec::ast::{DepAtom, Span, Tag, VerOp};
+use rpm_spec::ast::{DepAtom, Span, Tag, Text, TextSegment, VerOp, EVR};
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
 use crate::lint::{Lint, LintMetadata};
@@ -59,6 +59,7 @@ impl<'ast> Visit<'ast> for RequiresEqualVersion {
         if let Some(c) = &atom.constraint
             && c.op == VerOp::Eq
             && c.evr.release.is_some()
+            && !is_lockstep_evr(&c.evr)
             && let Some(name) = atom.name.literal_str()
         {
             self.diagnostics.push(Diagnostic::new(
@@ -73,6 +74,34 @@ impl<'ast> Visit<'ast> for RequiresEqualVersion {
         }
         visit::walk_dep_atom(self, atom);
     }
+}
+
+/// `true` when both the version and the release portions of `evr`
+/// reference the source-package's own `%{version}` and `%{release}`
+/// macros — the canonical "co-versioned subpackage" idiom
+/// (`Requires: cpp = %{version}-%{release}`). Pinning to that exact
+/// VR is correct: a subpackage compiled against `cpp-1.2-3` must
+/// not run with `cpp-1.2-4`. Suggesting `>=` here would be wrong.
+fn is_lockstep_evr(evr: &EVR) -> bool {
+    let v_locked = text_references_macro(&evr.version, "version");
+    let r_locked = evr
+        .release
+        .as_ref()
+        .map(|r| text_references_macro(r, "release"))
+        .unwrap_or(false);
+    v_locked && r_locked
+}
+
+/// `true` when any segment of `t` is a [`TextSegment::Macro`] whose
+/// name matches `wanted` (e.g. `"version"`, `"release"`). The
+/// `MacroRef.name` is stored without the `%`/`{}` sigils and without
+/// any `?`/`!?` conditional prefix (those live in `MacroRef.conditional`),
+/// so a plain `==` comparison is enough.
+fn text_references_macro(t: &Text, wanted: &str) -> bool {
+    t.segments.iter().any(|s| match s {
+        TextSegment::Macro(m) => m.name == wanted,
+        _ => false,
+    })
 }
 
 impl Lint for RequiresEqualVersion {
@@ -134,5 +163,43 @@ mod tests {
         let diags = run("Name: x\nRequires: (foo = 1.2-3 and bar)\n");
         assert_eq!(diags.len(), 1, "got {diags:?}");
         assert!(diags[0].message.contains("foo"));
+    }
+
+    #[test]
+    fn silent_for_version_release_lockstep() {
+        // The canonical co-versioned-subpackage idiom. `%{version}`
+        // and `%{release}` both refer to the source package; pinning
+        // a subpackage to its parent's exact VR is correct here.
+        let src = "Name: x\nRequires: cpp = %{version}-%{release}\n";
+        assert!(
+            run(src).is_empty(),
+            "lockstep pattern must not trigger RPM031"
+        );
+    }
+
+    #[test]
+    fn silent_for_lockstep_inside_rich_dep() {
+        // The lockstep skip must also apply to atoms buried inside
+        // rich-dep expressions.
+        let src = "Name: x\nRequires: (cpp = %{version}-%{release} and bar)\n";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_partial_macro_with_literal_release() {
+        // `%{version}-3` is NOT lockstep — release is a hard-coded
+        // literal that blocks compatible rebuilds.
+        let src = "Name: x\nRequires: foo = %{version}-3\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_partial_literal_with_macro_release() {
+        // Mirror of the above — literal version + `%{release}` is
+        // also not the canonical lockstep pattern.
+        let src = "Name: x\nRequires: foo = 1.2-%{release}\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }
