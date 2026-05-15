@@ -49,6 +49,14 @@ impl ConditionMentionedManyTimes {
 
     fn record<B>(&mut self, node: &Conditional<Span, B>) {
         for branch in &node.branches {
+            // A condition that is already a single macro / identifier /
+            // literal (optionally wrapped in `!` or parens) has nothing
+            // to factor out — `%if %{build_libatomic}` IS the `%global`
+            // flag form. Suggesting "consider factoring into a
+            // `%global` flag" for a one-token expression is noise.
+            if is_trivial_expression(&branch.expr) {
+                continue;
+            }
             let key = match &branch.expr {
                 CondExpr::Raw(t) => t.literal_str().map(|s| s.trim().to_owned()),
                 CondExpr::Parsed(ast) => Some(canonicalise_ast(ast)),
@@ -61,6 +69,50 @@ impl ConditionMentionedManyTimes {
             }
         }
     }
+}
+
+/// `true` when `expr` is already a single-token reference and so has
+/// no compound structure worth lifting into a named `%global` flag.
+/// Covers single macros (`%{X}`, `%{?X}`, `%X`), bare identifiers,
+/// integer/string literals, and unary negations / paren-wrappings of
+/// the above.
+fn is_trivial_expression(expr: &CondExpr<Span>) -> bool {
+    match expr {
+        CondExpr::Parsed(ast) => is_trivial_ast(ast.as_ref()),
+        CondExpr::Raw(t) => match t.literal_str() {
+            Some(s) => is_trivial_raw(s.trim()),
+            None => false,
+        },
+        _ => false,
+    }
+}
+
+fn is_trivial_ast<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
+    use rpm_spec::ast::ExprAst;
+    match ast.peel_parens() {
+        ExprAst::Macro { .. }
+        | ExprAst::Identifier { .. }
+        | ExprAst::Integer { .. }
+        | ExprAst::String { .. } => true,
+        ExprAst::Not { inner, .. } => is_trivial_ast(inner),
+        _ => false,
+    }
+}
+
+/// Best-effort trivial-check for `CondExpr::Raw` text — used when the
+/// parser couldn't fit the expression into the modelled grammar. A
+/// single macro reference (with optional `!` negation and `0`
+/// prefix used by `0%{?rhel}` idioms) is trivial; anything containing
+/// boolean / comparison operators is not.
+fn is_trivial_raw(s: &str) -> bool {
+    let s = s.strip_prefix('!').map(str::trim_start).unwrap_or(s);
+    let s = s.strip_prefix('0').unwrap_or(s);
+    if !s.starts_with('%') {
+        return false;
+    }
+    // Any space or operator byte = composite expression.
+    !s.bytes()
+        .any(|b| matches!(b, b' ' | b'\t' | b'&' | b'|' | b'=' | b'<' | b'>' | b'!' | b'+' | b'-' | b'*' | b'/'))
 }
 
 /// Render an [`ExprAst`] into a canonical comparable string. Drops
@@ -151,10 +203,12 @@ mod tests {
 
     #[test]
     fn rpm093_flags_repeated_condition() {
-        // 5 identical `%if 0%{?rhel}` blocks → at threshold (>=5).
+        // 5 identical `%if 0%{?rhel} >= 8` blocks → at threshold (>=5).
+        // Use a composite comparison so the trivial-condition filter
+        // does not suppress the diagnostic.
         let mut src = String::from("Name: x\n");
         for _ in 0..5 {
-            src.push_str("%if 0%{?rhel}\nLicense: MIT\n%endif\n");
+            src.push_str("%if 0%{?rhel} >= 8\nLicense: MIT\n%endif\n");
         }
         let diags = run(&src);
         assert_eq!(diags.len(), 5, "expected one diag per occurrence: {diags:?}");
@@ -165,7 +219,7 @@ mod tests {
     fn rpm093_silent_below_threshold() {
         let mut src = String::from("Name: x\n");
         for _ in 0..4 {
-            src.push_str("%if 0%{?rhel}\nLicense: MIT\n%endif\n");
+            src.push_str("%if 0%{?rhel} >= 8\nLicense: MIT\n%endif\n");
         }
         assert!(run(&src).is_empty());
     }
@@ -173,8 +227,50 @@ mod tests {
     #[test]
     fn rpm093_distinct_conditions_dont_aggregate() {
         let src = "Name: x\n\
-                   %if 0%{?rhel}\nLicense: MIT\n%endif\n\
-                   %if 0%{?fedora}\nLicense: MIT\n%endif\n";
+                   %if 0%{?rhel} >= 8\nLicense: MIT\n%endif\n\
+                   %if 0%{?fedora} >= 35\nLicense: MIT\n%endif\n";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn rpm093_silent_for_trivial_single_macro_reference() {
+        // `%if %{build_libatomic}` is the canonical flag-usage form
+        // already — "factor into a %global flag" would be a no-op and
+        // is misleading noise.
+        let mut src = String::from("Name: x\n");
+        for _ in 0..6 {
+            src.push_str(
+                "%if %{build_libatomic}\n\
+                 Requires: libatomic\n\
+                 %endif\n",
+            );
+        }
+        assert!(
+            run(&src).is_empty(),
+            "trivial single-macro condition must not trigger RPM093"
+        );
+    }
+
+    #[test]
+    fn rpm093_silent_for_negated_single_macro() {
+        // `%if !%{X}` is still single-token-shaped after stripping the
+        // unary `!`; the `%global` advice doesn't apply.
+        let mut src = String::from("Name: x\n");
+        for _ in 0..6 {
+            src.push_str("%if !%{X}\nLicense: MIT\n%endif\n");
+        }
+        assert!(run(&src).is_empty());
+    }
+
+    #[test]
+    fn rpm093_fires_for_composite_expression_with_macro() {
+        // `%{?rhel} >= 8` has structure — a comparison against a
+        // literal — which IS worth lifting into a named flag.
+        let mut src = String::from("Name: x\n");
+        for _ in 0..5 {
+            src.push_str("%if %{?rhel} >= 8\nLicense: MIT\n%endif\n");
+        }
+        let diags = run(&src);
+        assert!(!diags.is_empty(), "composite expression should still fire");
     }
 }
