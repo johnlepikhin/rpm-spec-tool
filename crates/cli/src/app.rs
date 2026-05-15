@@ -32,6 +32,8 @@ pub enum Command {
     Lint(commands::lint::Cmd),
     /// Pretty-print spec files (with --check / --in-place / --diff modes).
     Format(commands::format::Cmd),
+    /// Pretty-print spec files to stdout with ANSI syntax highlighting.
+    Pretty(commands::pretty::Cmd),
     /// Dump the parsed AST.
     Ast(commands::ast::Cmd),
     /// Lint and format-check in one invocation (CI shorthand).
@@ -55,6 +57,7 @@ impl Application {
         match self.command {
             Command::Lint(cmd) => cmd.run(color),
             Command::Format(cmd) => cmd.run(color),
+            Command::Pretty(cmd) => cmd.run(color),
             Command::Ast(cmd) => cmd.run(),
             Command::Check(cmd) => cmd.run(color),
         }

@@ -707,6 +707,180 @@ fn unreachable_branch_warns_on_nested_negation() {
     );
 }
 
+// =====================================================================
+// Phase X — `pretty` subcommand (ANSI syntax highlighting).
+// =====================================================================
+
+#[test]
+fn pretty_emits_ansi_when_color_always() {
+    let spec = write_temp(CLEAN_SPEC);
+    let (code, stdout, _) = run(
+        &["pretty", "--color", "always", spec.path().to_str().unwrap()],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains('\x1b'),
+        "expected ANSI escape in stdout with --color always:\n{stdout}"
+    );
+    // Spec content must still survive the round trip through pretty.
+    assert!(
+        stdout.contains("hello"),
+        "expected the Name value in stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn pretty_omits_ansi_when_piped_under_color_auto() {
+    // `run()` collects stdout via a pipe — stdout is *not* a TTY in
+    // the test harness, so `--color auto` (the default) must elide
+    // colour. This is the matched-clippy/bat behaviour.
+    let spec = write_temp(CLEAN_SPEC);
+    let (code, stdout, _) = run(&["pretty", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(
+        !stdout.contains('\x1b'),
+        "expected no ANSI escapes on piped stdout:\n{stdout:?}"
+    );
+}
+
+#[test]
+fn pretty_round_trips_through_ansi_strip() {
+    // `pretty --color never` must produce output that re-parses to
+    // the same AST as the input. We don't compare bytes against
+    // `format` because pretty defaults to `--indent 2` (a display
+    // choice) — instead we round-trip through the parser.
+    let spec = write_temp(CLEAN_SPEC);
+    let (code, stdout, _) = run(
+        &["pretty", "--color", "never", spec.path().to_str().unwrap()],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        !stdout.contains('\x1b'),
+        "expected no ANSI escapes with --color never"
+    );
+    // Sanity: a few key strings must survive.
+    for needle in &["Name:", "hello", "%description", "%changelog"] {
+        assert!(
+            stdout.contains(needle),
+            "missing `{needle}` in pretty output:\n{stdout}"
+        );
+    }
+    // Real regression coverage: re-parse the pretty output and require
+    // its AST to match the input's AST. `parse_str` already strips
+    // spans (returns `SpecFile<()>`), so direct equality is meaningful.
+    let original = rpm_spec::parser::parse_str(CLEAN_SPEC).spec;
+    let reprinted = rpm_spec::parser::parse_str(&stdout).spec;
+    assert_eq!(
+        original, reprinted,
+        "pretty output must re-parse to the same AST.\n=== STDOUT ===\n{stdout}\n=== END ==="
+    );
+}
+
+#[test]
+fn pretty_renders_fixture_without_error() {
+    // Mirrors how `lint`/`format` tests would consume a fixture file
+    // (kept for consistency once the analyzer pulls fixtures from the
+    // workspace tree). Asserts a clean exit and AST round-trip on a
+    // representative spec touching preamble, %if, %description and
+    // %changelog token kinds.
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/pretty_sample.spec"
+    );
+    let source = std::fs::read_to_string(fixture).expect("read fixture");
+    let (code, stdout, stderr) =
+        run(&["pretty", "--color", "never", fixture], None);
+    assert_eq!(code, 0, "pretty on fixture must succeed; stderr={stderr}");
+    let original = rpm_spec::parser::parse_str(&source).spec;
+    let reprinted = rpm_spec::parser::parse_str(&stdout).spec;
+    assert_eq!(
+        original, reprinted,
+        "fixture pretty output must re-parse to the same AST.\n\
+         === STDOUT ===\n{stdout}\n=== END ==="
+    );
+}
+
+#[test]
+fn pretty_indent_override_applies() {
+    // `--indent 4` must indent the inner `%if` body by 4 spaces per
+    // level. Use the existing nested-conditional fixture so the test
+    // exercises both the CLI flag plumbing and the printer's nested
+    // indent logic.
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/bad_unreachable_nested.spec"
+    );
+    let (code, stdout, stderr) = run(
+        &["pretty", "--color", "never", "--indent", "4", fixture],
+        None,
+    );
+    assert_eq!(code, 0, "pretty --indent 4 must succeed; stderr={stderr}");
+    // Inner nested `%if X` sits two levels deep, so its body line
+    // (`BuildArch: ...`) must be prefixed by 8 spaces, and the inner
+    // `%if`/`%endif` themselves by 4.
+    assert!(
+        stdout.contains("\n    %if X\n"),
+        "expected 4-space indent on inner %if; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("\n        BuildArch:"),
+        "expected 8-space indent on doubly-nested body; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn pretty_default_indent_is_two_when_config_zero() {
+    // No `--indent` flag and no config override → the display-mode
+    // floor in `commands/pretty.rs` kicks in and pcfg.indent is set to
+    // `DEFAULT_PRETTY_INDENT` (2). Asserts the floor end-to-end.
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\n\
+URL: https://e.org\n\
+%if 1\n%global x 1\n%endif\n\
+%description\nb\n\
+%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, stdout, stderr) = run(
+        &["pretty", "--color", "never", spec.path().to_str().unwrap()],
+        None,
+    );
+    assert_eq!(code, 0, "pretty must succeed; stderr={stderr}");
+    assert!(
+        stdout.contains("\n  %global x 1\n"),
+        "expected default 2-space indent inside %if; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn pretty_preamble_align_column_override_applies() {
+    // `--preamble-align-column 20` widens the gap between tag colons
+    // and their values. With the default of 16, `Name:` is followed
+    // by 11 spaces; at 20 it must be followed by 15.
+    let spec = write_temp(CLEAN_SPEC);
+    let (code, stdout, stderr) = run(
+        &[
+            "pretty",
+            "--color",
+            "never",
+            "--preamble-align-column",
+            "20",
+            spec.path().to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(code, 0, "pretty must succeed; stderr={stderr}");
+    assert!(
+        stdout.contains("Name:               hello"),
+        "expected value aligned at column 20; got:\n{stdout}"
+    );
+    // AST still round-trips after the alignment change.
+    let original = rpm_spec::parser::parse_str(CLEAN_SPEC).spec;
+    let reprinted = rpm_spec::parser::parse_str(&stdout).spec;
+    assert_eq!(original, reprinted);
+}
+
 #[test]
 fn always_true_branch_warns_on_implied_inner() {
     // path = X && Y; inner = X — path implies branch, RPM114.
