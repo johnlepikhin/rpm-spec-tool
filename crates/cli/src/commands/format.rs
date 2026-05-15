@@ -43,13 +43,10 @@ impl Cmd {
         let mut any_io_error = false;
 
         for source in sources {
-            let analyzer_cfg = match config_cache.load_for(&source.path) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("error: {e:#}");
-                    any_io_error = true;
-                    continue;
-                }
+            let Some(analyzer_cfg) =
+                config_cache.load_or_report(&source.path, &mut any_io_error)
+            else {
+                continue;
             };
             let pcfg = build_printer_config(&analyzer_cfg.format, self.preamble_align_column);
 

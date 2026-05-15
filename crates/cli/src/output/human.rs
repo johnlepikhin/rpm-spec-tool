@@ -5,8 +5,8 @@ use codespan_reporting::diagnostic::{Diagnostic as CsDiag, Label, Severity as Cs
 use codespan_reporting::files::SimpleFile;
 use codespan_reporting::term::termcolor::{ColorChoice as TermColor, StandardStream};
 use codespan_reporting::term::{self, Config};
-use is_terminal::IsTerminal;
 use rpm_spec_analyzer::{Diagnostic, Severity};
+use std::io::IsTerminal;
 
 use crate::app::ColorChoice;
 use crate::io::Source;

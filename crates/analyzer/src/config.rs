@@ -74,6 +74,25 @@ impl Config {
             self.lints.insert(n.as_ref().to_owned(), severity);
         }
     }
+
+    /// Apply CLI severity overrides in the conventional clippy-style
+    /// order: `allow` first, then `warn`, then `deny`.
+    ///
+    /// Resolution rules:
+    /// * **Across lists:** later groups override earlier ones, so a lint
+    ///   present in both `--allow` and `--deny` ends up at `Deny`.
+    /// * **Within one list:** duplicates resolve to last-write-wins
+    ///   (e.g. `--deny foo --deny foo` is no different from one flag).
+    pub fn apply_cli_overrides<S: AsRef<str>>(
+        &mut self,
+        allow: &[S],
+        warn: &[S],
+        deny: &[S],
+    ) {
+        self.apply_overrides(allow, Severity::Allow);
+        self.apply_overrides(warn, Severity::Warn);
+        self.apply_overrides(deny, Severity::Deny);
+    }
 }
 
 #[cfg(test)]
@@ -114,8 +133,23 @@ preamble-align-column = 20
 
     #[test]
     fn to_printer_config_zero_means_single_space() {
-        let mut cfg = FormatConfig::default();
-        cfg.preamble_align_column = 0;
+        let cfg = FormatConfig { preamble_align_column: 0, ..FormatConfig::default() };
         assert!(cfg.to_printer_config().preamble_value_column.is_none());
+    }
+
+    #[test]
+    fn cli_overrides_priority_deny_over_allow() {
+        let mut cfg = Config::default();
+        // Same lint listed in both `allow` and `deny`: deny applies last
+        // and must win.
+        cfg.apply_cli_overrides::<&str>(&["foo"], &[], &["foo"]);
+        assert_eq!(cfg.severity_for("foo", Severity::Warn), Severity::Deny);
+    }
+
+    #[test]
+    fn cli_overrides_priority_warn_over_allow() {
+        let mut cfg = Config::default();
+        cfg.apply_cli_overrides::<&str>(&["bar"], &["bar"], &[]);
+        assert_eq!(cfg.severity_for("bar", Severity::Deny), Severity::Warn);
     }
 }

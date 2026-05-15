@@ -28,13 +28,10 @@ impl Cmd {
         let mut all_diagnostics = Vec::new();
 
         for source in sources {
-            let analyzer_cfg = match config_cache.load_for(&source.path) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("error: {e:#}");
-                    any_io_error = true;
-                    continue;
-                }
+            let Some(analyzer_cfg) =
+                config_cache.load_or_report(&source.path, &mut any_io_error)
+            else {
+                continue;
             };
 
             let (outcome, diags) = analyze(&source.contents, &analyzer_cfg);

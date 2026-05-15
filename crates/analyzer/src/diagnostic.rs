@@ -56,6 +56,8 @@ pub struct Edit {
 }
 
 impl Edit {
+    /// Build an edit that replaces the source bytes covered by `span` with
+    /// `replacement`. `span` must align with UTF-8 codepoint boundaries.
     pub fn new(span: Span, replacement: impl Into<String>) -> Self {
         Self { span, replacement: replacement.into() }
     }
@@ -71,10 +73,13 @@ pub struct Suggestion {
 }
 
 impl Suggestion {
+    /// Build a suggestion. Argument order mirrors the struct field order
+    /// (`message`, `edits`, `applicability`) so call sites read like the
+    /// type definition.
     pub fn new(
         message: impl Into<String>,
-        applicability: Applicability,
         edits: Vec<Edit>,
+        applicability: Applicability,
     ) -> Self {
         Self { message: message.into(), edits, applicability }
     }

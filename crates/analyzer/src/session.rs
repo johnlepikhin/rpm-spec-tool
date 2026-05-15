@@ -35,12 +35,19 @@ pub enum ParserSeverity {
 
 impl From<RawParserDiagnostic> for ParserDiagnostic {
     fn from(d: RawParserDiagnostic) -> Self {
+        let severity = match d.severity {
+            RawParserSeverity::Warning => ParserSeverity::Warning,
+            RawParserSeverity::Error => ParserSeverity::Error,
+            // Upstream `Severity` is `#[non_exhaustive]`. If a stricter
+            // variant (e.g. `Fatal`) is added, default to `Error` so we
+            // never silently downgrade severity.
+            other => {
+                tracing::warn!(?other, "unmapped upstream parser severity; treating as Error");
+                ParserSeverity::Error
+            }
+        };
         Self {
-            severity: match d.severity {
-                RawParserSeverity::Warning => ParserSeverity::Warning,
-                RawParserSeverity::Error => ParserSeverity::Error,
-                _ => ParserSeverity::Warning,
-            },
+            severity,
             code: d.code,
             span: d.span,
             message: d.message,
@@ -127,5 +134,62 @@ impl LintSession {
         }
         out.sort_by_key(|d| (d.primary_span.start_byte, d.lint_id));
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Severity;
+
+    #[test]
+    fn analyze_flags_missing_changelog() {
+        let cfg = Config::default();
+        let (_outcome, diags) = analyze("Name: hello\nVersion: 1\n", &cfg);
+        assert!(
+            diags.iter().any(|d| d.lint_id == "RPM001"),
+            "expected RPM001 in {diags:?}"
+        );
+    }
+
+    #[test]
+    fn analyze_silent_on_clean_spec() {
+        let src = "Name: x\n%description\nbody\n%changelog\n\
+* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n";
+        let cfg = Config::default();
+        let (_outcome, diags) = analyze(src, &cfg);
+        // Filter to the two lints actually relevant here so the test
+        // doesn't become flaky when a new default-warn rule lands.
+        let relevant: Vec<_> = diags
+            .iter()
+            .filter(|d| d.lint_id == "RPM001" || d.lint_id == "RPM002")
+            .collect();
+        assert!(
+            relevant.is_empty(),
+            "expected no RPM001/RPM002 diagnostics, got {relevant:?}"
+        );
+    }
+
+    #[test]
+    fn allow_severity_suppresses_lint() {
+        let mut cfg = Config::default();
+        cfg.apply_cli_overrides::<&str>(&["missing-changelog"], &[], &[]);
+        let (_outcome, diags) = analyze("Name: x\n", &cfg);
+        assert!(
+            !diags.iter().any(|d| d.lint_id == "RPM001"),
+            "RPM001 should be silenced by allow override"
+        );
+    }
+
+    #[test]
+    fn deny_overrides_default_warn() {
+        let mut cfg = Config::default();
+        cfg.apply_cli_overrides::<&str>(&[], &[], &["missing-changelog"]);
+        let (_outcome, diags) = analyze("Name: x\n", &cfg);
+        let d = diags
+            .iter()
+            .find(|d| d.lint_id == "RPM001")
+            .expect("RPM001 expected");
+        assert_eq!(d.severity, Severity::Deny);
     }
 }

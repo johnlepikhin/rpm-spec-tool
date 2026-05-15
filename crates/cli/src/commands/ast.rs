@@ -41,7 +41,7 @@ impl Cmd {
                 println!("{}", serde_json::to_string_pretty(&outcome.spec)?)
             }
             (DumpFormat::Json, false) => println!("{}", serde_json::to_string(&outcome.spec)?),
-            (DumpFormat::Yaml, _) => println!("{}", serde_yaml::to_string(&outcome.spec)?),
+            (DumpFormat::Yaml, _) => println!("{}", serde_yaml_bw::to_string(&outcome.spec)?),
         }
         Ok(ExitCode::SUCCESS)
     }

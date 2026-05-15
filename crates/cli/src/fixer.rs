@@ -73,11 +73,11 @@ pub fn fix_in_place(source: &mut Source, config: &Config, level: FixLevel) -> Re
 }
 
 fn applicable(s: &Suggestion, level: FixLevel) -> bool {
-    match (level, s.applicability) {
-        (_, Applicability::MachineApplicable) => true,
-        (FixLevel::Suggested, Applicability::MaybeIncorrect) => true,
-        _ => false,
-    }
+    matches!(
+        (level, s.applicability),
+        (_, Applicability::MachineApplicable)
+            | (FixLevel::Suggested, Applicability::MaybeIncorrect)
+    )
 }
 
 fn collect_edits(diags: &[Diagnostic], level: FixLevel) -> Vec<Edit> {
@@ -177,7 +177,7 @@ mod tests {
     }
 
     fn sugg(applicability: Applicability, edits: Vec<Edit>) -> Suggestion {
-        Suggestion::new("msg", applicability, edits)
+        Suggestion::new("msg", edits, applicability)
     }
 
     #[test]
@@ -213,19 +213,19 @@ mod tests {
     }
 
     #[test]
-    fn collect_edits_drops_overlap_keeps_adjacent() {
+    fn collect_edits_drops_middle_overlap_keeps_outer_pair() {
         let diags = vec![diag_with(vec![sugg(
             Applicability::MachineApplicable,
             vec![
-                edit(0, 5, "A"),  // first in source, adjacent to [5,10)
-                edit(5, 10, "B"), // overlaps with [8,12) seen first → dropped
-                edit(8, 12, "C"), // latest in source, accepted first
+                edit(0, 5, "A"),
+                edit(5, 10, "B"), // overlaps with [8,12) processed first
+                edit(8, 12, "C"),
             ],
         )])];
         let collected = collect_edits(&diags, FixLevel::Safe);
         // Desc sort by start_byte processes [8,12) first (accepted),
         // then [5,10) (overlaps [8,12), dropped),
-        // then [0,5) (adjacent to [5..] — last_start is 8, 5 not > 8, accepted).
+        // then [0,5) (adjacent to last_start=8, accepted).
         assert_eq!(collected.len(), 2);
         assert_eq!(collected[0].span.start_byte, 8);
         assert_eq!(collected[1].span.start_byte, 0);
