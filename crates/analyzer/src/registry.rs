@@ -11,7 +11,18 @@ use crate::rules;
 /// reorder them based on configuration.
 pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
     vec![
+        // Phase 0 — proof-of-concept rules.
         Box::new(rules::missing_changelog::MissingChangelog::new()),
         Box::new(rules::empty_description::EmptyDescription::new()),
+        // Phase 1 — packaging essentials.
+        Box::new(rules::missing_tag::MissingNameTag::new()),
+        Box::new(rules::missing_tag::MissingVersionTag::new()),
+        Box::new(rules::missing_tag::MissingReleaseTag::new()),
+        Box::new(rules::missing_tag::MissingLicenseTag::new()),
+        Box::new(rules::missing_tag::MissingSummaryTag::new()),
+        Box::new(rules::missing_tag::MissingUrlTag::new()),
+        Box::new(rules::obsolete_tag::ObsoleteTag::new()),
+        Box::new(rules::deprecated_clean_section::DeprecatedCleanSection::new()),
+        Box::new(rules::multiple_changelog::MultipleChangelog::new()),
     ]
 }

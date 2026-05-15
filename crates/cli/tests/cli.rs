@@ -165,3 +165,89 @@ fn json_output_is_parseable() {
     let diags = v["files"][0]["diagnostics"].as_array().expect("array");
     assert!(diags.iter().any(|d| d["lint_id"] == "RPM001"));
 }
+
+// =====================================================================
+// Phase 1 rules — RPM010..RPM022.
+// =====================================================================
+
+#[test]
+fn missing_name_tag_exits_one() {
+    // Default severity for missing-name-tag is `deny`; a spec without
+    // Name: must fail the lint run.
+    let spec = write_temp(
+        "Version: 1\nRelease: 1\nSummary: x\nLicense: MIT\nURL: https://e.org\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 1, "deny lint must fail: {stderr}");
+    assert!(stderr.contains("missing-name-tag"));
+}
+
+#[test]
+fn obsolete_tag_autofix_drops_packager() {
+    // Run with --fix on a spec containing Packager: and verify a re-run
+    // no longer reports RPM020.
+    let spec = write_temp(
+        "Name: x\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\n\
+URL: https://e.org\nPackager: me <me@e.org>\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let path = spec.path().to_str().unwrap();
+    let (code, _, _) = run(&["lint", "--fix", path], None);
+    assert_eq!(code, 0, "--fix should succeed");
+
+    // Second pass: the Packager line is gone.
+    let (code, _, stderr) = run(&["lint", path], None);
+    assert_eq!(code, 0);
+    assert!(
+        !stderr.contains("obsolete-tag"),
+        "Packager should be gone after --fix, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn deprecated_clean_section_autofix_drops_section() {
+    // The clean section is multiline (header + body until next section).
+    // --fix must remove the whole block without breaking the spec.
+    let spec = write_temp(
+        "Name: x\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\n\
+URL: https://e.org\n\
+%description\nb\n\
+%clean\nrm -rf %{buildroot}\necho done\n\
+%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let path = spec.path().to_str().unwrap();
+    let (code, _, _) = run(&["lint", "--fix", path], None);
+    assert_eq!(code, 0, "--fix should succeed");
+
+    // After the fix the file must still parse cleanly and have no
+    // deprecated-clean-section diagnostic.
+    let (code, _, stderr) = run(&["lint", path], None);
+    assert_eq!(code, 0);
+    assert!(
+        !stderr.contains("deprecated-clean-section"),
+        "%clean must be gone after --fix; stderr: {stderr}"
+    );
+    let after = std::fs::read_to_string(path).expect("read file");
+    assert!(
+        !after.contains("%clean"),
+        "%clean header still present:\n{after}"
+    );
+    assert!(
+        after.contains("%changelog"),
+        "%changelog must remain:\n{after}"
+    );
+}
+
+#[test]
+fn multiple_changelog_sections_exits_one() {
+    let spec = write_temp(
+        "Name: x\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%description\nb\n\
+%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- A\n\
+%changelog\n* Tue Jan 02 2024 b <b@c> - 1-2\n- B\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 1, "duplicate %changelog is deny");
+    assert!(stderr.contains("multiple-changelog-sections"));
+}

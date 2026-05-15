@@ -81,7 +81,7 @@ pub fn parse(source: &str) -> ParseOutcome {
 pub fn analyze(source: &str, config: &Config) -> (ParseOutcome, Vec<Diagnostic>) {
     let outcome = parse(source);
     let mut session = LintSession::from_config(config);
-    let diags = session.run(&outcome.spec);
+    let diags = session.run(&outcome.spec, source);
     (outcome, diags)
 }
 
@@ -123,9 +123,15 @@ impl LintSession {
     /// Run every active rule over `spec`. Each rule is invoked in its own
     /// pass; the `Severity` recorded on returned [`Diagnostic`]s matches the
     /// configured level (`Warn` or `Deny`), never `Allow`.
-    pub fn run(&mut self, spec: &SpecFile<Span>) -> Vec<Diagnostic> {
+    ///
+    /// `source` is the original `.spec` source text, passed to every rule
+    /// via [`Lint::set_source`] before the visit pass starts. Rules that
+    /// inspect raw bytes (whitespace, tabs, exact line slicing) use it;
+    /// AST-only rules ignore it.
+    pub fn run(&mut self, spec: &SpecFile<Span>, source: &str) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         for ActiveLint { lint, severity } in &mut self.lints {
+            lint.set_source(source);
             lint.visit_spec(spec);
             for mut diag in lint.take_diagnostics() {
                 diag.severity = *severity;

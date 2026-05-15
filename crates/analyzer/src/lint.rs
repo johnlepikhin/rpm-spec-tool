@@ -27,4 +27,13 @@ pub trait Lint: for<'ast> Visit<'ast> + Send {
     fn metadata(&self) -> &'static LintMetadata;
 
     fn take_diagnostics(&mut self) -> Vec<Diagnostic>;
+
+    /// Called by [`crate::LintSession::run`] before each visit pass.
+    /// Rules that need access to the original source bytes — e.g. for
+    /// whitespace / tab-indent checks that don't survive the AST round
+    /// trip — store the slice here. The default is a no-op, so existing
+    /// rules don't need to opt in.
+    fn set_source(&mut self, source: &str) {
+        let _ = source;
+    }
 }

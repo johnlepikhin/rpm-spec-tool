@@ -45,7 +45,7 @@ pub fn fix_in_place(source: &mut Source, config: &Config, level: FixLevel) -> Re
     for _ in 0..MAX_ITERATIONS {
         let outcome = parse(&source.contents);
         let mut session = LintSession::from_config(config);
-        let diags = session.run(&outcome.spec);
+        let diags = session.run(&outcome.spec, &source.contents);
 
         let edits = collect_edits(&diags, level);
         if edits.is_empty() {

@@ -1,0 +1,93 @@
+# Lint Roadmap
+
+Полный каталог планируемых правил линтера. ID присваиваются нами один раз и стабильны после реализации; rpmlint-аналог даётся ради грепабельности при гуглинге.
+
+## Phase 1 — Packaging essentials (✅ implemented)
+
+| ID     | Name                          | rpmlint analog                    | Default | Auto-fix              | Notes |
+|--------|-------------------------------|-----------------------------------|---------|-----------------------|-------|
+| RPM001 | missing-changelog             | no-changelogname-tag              | warn    | —                     | ✅ done |
+| RPM002 | empty-description             | description-shorter-than-summary  | warn    | —                     | ✅ done |
+| RPM010 | missing-name-tag              | no-name-tag                       | deny    | —                     | ✅ phase 1 |
+| RPM011 | missing-version-tag           | no-version-tag                    | deny    | —                     | ✅ phase 1 |
+| RPM012 | missing-release-tag           | no-release-tag                    | deny    | —                     | ✅ phase 1 |
+| RPM013 | missing-license-tag           | no-license                        | deny    | —                     | ✅ phase 1 |
+| RPM014 | missing-summary-tag           | no-summary-tag                    | deny    | —                     | ✅ phase 1 |
+| RPM015 | missing-url-tag               | no-url-tag                        | warn    | —                     | ✅ phase 1 |
+| RPM020 | obsolete-tag                  | obsolete-tag / hardcoded-packager-tag / prereq-use | warn | MachineApplicable (drop line) | ✅ phase 1; tags: BuildRoot, Packager, Vendor, Other("Copyright"/"Serial"/"PreReq"/"BuildPreReq") |
+| RPM021 | deprecated-clean-section      | superfluous-%clean-section        | warn    | MachineApplicable (drop section) | ✅ phase 1 |
+| RPM022 | multiple-changelog-sections   | more-than-one-%changelog-section  | deny    | —                     | ✅ phase 1 |
+
+## Phase 2 — Correctness (planned)
+
+| ID     | Name                          | rpmlint analog                  | Default | Auto-fix          | AST hook |
+|--------|-------------------------------|---------------------------------|---------|-------------------|----------|
+| RPM030 | requires-no-version           | explicit-lib-dependency         | warn    | Manual            | `visit_dep_atom`: `constraint.is_none()` для known libs (whitelist через config); опционально для всех |
+| RPM031 | requires-equal-version        | requires-on-release             | warn    | Manual            | `DepConstraint.op == VerOp::Eq` где `EVR.release.is_some()` |
+| RPM032 | macro-redefinition            | n/a                             | warn    | —                 | `visit_macro_def`: HashMap<name, count>; diag когда count > 1 |
+| RPM033 | self-obsoletion               | self-obsoletion                 | deny    | —                 | Obsoletes-atom name == package Name |
+| RPM034 | obsolete-without-provides     | obsolete-not-provided           | warn    | —                 | Obsoletes-atom name НЕ в Provides set этого пакета |
+| RPM035 | useless-explicit-provides     | useless-provides                | warn    | MachineApplicable | Provides содержит свой Name без version |
+| RPM040 | self-conflict                 | n/a                             | deny    | —                 | Conflicts-atom name == package Name |
+
+Дополнительная инфраструктура для фазы 2: helper `build_dep_set(spec, tag)` возвращает `HashMap<&str, Option<&DepConstraint>>` для дальнейшей кросс-сверки.
+
+## Phase 3 — Sections, changelog, profile system (planned)
+
+| ID     | Name                          | rpmlint analog                  | Default | Auto-fix          | AST hook |
+|--------|-------------------------------|---------------------------------|---------|-------------------|----------|
+| RPM016 | missing-prep-section          | no-%prep-section                | warn    | —                 | Нет `Section::BuildScript{kind: Prep}` |
+| RPM017 | missing-build-section         | no-%build-section               | warn    | —                 | Нет `BuildScript{Build}` |
+| RPM018 | missing-install-section       | no-%install-section             | warn    | —                 | Нет `BuildScript{Install}` |
+| RPM023 | duplicate-buildscript-section | n/a                             | deny    | —                 | Более одного `BuildScript` одного `kind` |
+| RPM037 | empty-changelog-entry         | n/a                             | warn    | —                 | `ChangelogEntry.body` пуст или все строки whitespace |
+| RPM038 | changelog-future-date         | changelog-time-in-future        | warn    | —                 | `ChangelogDate.year > current_year` |
+| RPM039 | changelog-implausible-date    | n/a (parser warn'ит)            | warn    | —                 | Прокидываем parser-диагностику с lint-id |
+
+Также фаза 3 — **distribution profiles**: `profile = "fedora" | "opensuse" | "altlinux"` в `.rpmspec.toml`. Профиль:
+- переопределяет default severity по группам (fedora строже на missing-url; opensuse строже на Group),
+- задаёт списки валидных Group/License значений (используются будущими правилами RPM024 invalid-license, RPM025 non-standard-group).
+
+## Phase 4 — Style / source-text (planned)
+
+Все правила фазы 4 требуют доступа к исходному тексту через `Lint::set_source` (расширение API сделано в фазе 1).
+
+| ID     | Name                          | rpmlint analog                  | Default | Auto-fix          | Notes |
+|--------|-------------------------------|---------------------------------|---------|-------------------|-------|
+| RPM050 | hardcoded-paths               | hardcoded-library-path          | warn    | MachineApplicable | Префиксная замена `/usr/bin` → `%{_bindir}`, `/usr/lib` → `%{_libdir}`, `/etc` → `%{_sysconfdir}`, `/var/lib` → `%{_sharedstatedir}`, `/var/log` → `%{_localstatedir}/log`, `/usr/include` → `%{_includedir}`, `/usr/share` → `%{_datadir}`, `/usr/libexec` → `%{_libexecdir}`. Применяется в TextSegment::Literal preamble values, %files paths, scriptlet bodies. |
+| RPM051 | tab-indent                    | mixed-use-of-spaces-and-tabs    | warn    | MachineApplicable | `source[span]` для preamble и section-headers содержит `\t` в лидирующем whitespace |
+| RPM052 | trailing-whitespace           | n/a                             | low     | MachineApplicable | source-bytes сканирование |
+| RPM053 | rpm-buildroot-shell-var       | rpm-buildroot-usage             | warn    | MachineApplicable | `$RPM_BUILD_ROOT` → `%{buildroot}` в `ShellBody` |
+| RPM054 | rpm-source-dir-shell-var      | use-of-RPM_SOURCE_DIR           | warn    | MachineApplicable | `$RPM_SOURCE_DIR` → `%{_sourcedir}` |
+| RPM055 | summary-ends-with-dot         | summary-ended-with-dot          | warn    | MachineApplicable | Strip trailing `.` from Summary literal |
+| RPM056 | summary-not-capitalized       | summary-not-capitalized         | warn    | MachineApplicable | Uppercase first letter |
+| RPM057 | summary-too-long              | summary-too-long                | warn    | —                 | Default 80, конфигурируемо через `[lints.summary-too-long] max = N` (потребует расширения config) |
+| RPM058 | name-in-summary               | name-repeated-in-summary        | low     | —                 | Summary literal содержит Name токеном |
+| RPM059 | description-shorter-than-summary | description-shorter-than-summary | low | —             | После сборки body |
+| RPM036 | macro-in-hash-comment         | macro-in-comment                | warn    | MachineApplicable | `Comment{Hash}` с `TextSegment::Macro` — реальный footgun, rpm развернёт макрос. Fix: `%foo` → `%%foo`, или `#` → `%dnl`. |
+
+## Phase 5 — Modernization (planned)
+
+| ID     | Name                          | rpmlint analog                  | Default | Auto-fix          | Notes |
+|--------|-------------------------------|---------------------------------|---------|-------------------|-------|
+| RPM060 | python-setup-test-deprecated  | python-setup-test               | low     | Manual            | `python setup.py test` в ShellBody |
+| RPM061 | python-setup-install-deprecated | python-setup-install          | low     | Manual            | `python setup.py install` в ShellBody |
+| RPM062 | egrep-fgrep-deprecated        | deprecated-grep                 | low     | MachineApplicable | `egrep` → `grep -E`, `fgrep` → `grep -F` |
+| RPM063 | setup-without-q-flag          | setup-not-quiet                 | warn    | MachineApplicable | `%setup` без `-q` arg — `Statement(MacroRef)` где name == "setup" |
+| RPM064 | patch-defined-not-applied     | patch-not-applied               | warn    | Manual            | `Patch(N)` объявлен; ни `%patch -P N` / `%autopatch` / `%autosetup -p N` в %prep |
+
+## Maintenance rules
+
+- Новые правила получают **следующий свободный ID в своей сотне** (Packaging: 0xx, Correctness: 03x, Sections: 01x/02x/03x на конкретный диапазон, Style: 05x, Modernization: 06x).
+- `name` в kebab-case, читается как утверждение об ошибке (`missing-name-tag`, не `name-tag-check`).
+- Default severity консервативный: `deny` только для явных багов (missing mandatory, self-obsoletion), `warn` для стилистики и устаревших практик, `low` для cosmetic.
+- `Applicability::MachineApplicable` — только если фикс гарантированно не меняет семантику; иначе `MaybeIncorrect` или `Manual`.
+
+## Источники
+
+- [rpmlint SpecCheck.py](https://github.com/rpm-software-management/rpmlint/blob/main/rpmlint/checks/SpecCheck.py)
+- [rpmlint TagsCheck.py](https://github.com/rpm-software-management/rpmlint/blob/main/rpmlint/checks/TagsCheck.py)
+- [Fedora FrequentlyMadePackagingMistakes](https://fedoraproject.org/wiki/FrequentlyMadePackagingMistakes)
+- [Fedora Packaging Guidelines](https://docs.fedoraproject.org/en-US/packaging-guidelines/)
+- [openSUSE Specfile guidelines](https://en.opensuse.org/openSUSE:Specfile_guidelines)
+- AST `rpm-spec` v0.1.0: см. `crates/analyzer/src/visit.rs` для актуальных visit-точек.
