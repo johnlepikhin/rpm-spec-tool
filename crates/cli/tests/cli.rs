@@ -440,6 +440,135 @@ Patch1: missing.patch\n\
     assert!(stderr.contains("Patch1"), "stderr:\n{stderr}");
 }
 
+// =====================================================================
+// format subcommand — indent override
+// =====================================================================
+
+const SPEC_WITH_IF: &str =
+    "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if 0%{?rhel}\nRequires: rhel-pkg\n%endif\n\
+%description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n";
+
+const SPEC_NO_IF: &str =
+    "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n";
+
+#[test]
+fn format_default_keeps_conditionals_flush_left() {
+    let spec = write_temp(SPEC_WITH_IF);
+    let (code, stdout, stderr) = run(&["format", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    // Default indent = 0 → Requires: line is at column 1, no leading spaces.
+    assert!(stdout.contains("\nRequires:"), "expected flush-left Requires:\n{stdout}");
+    // No cosmetic warning when indent is not requested.
+    assert!(!stderr.contains("cosmetic"), "stderr should not warn: {stderr}");
+}
+
+#[test]
+fn format_indent_warns_and_indents() {
+    let spec = write_temp(SPEC_WITH_IF);
+    let (code, stdout, stderr) = run(
+        &["format", "--indent", "4", spec.path().to_str().unwrap()],
+        None,
+    );
+    assert_eq!(code, 0);
+    // Body of the %if is indented by 4 spaces.
+    assert!(
+        stdout.contains("\n    Requires:"),
+        "expected 4-space-indented Requires:\n{stdout}"
+    );
+    // Warning is emitted on stderr and identifies the CLI source.
+    assert!(
+        stderr.contains("--indent > 0") && stderr.contains("cosmetic only"),
+        "expected CLI-sourced cosmetic warning, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn format_indent_zero_no_warning() {
+    let spec = write_temp(SPEC_NO_IF);
+    let (code, _, stderr) = run(
+        &["format", "--indent", "0", spec.path().to_str().unwrap()],
+        None,
+    );
+    assert_eq!(code, 0);
+    // --indent 0 is a no-op; no warning.
+    assert!(!stderr.contains("cosmetic"), "no warning expected: {stderr}");
+}
+
+#[test]
+fn format_indent_rejects_huge_value() {
+    // clap's value_parser range caps --indent at MAX_INDENT (64); a
+    // larger value must fail at argument parsing, not blow up the
+    // printer with billions of spaces.
+    let spec = write_temp(SPEC_WITH_IF);
+    let (code, _, stderr) = run(
+        &["format", "--indent", "9999999", spec.path().to_str().unwrap()],
+        None,
+    );
+    assert_ne!(code, 0, "expected non-zero exit for out-of-range --indent");
+    assert!(
+        stderr.contains("not in") || stderr.contains("invalid value"),
+        "expected clap range-validation error, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn format_indent_warning_from_config_file() {
+    // The cosmetic warning must also fire when `conditional_indent`
+    // comes from `.rpmspec.toml` (not just from `--indent`). The
+    // warning label distinguishes the two sources so the user knows
+    // where to look.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cfg_path = tmp.path().join("rpmspec.toml");
+    // TOML keys use kebab-case (`conditional-indent`) to match the
+    // serde rename in `analyzer::config::FormatConfig`.
+    std::fs::write(&cfg_path, "[format]\nconditional-indent = 4\n")
+        .expect("write config");
+    let spec_path = tmp.path().join("hello.spec");
+    std::fs::write(&spec_path, SPEC_WITH_IF).expect("write spec");
+
+    let (code, stdout, stderr) = run(
+        &[
+            "format",
+            "--config",
+            cfg_path.to_str().unwrap(),
+            spec_path.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("\n    Requires:"),
+        "expected 4-space indent from config:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("[format].conditional_indent") && stderr.contains("cosmetic only"),
+        "expected config-sourced cosmetic warning, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn format_check_with_indent_exits_one() {
+    // `--check --indent N>0` is a likely CI footgun: the indented
+    // output never matches the original, so exit code is 1 *and* the
+    // user still gets the cosmetic warning. Lock the behaviour in.
+    let spec = write_temp(SPEC_WITH_IF);
+    let (code, _, stderr) = run(
+        &[
+            "format",
+            "--check",
+            "--indent",
+            "4",
+            spec.path().to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(code, 1);
+    assert!(stderr.contains("cosmetic only"), "expected warning: {stderr}");
+    assert!(stderr.contains("would reformat"), "expected check-diff: {stderr}");
+}
+
 #[test]
 fn parser_bridge_silenced_by_cli_allow() {
     // Same fixture as `parser_bridge_surfaces_warnings`, but with the
