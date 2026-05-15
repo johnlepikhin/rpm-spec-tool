@@ -4,20 +4,13 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::{Args, value_parser};
-use rpm_spec::printer::{PrinterConfig, print_with};
-use rpm_spec_analyzer::config::FormatConfig;
+use rpm_spec::printer::print_with;
 use rpm_spec_analyzer::parse;
 
 use crate::app::ColorChoice;
+use crate::commands::{MAX_INDENT_LEVEL, printer_config};
 use crate::config as cli_config;
 use crate::io;
-
-/// Upper bound for `--indent` and `[format].conditional_indent`. The
-/// printer renders the indent literally as `n * level` spaces; without
-/// a cap, a malicious or mistyped value (e.g. `--indent 4000000000`)
-/// would push billions of spaces into the output. 64 spaces per level
-/// is already absurd for human review.
-const MAX_INDENT: u32 = 64;
 
 /// Source of an active non-zero indent. Used to pick the right phrase
 /// in the cosmetic-only warning.
@@ -56,7 +49,7 @@ pub struct Cmd {
     ///
     /// Cosmetic only: rpm rejects indented %if directives. Use for
     /// review, not for commits. Emits a stderr warning when N > 0.
-    #[arg(long, value_parser = value_parser!(u32).range(0..=MAX_INDENT as i64))]
+    #[arg(long, value_parser = value_parser!(u32).range(0..=MAX_INDENT_LEVEL as i64))]
     pub indent: Option<u32>,
 }
 
@@ -79,7 +72,7 @@ impl Cmd {
             else {
                 continue;
             };
-            let pcfg = build_printer_config(
+            let pcfg = printer_config::apply_overrides(
                 &analyzer_cfg.format,
                 self.preamble_align_column,
                 self.indent,
@@ -128,32 +121,6 @@ impl Cmd {
             ExitCode::SUCCESS
         })
     }
-}
-
-fn build_printer_config(
-    cfg: &FormatConfig,
-    column_override: Option<u32>,
-    indent_override: Option<u32>,
-) -> PrinterConfig {
-    let mut pcfg = cfg.to_printer_config();
-    if let Some(col) = column_override {
-        // `column_override == Some(0)` is a sentinel meaning "no
-        // alignment" (single space between tag and value).
-        pcfg = if col == 0 {
-            pcfg.with_preamble_value_column(None)
-        } else {
-            pcfg.with_preamble_value_column(Some(col as usize))
-        };
-    }
-    if let Some(n) = indent_override {
-        // Unlike `column_override`, `Some(0)` here is *not* a sentinel
-        // — it explicitly forces indent=0, overriding any config
-        // setting. The clap value_parser already caps `n` at
-        // `MAX_INDENT`, so the `as usize` cast can't blow up the
-        // printer's `repeat`-style indent emission.
-        pcfg = pcfg.with_indent(n as usize);
-    }
-    pcfg
 }
 
 fn emit_indent_warning(source: IndentSource) {

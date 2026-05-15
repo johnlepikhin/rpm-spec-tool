@@ -6,14 +6,13 @@ use std::io::IsTerminal;
 use anyhow::Result;
 use codespan_reporting::diagnostic::{Diagnostic as CsDiag, Label, Severity as CsSeverity};
 use codespan_reporting::files::SimpleFile;
-use codespan_reporting::term::termcolor::{
-    Color, ColorChoice as TermColor, ColorSpec, StandardStream, WriteColor,
-};
+use codespan_reporting::term::termcolor::{Color, ColorSpec, StandardStream, WriteColor};
 use codespan_reporting::term::{self, Config};
 use rpm_spec_analyzer::{Diagnostic, Severity};
 
 use crate::app::ColorChoice;
 use crate::io::Source;
+use crate::output::resolve_color;
 
 /// Cap on per-lint rows in the summary footer. Real-world specs have
 /// long-tail lint distributions; showing 10 keeps the footer tight
@@ -21,7 +20,8 @@ use crate::io::Source;
 const MAX_SUMMARY_ROWS: usize = 10;
 
 pub fn render(items: &[(Source, Vec<Diagnostic>)], color: ColorChoice) -> Result<()> {
-    let stream = StandardStream::stderr(resolve_color(color));
+    let stream =
+        StandardStream::stderr(resolve_color(color, || std::io::stderr().is_terminal()));
     let mut writer = stream.lock();
     let cfg = Config::default();
 
@@ -164,20 +164,6 @@ fn plural(n: usize, base: &str) -> String {
         base.to_string()
     } else {
         format!("{base}s")
-    }
-}
-
-fn resolve_color(choice: ColorChoice) -> TermColor {
-    match choice {
-        ColorChoice::Always => TermColor::Always,
-        ColorChoice::Never => TermColor::Never,
-        ColorChoice::Auto => {
-            if std::io::stderr().is_terminal() {
-                TermColor::Auto
-            } else {
-                TermColor::Never
-            }
-        }
     }
 }
 
