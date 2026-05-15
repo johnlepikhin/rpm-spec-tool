@@ -31,5 +31,14 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::obsolete_without_provides::ObsoleteWithoutProvides::new()),
         Box::new(rules::useless_explicit_provides::UselessExplicitProvides::new()),
         Box::new(rules::self_conflict::SelfConflict::new()),
+        // Phase 3 — sections.
+        Box::new(rules::missing_section::MissingPrepSection::new()),
+        Box::new(rules::missing_section::MissingBuildSection::new()),
+        Box::new(rules::missing_section::MissingInstallSection::new()),
+        Box::new(rules::duplicate_buildscript::DuplicateBuildscriptSection::new()),
+        // Phase 3 — changelog health.
+        Box::new(rules::changelog_health::EmptyChangelogEntry::new()),
+        Box::new(rules::changelog_health::ChangelogFutureDate::new()),
+        Box::new(rules::changelog_health::ChangelogImplausibleDate::new()),
     ]
 }

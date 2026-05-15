@@ -78,11 +78,125 @@ pub fn parse(source: &str) -> ParseOutcome {
 /// Convenience: parse, build a session from `config`, run lints, return both
 /// the outcome (for parser diagnostics) and the lint diagnostics. CLI front-
 /// ends call this instead of stitching the three steps themselves.
+///
+/// Parser-emitted diagnostics (the recoverable issues `rpm-spec` flags
+/// while parsing — unrecognized lines, unbalanced rich deps, ...) are
+/// bridged into the lint pipeline through [`bridge_parser_diagnostics`],
+/// so they obey severity overrides and `--format json/sarif` just like
+/// regular lints.
 pub fn analyze(source: &str, config: &Config) -> (ParseOutcome, Vec<Diagnostic>) {
     let outcome = parse(source);
     let mut session = LintSession::from_config(config);
-    let diags = session.run(&outcome.spec, source);
+    let mut diags = session.run(&outcome.spec, source);
+    diags.extend(bridge_parser_diagnostics(&outcome.parser_diagnostics, config));
+    diags.sort_by_key(|d| (d.primary_span.start_byte, d.lint_id));
     (outcome, diags)
+}
+
+/// A parser code that we expose to users as a lint.
+///
+/// Codes that are also covered by AST-based rules (e.g. `rpmspec/W0025`
+/// → `changelog-implausible-date` is detected separately) are omitted
+/// from this table to avoid double-reporting.
+struct BridgeEntry {
+    parser_code: &'static str,
+    metadata: &'static crate::lint::LintMetadata,
+}
+
+/// Static metadata for every bridged parser code. Kept in one place so
+/// new mappings are a one-line addition.
+mod bridged {
+    use crate::diagnostic::{LintCategory, Severity};
+    use crate::lint::LintMetadata;
+
+    macro_rules! bridged {
+        ($vis:vis $name:ident = ($id:literal, $kebab:literal, $desc:literal, $sev:expr)) => {
+            $vis static $name: LintMetadata = LintMetadata {
+                id: $id,
+                name: $kebab,
+                description: $desc,
+                default_severity: $sev,
+                category: LintCategory::Correctness,
+            };
+        };
+    }
+
+    bridged!(pub NO_PROGRESS = (
+        "parse/E0001", "parse-no-progress",
+        "Parser couldn't consume any input at this position — the spec is unparseable here.",
+        Severity::Deny
+    ));
+    bridged!(pub UNTERMINATED_COND = (
+        "parse/E0002", "parse-unterminated-conditional",
+        "An `%if`/`%ifarch`/`%ifos` block was opened without a matching `%endif`.",
+        Severity::Deny
+    ));
+    bridged!(pub LINE_NOT_RECOGNIZED = (
+        "parse/W0002", "parse-line-not-recognized",
+        "Line did not match any known top-level construction.",
+        Severity::Warn
+    ));
+    bridged!(pub STRAY_PERCENT = (
+        "parse/W0001", "parse-stray-percent",
+        "A `%` appeared in text without forming a valid macro reference — write `%%` for a literal percent.",
+        Severity::Warn
+    ));
+    bridged!(pub UNTERMINATED_MACRO = (
+        "parse/W0004", "parse-unterminated-macro",
+        "A `%(...)`, `%[...]`, or `%{...}` macro reference was not closed before EOF or terminator.",
+        Severity::Warn
+    ));
+    bridged!(pub MULTIPLE_ELSE = (
+        "parse/W0005", "parse-multiple-else",
+        "Conditional block has more than one `%else`; only the last one is honoured.",
+        Severity::Warn
+    ));
+    bridged!(pub MALFORMED_CHANGELOG = (
+        "parse/W0023", "parse-malformed-changelog-header",
+        "Changelog entry header (`* Weekday Month Day Year ...`) could not be parsed.",
+        Severity::Warn
+    ));
+}
+
+/// Static mapping table. `rpmspec/W0025` is deliberately absent — it's
+/// surfaced by the dedicated [`crate::rules::changelog_health::ChangelogImplausibleDate`]
+/// AST rule instead, to give users a single overridable lint name.
+const BRIDGE: &[BridgeEntry] = &[
+    BridgeEntry { parser_code: "rpmspec/E0001", metadata: &bridged::NO_PROGRESS },
+    BridgeEntry { parser_code: "rpmspec/E0002", metadata: &bridged::UNTERMINATED_COND },
+    BridgeEntry { parser_code: "rpmspec/W0001", metadata: &bridged::STRAY_PERCENT },
+    BridgeEntry { parser_code: "rpmspec/W0002", metadata: &bridged::LINE_NOT_RECOGNIZED },
+    BridgeEntry { parser_code: "rpmspec/W0004", metadata: &bridged::UNTERMINATED_MACRO },
+    BridgeEntry { parser_code: "rpmspec/W0005", metadata: &bridged::MULTIPLE_ELSE },
+    BridgeEntry { parser_code: "rpmspec/W0023", metadata: &bridged::MALFORMED_CHANGELOG },
+];
+
+/// Translate `rpm-spec` parser diagnostics into lint-level [`Diagnostic`]s.
+/// Unknown parser codes are dropped — they surface in `ParseOutcome` for
+/// callers who want them but don't pollute lint output.
+pub(crate) fn bridge_parser_diagnostics(
+    parser_diagnostics: &[ParserDiagnostic],
+    config: &Config,
+) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for pd in parser_diagnostics {
+        let Some(code) = pd.code.as_deref() else { continue };
+        let Some(entry) = BRIDGE.iter().find(|e| e.parser_code == code) else { continue };
+        let severity = config.severity_for(entry.metadata.name, entry.metadata.default_severity);
+        if severity.is_silenced() {
+            continue;
+        }
+        // Parser diagnostics with no span hit the spec root (0..0) —
+        // best effort, but we never want a `Diagnostic` without a span.
+        let span = pd.span.unwrap_or_default();
+        out.push(Diagnostic::new(
+            entry.metadata,
+            severity,
+            pd.message.clone(),
+            span,
+        ));
+    }
+    out
 }
 
 /// Owns a configured set of lint rules and runs them sequentially over an AST.
@@ -112,7 +226,7 @@ impl LintSession {
         for lint in registry::builtin_lints() {
             let meta = lint.metadata();
             let sev = config.severity_for(meta.name, meta.default_severity);
-            if sev == Severity::Allow {
+            if sev.is_silenced() {
                 continue;
             }
             active.push(ActiveLint { lint, severity: sev });
@@ -197,5 +311,85 @@ mod tests {
             .find(|d| d.lint_id == "RPM001")
             .expect("RPM001 expected");
         assert_eq!(d.severity, Severity::Deny);
+    }
+
+    // -----------------------------------------------------------------
+    // bridge_parser_diagnostics
+    // -----------------------------------------------------------------
+
+    fn pd(code: Option<&str>, span: Option<Span>, msg: &str) -> ParserDiagnostic {
+        ParserDiagnostic {
+            severity: ParserSeverity::Warning,
+            code: code.map(str::to_owned),
+            span,
+            message: msg.into(),
+            notes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn bridge_drops_diag_without_code() {
+        let diags = bridge_parser_diagnostics(&[pd(None, None, "x")], &Config::default());
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn bridge_drops_unknown_code() {
+        let diags = bridge_parser_diagnostics(
+            &[pd(Some("rpmspec/Z9999"), None, "unknown")],
+            &Config::default(),
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn bridge_silenced_by_allow_override() {
+        let mut cfg = Config::default();
+        cfg.apply_cli_overrides::<&str>(&["parse-line-not-recognized"], &[], &[]);
+        let diags = bridge_parser_diagnostics(
+            &[pd(Some("rpmspec/W0002"), None, "msg")],
+            &cfg,
+        );
+        assert!(diags.is_empty(), "allow override must suppress bridged diag");
+    }
+
+    #[test]
+    fn bridge_uses_span_default_when_missing() {
+        let diags = bridge_parser_diagnostics(
+            &[pd(Some("rpmspec/W0002"), None, "msg")],
+            &Config::default(),
+        );
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].primary_span, Span::default());
+    }
+
+    #[test]
+    fn bridge_propagates_message_and_code() {
+        let span = Span::from_bytes(10, 20);
+        let diags = bridge_parser_diagnostics(
+            &[pd(Some("rpmspec/W0001"), Some(span), "stray % here")],
+            &Config::default(),
+        );
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].lint_id, "parse/W0001");
+        assert_eq!(diags[0].lint_name, "parse-stray-percent");
+        assert!(diags[0].message.contains("stray % here"));
+        assert_eq!(diags[0].primary_span, span);
+    }
+
+    #[test]
+    fn bridge_covers_every_table_entry() {
+        // Table-driven regression: every BRIDGE row must round-trip
+        // (parser_code -> lint_id) so adding a new entry can't silently
+        // break the mapping.
+        for entry in BRIDGE {
+            let diags = bridge_parser_diagnostics(
+                &[pd(Some(entry.parser_code), None, "x")],
+                &Config::default(),
+            );
+            assert_eq!(diags.len(), 1, "entry {} produced no diag", entry.parser_code);
+            assert_eq!(diags[0].lint_id, entry.metadata.id);
+            assert_eq!(diags[0].lint_name, entry.metadata.name);
+        }
     }
 }

@@ -32,21 +32,28 @@
 
 Phase 2 infrastructure landed in `rules/util.rs`: `PackageView { name, items, header_span }`, `iter_packages(spec)` (main + every `%package` block), `collect_dep_atoms_in_items(items, tag_matcher)` walking through rich deps.
 
-## Phase 3 — Sections, changelog, profile system (planned)
+## Phase 3 — Sections, changelog, parser-bridge (✅ implemented)
 
-| ID     | Name                          | rpmlint analog                  | Default | Auto-fix          | AST hook |
-|--------|-------------------------------|---------------------------------|---------|-------------------|----------|
-| RPM016 | missing-prep-section          | no-%prep-section                | warn    | —                 | Нет `Section::BuildScript{kind: Prep}` |
-| RPM017 | missing-build-section         | no-%build-section               | warn    | —                 | Нет `BuildScript{Build}` |
-| RPM018 | missing-install-section       | no-%install-section             | warn    | —                 | Нет `BuildScript{Install}` |
-| RPM023 | duplicate-buildscript-section | n/a                             | deny    | —                 | Более одного `BuildScript` одного `kind` |
-| RPM037 | empty-changelog-entry         | n/a                             | warn    | —                 | `ChangelogEntry.body` пуст или все строки whitespace |
-| RPM038 | changelog-future-date         | changelog-time-in-future        | warn    | —                 | `ChangelogDate.year > current_year` |
-| RPM039 | changelog-implausible-date    | n/a (parser warn'ит)            | warn    | —                 | Прокидываем parser-диагностику с lint-id |
+| ID     | Name                          | rpmlint analog                  | Default | Auto-fix          | Notes |
+|--------|-------------------------------|---------------------------------|---------|-------------------|-------|
+| RPM016 | missing-prep-section          | no-%prep-section                | warn    | —                 | ✅ phase 3 |
+| RPM017 | missing-build-section         | no-%build-section               | warn    | —                 | ✅ phase 3 |
+| RPM018 | missing-install-section       | no-%install-section             | warn    | —                 | ✅ phase 3 |
+| RPM023 | duplicate-buildscript-section | n/a                             | deny    | —                 | ✅ phase 3; ловит дубли `%prep`/`%build`/`%install`/etc. |
+| RPM037 | empty-changelog-entry         | n/a                             | warn    | —                 | ✅ phase 3 |
+| RPM038 | changelog-future-date         | changelog-time-in-future        | warn    | —                 | ✅ phase 3; `time` crate для current year |
+| RPM039 | changelog-implausible-date    | (parser `rpmspec/W0025`)        | warn    | —                 | ✅ phase 3; AST-уровневая проверка day∈1..=31, year∈1990..=current+1 |
 
-Также фаза 3 — **distribution profiles**: `profile = "fedora" | "opensuse" | "altlinux"` в `.rpmspec.toml`. Профиль:
-- переопределяет default severity по группам (fedora строже на missing-url; opensuse строже на Group),
-- задаёт списки валидных Group/License значений (используются будущими правилами RPM024 invalid-license, RPM025 non-standard-group).
+Также в фазе 3 добавлена инфраструктура **parser-bridge** в `analyzer::session`: parser-эмитируемые диагностики (`rpmspec/E*`, `rpmspec/W*`) переэмиттятся как обычные `Diagnostic` с lint-id вида `parse/<code>`. Мэппинг покрывает 7 кодов (no-progress, unterminated-conditional, stray-percent, line-not-recognized, unterminated-macro, multiple-else, malformed-changelog-header). Severity управляется через `.rpmspec.toml` так же, как у обычных правил.
+
+### Phase 3 — deferred to dedicated PR
+
+**Distribution profile system** (`profile = "fedora" | "opensuse" | "altlinux"` в `.rpmspec.toml`) отложен — это отдельный PR с дизайнерскими развилками: какой формат, какие списки лицензий/групп, как сочетается с per-lint config.
+
+С ним же придут:
+- RPM024 invalid-license (требует списка валидных лицензий из профиля),
+- RPM025 non-standard-group (требует списка валидных групп),
+- RPM030 requires-no-version (требует whitelist'а имён через профиль).
 
 ## Phase 4 — Style / source-text (planned)
 

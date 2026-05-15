@@ -17,4 +17,9 @@ pub mod self_conflict;
 pub mod self_obsoletion;
 pub mod useless_explicit_provides;
 
+// Phase 3 — Sections and changelog.
+pub mod changelog_health;
+pub mod duplicate_buildscript;
+pub mod missing_section;
+
 mod util;

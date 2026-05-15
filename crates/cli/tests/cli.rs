@@ -300,6 +300,79 @@ URL: https://e.org\nProvides: hello\n\
     );
 }
 
+// =====================================================================
+// Phase 3 rules — sections & changelog health.
+// =====================================================================
+
+#[test]
+fn missing_prep_section_warns() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%build\nmake\n%install\nmake install\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0, "warn shouldn't fail; stderr={stderr}");
+    assert!(stderr.contains("missing-prep-section"));
+}
+
+#[test]
+fn duplicate_buildscript_exits_one() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%prep\n%setup -q\n%build\nmake\n%install\nmake install\n%build\nmake more\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 1, "duplicate build is deny");
+    assert!(stderr.contains("duplicate-buildscript-section"));
+}
+
+#[test]
+fn parser_bridge_silenced_by_cli_allow() {
+    // Same fixture as `parser_bridge_surfaces_warnings`, but with the
+    // bridged rule silenced through `--allow`. The diagnostic must
+    // disappear from stderr.
+    let spec = write_temp(
+        "Name: x\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+Provides: %{\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(
+        &[
+            "lint",
+            "--allow",
+            "parse-unterminated-macro",
+            spec.path().to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        !stderr.contains("parse-unterminated-macro"),
+        "diagnostic must be silenced by --allow; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn parser_bridge_surfaces_warnings() {
+    // `Provides: %{` is an unterminated macro reference — the parser
+    // emits `rpmspec/W0004` which our bridge re-emits as
+    // `parse-unterminated-macro`.
+    let spec = write_temp(
+        "Name: x\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+Provides: %{\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) =
+        run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0, "warn-level parser diag doesn't fail; stderr={stderr}");
+    assert!(
+        stderr.contains("parse-unterminated-macro"),
+        "expected parser bridge to surface W0004; got: {stderr}"
+    );
+}
+
 #[test]
 fn multiple_changelog_sections_exits_one() {
     let spec = write_temp(

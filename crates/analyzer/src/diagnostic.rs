@@ -18,6 +18,16 @@ pub enum Severity {
     Deny,
 }
 
+impl Severity {
+    /// `true` when this severity should make the lint silent —
+    /// `LintSession::run` and `bridge_parser_diagnostics` use this to
+    /// keep their filter logic identical even if a new "silenced"
+    /// severity is added later.
+    pub fn is_silenced(self) -> bool {
+        matches!(self, Severity::Allow)
+    }
+}
+
 /// Coarse-grained classification used for filtering and reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
