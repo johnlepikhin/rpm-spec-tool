@@ -9,4 +9,12 @@ pub mod missing_tag;
 pub mod multiple_changelog;
 pub mod obsolete_tag;
 
+// Phase 2 — Correctness rules.
+pub mod macro_redefinition;
+pub mod obsolete_without_provides;
+pub mod requires_equal_version;
+pub mod self_conflict;
+pub mod self_obsoletion;
+pub mod useless_explicit_provides;
+
 mod util;

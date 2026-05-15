@@ -18,19 +18,19 @@
 | RPM021 | deprecated-clean-section      | superfluous-%clean-section        | warn    | MachineApplicable (drop section) | ✅ phase 1 |
 | RPM022 | multiple-changelog-sections   | more-than-one-%changelog-section  | deny    | —                     | ✅ phase 1 |
 
-## Phase 2 — Correctness (planned)
+## Phase 2 — Correctness (✅ implemented except RPM030)
 
-| ID     | Name                          | rpmlint analog                  | Default | Auto-fix          | AST hook |
-|--------|-------------------------------|---------------------------------|---------|-------------------|----------|
-| RPM030 | requires-no-version           | explicit-lib-dependency         | warn    | Manual            | `visit_dep_atom`: `constraint.is_none()` для known libs (whitelist через config); опционально для всех |
-| RPM031 | requires-equal-version        | requires-on-release             | warn    | Manual            | `DepConstraint.op == VerOp::Eq` где `EVR.release.is_some()` |
-| RPM032 | macro-redefinition            | n/a                             | warn    | —                 | `visit_macro_def`: HashMap<name, count>; diag когда count > 1 |
-| RPM033 | self-obsoletion               | self-obsoletion                 | deny    | —                 | Obsoletes-atom name == package Name |
-| RPM034 | obsolete-without-provides     | obsolete-not-provided           | warn    | —                 | Obsoletes-atom name НЕ в Provides set этого пакета |
-| RPM035 | useless-explicit-provides     | useless-provides                | warn    | MachineApplicable | Provides содержит свой Name без version |
-| RPM040 | self-conflict                 | n/a                             | deny    | —                 | Conflicts-atom name == package Name |
+| ID     | Name                          | rpmlint analog                  | Default | Auto-fix          | Notes |
+|--------|-------------------------------|---------------------------------|---------|-------------------|-------|
+| RPM030 | requires-no-version           | explicit-lib-dependency         | warn    | Manual            | **deferred to phase 3** — needs configurable name whitelist (lib-prefix heuristic alone yields too many false-positives without per-profile tuning) |
+| RPM031 | requires-equal-version        | requires-on-release             | warn    | Manual            | ✅ phase 2 |
+| RPM032 | macro-redefinition            | n/a                             | warn    | —                 | ✅ phase 2; `%undefine` correctly clears the seen-set |
+| RPM033 | self-obsoletion               | self-obsoletion                 | deny    | —                 | ✅ phase 2; **subpackage-aware** |
+| RPM034 | obsolete-without-provides     | obsolete-not-provided           | warn    | —                 | ✅ phase 2; **subpackage-aware**; skips macroized names and `/path` obsoletes |
+| RPM035 | useless-explicit-provides     | useless-provides                | warn    | MachineApplicable | ✅ phase 2; **subpackage-aware**; only flags unversioned form |
+| RPM040 | self-conflict                 | n/a                             | deny    | —                 | ✅ phase 2; **subpackage-aware** |
 
-Дополнительная инфраструктура для фазы 2: helper `build_dep_set(spec, tag)` возвращает `HashMap<&str, Option<&DepConstraint>>` для дальнейшей кросс-сверки.
+Phase 2 infrastructure landed in `rules/util.rs`: `PackageView { name, items, header_span }`, `iter_packages(spec)` (main + every `%package` block), `collect_dep_atoms_in_items(items, tag_matcher)` walking through rich deps.
 
 ## Phase 3 — Sections, changelog, profile system (planned)
 

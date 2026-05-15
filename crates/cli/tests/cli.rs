@@ -239,6 +239,67 @@ URL: https://e.org\n\
     );
 }
 
+// =====================================================================
+// Phase 2 rules — RPM031..RPM040.
+// =====================================================================
+
+#[test]
+fn self_obsoletion_exits_one() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\n\
+URL: https://e.org\nObsoletes: hello\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 1, "self-obsoletion is deny");
+    assert!(stderr.contains("self-obsoletion"));
+}
+
+#[test]
+fn subpackage_self_obsoletion_detected() {
+    let spec = write_temp(
+        "Name: main\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\n\
+URL: https://e.org\n\
+%description\nb\n\
+%package -n foo\n\
+Summary: sub\n\
+Obsoletes: foo\n\
+%description -n foo\nsub\n\
+%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 1);
+    assert!(
+        stderr.contains("self-obsoletion") && stderr.contains("foo"),
+        "expected subpackage self-obsoletion mention; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn useless_provides_autofix_drops_line() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\n\
+URL: https://e.org\nProvides: hello\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let path = spec.path().to_str().unwrap();
+    let (code, _, _) = run(&["lint", "--fix", path], None);
+    assert_eq!(code, 0);
+
+    let after = std::fs::read_to_string(path).expect("read");
+    assert!(
+        !after.contains("Provides:"),
+        "useless Provides line must be removed:\n{after}"
+    );
+
+    let (code, _, stderr) = run(&["lint", path], None);
+    assert_eq!(code, 0);
+    assert!(
+        !stderr.contains("useless-explicit-provides"),
+        "diagnostic should be gone; stderr: {stderr}"
+    );
+}
+
 #[test]
 fn multiple_changelog_sections_exits_one() {
     let spec = write_temp(

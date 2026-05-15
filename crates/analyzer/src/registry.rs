@@ -24,5 +24,12 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::obsolete_tag::ObsoleteTag::new()),
         Box::new(rules::deprecated_clean_section::DeprecatedCleanSection::new()),
         Box::new(rules::multiple_changelog::MultipleChangelog::new()),
+        // Phase 2 — correctness.
+        Box::new(rules::requires_equal_version::RequiresEqualVersion::new()),
+        Box::new(rules::macro_redefinition::MacroRedefinition::new()),
+        Box::new(rules::self_obsoletion::SelfObsoletion::new()),
+        Box::new(rules::obsolete_without_provides::ObsoleteWithoutProvides::new()),
+        Box::new(rules::useless_explicit_provides::UselessExplicitProvides::new()),
+        Box::new(rules::self_conflict::SelfConflict::new()),
     ]
 }
