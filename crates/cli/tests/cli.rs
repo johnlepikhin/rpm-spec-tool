@@ -932,6 +932,60 @@ fn exhaustive_chain_warns_when_else_is_implicit() {
 }
 
 // =====================================================================
+// Per-atom spans for multi-dep — regression tests against span aliasing.
+// =====================================================================
+
+#[test]
+fn hoist_common_suffix_fires_on_multi_dep() {
+    // Before the per-atom-span fix in `rpm-spec`, both branches' single
+    // `BuildRequires:` line shared the whole-line span, so RPM098 saw
+    // two different source slices and missed the common trailing
+    // `gcc-c++`. With per-atom spans the trailing atom is comparable
+    // independently across branches.
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if A\n\
+BuildRequires: alpha, gcc-c++\n\
+%else\n\
+BuildRequires: beta, gcc-c++\n\
+%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(
+        stderr.contains("hoist-common-suffix-from-branches"),
+        "RPM098 must fire on shared multi-dep atom:\n{stderr}"
+    );
+}
+
+#[test]
+fn leaf_hoist_fires_on_multi_dep_atom_across_nested_arms() {
+    // Two-level nesting where every leaf shares one multi-dep atom.
+    // RPM119 should now see the atom as a per-item span and find it
+    // in every root-to-leaf path.
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if outer\n\
+BuildRequires: alpha, gcc-c++\n\
+%else\n\
+%if inner\n\
+BuildRequires: beta, gcc-c++\n\
+%else\n\
+BuildRequires: gamma, gcc-c++\n\
+%endif\n\
+%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(
+        stderr.contains("common-leaf-line-hoistable"),
+        "RPM119 must fire on multi-dep atom common to every leaf:\n{stderr}"
+    );
+}
+
+// =====================================================================
 // Phase 8c — macro value propagation (RPM117/118).
 // =====================================================================
 

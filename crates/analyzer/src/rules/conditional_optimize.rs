@@ -1222,8 +1222,11 @@ impl CollapseElseIfIntoElif {
 }
 
 /// `Some(inner_span)` when `body` (the `%else` arm) holds exactly one
-/// real item and that item is a single-branch plain `%if` with no
-/// `%else`. Filler items (Blank/Comment) are tolerated.
+/// real item and that item is a `%if` block whose head is plain
+/// `CondKind::If`. The inner may itself have `%elif` arms and/or an
+/// `%else` — in those cases the whole inner chain (including its own
+/// trailing `%else`) merges cleanly into the outer chain via
+/// `%elif <inner-cond>`. Filler items (Blank/Comment) are tolerated.
 fn else_holds_single_if_top(
     body: &[SpecItem<Span>],
 ) -> Option<Span> {
@@ -1233,10 +1236,7 @@ fn else_holds_single_if_top(
     if non_filler.next().is_some() {
         return None;
     }
-    if inner.branches.len() != 1 || inner.otherwise.is_some() {
-        return None;
-    }
-    if !matches!(inner.branches[0].kind, CondKind::If) {
+    if !matches!(inner.branches.first()?.kind, CondKind::If) {
         return None;
     }
     Some(inner.data)
@@ -1252,10 +1252,7 @@ fn else_holds_single_if_preamble(
     if non_filler.next().is_some() {
         return None;
     }
-    if inner.branches.len() != 1 || inner.otherwise.is_some() {
-        return None;
-    }
-    if !matches!(inner.branches[0].kind, CondKind::If) {
+    if !matches!(inner.branches.first()?.kind, CondKind::If) {
         return None;
     }
     Some(inner.data)
@@ -1271,10 +1268,7 @@ fn else_holds_single_if_files(
     if non_filler.next().is_some() {
         return None;
     }
-    if inner.branches.len() != 1 || inner.otherwise.is_some() {
-        return None;
-    }
-    if !matches!(inner.branches[0].kind, CondKind::If) {
+    if !matches!(inner.branches.first()?.kind, CondKind::If) {
         return None;
     }
     Some(inner.data)

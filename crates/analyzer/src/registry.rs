@@ -120,5 +120,7 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         // Phase 8c — macro value propagation.
         Box::new(rules::macro_propagation::MacroFoldsIfTrivial::new()),
         Box::new(rules::macro_propagation::UnusedConditionalGlobal::new()),
+        // Phase 9 — tree-level hoisting.
+        Box::new(rules::leaf_hoist::CommonLeafLineHoistable::new()),
     ]
 }

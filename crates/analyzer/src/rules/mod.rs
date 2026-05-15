@@ -67,4 +67,7 @@ pub mod unreachable_branch;
 // Phase 8c — macro value propagation.
 pub mod macro_propagation;
 
+// Phase 9 — tree-level hoisting.
+pub mod leaf_hoist;
+
 mod util;
