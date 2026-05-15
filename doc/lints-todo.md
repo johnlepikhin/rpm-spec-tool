@@ -55,23 +55,30 @@ Phase 2 infrastructure landed in `rules/util.rs`: `PackageView { name, items, he
 - RPM025 non-standard-group (требует списка валидных групп),
 - RPM030 requires-no-version (требует whitelist'а имён через профиль).
 
-## Phase 4 — Style / source-text (planned)
+## Phase 4 — Style / source-text (✅ implemented)
 
-Все правила фазы 4 требуют доступа к исходному тексту через `Lint::set_source` (расширение API сделано в фазе 1).
+Только два из 11 правил оказались source-bytes-aware (RPM051/052); остальные
+работают через существующие AST visit-points. `Lint::set_source` (заложенный в
+фазе 1) теперь имеет реальных потребителей.
 
 | ID     | Name                          | rpmlint analog                  | Default | Auto-fix          | Notes |
 |--------|-------------------------------|---------------------------------|---------|-------------------|-------|
-| RPM050 | hardcoded-paths               | hardcoded-library-path          | warn    | MachineApplicable | Префиксная замена `/usr/bin` → `%{_bindir}`, `/usr/lib` → `%{_libdir}`, `/etc` → `%{_sysconfdir}`, `/var/lib` → `%{_sharedstatedir}`, `/var/log` → `%{_localstatedir}/log`, `/usr/include` → `%{_includedir}`, `/usr/share` → `%{_datadir}`, `/usr/libexec` → `%{_libexecdir}`. Применяется в TextSegment::Literal preamble values, %files paths, scriptlet bodies. |
-| RPM051 | tab-indent                    | mixed-use-of-spaces-and-tabs    | warn    | MachineApplicable | `source[span]` для preamble и section-headers содержит `\t` в лидирующем whitespace |
-| RPM052 | trailing-whitespace           | n/a                             | low     | MachineApplicable | source-bytes сканирование |
-| RPM053 | rpm-buildroot-shell-var       | rpm-buildroot-usage             | warn    | MachineApplicable | `$RPM_BUILD_ROOT` → `%{buildroot}` в `ShellBody` |
-| RPM054 | rpm-source-dir-shell-var      | use-of-RPM_SOURCE_DIR           | warn    | MachineApplicable | `$RPM_SOURCE_DIR` → `%{_sourcedir}` |
-| RPM055 | summary-ends-with-dot         | summary-ended-with-dot          | warn    | MachineApplicable | Strip trailing `.` from Summary literal |
-| RPM056 | summary-not-capitalized       | summary-not-capitalized         | warn    | MachineApplicable | Uppercase first letter |
-| RPM057 | summary-too-long              | summary-too-long                | warn    | —                 | Default 80, конфигурируемо через `[lints.summary-too-long] max = N` (потребует расширения config) |
-| RPM058 | name-in-summary               | name-repeated-in-summary        | low     | —                 | Summary literal содержит Name токеном |
-| RPM059 | description-shorter-than-summary | description-shorter-than-summary | low | —             | После сборки body |
-| RPM036 | macro-in-hash-comment         | macro-in-comment                | warn    | MachineApplicable | `Comment{Hash}` с `TextSegment::Macro` — реальный footgun, rpm развернёт макрос. Fix: `%foo` → `%%foo`, или `#` → `%dnl`. |
+| RPM036 | macro-in-hash-comment         | macro-in-comment                | warn    | MachineApplicable | ✅ phase 4; escape `%` → `%%` per `%` byte в comment span (через `set_source`) |
+| RPM050 | hardcoded-paths               | hardcoded-library-path          | warn    | Manual            | ✅ phase 4; 10 prefix mappings (`/usr/bin → %{_bindir}`, ...); пропускает Source/Patch/URL/Summary/License/Group |
+| RPM051 | tab-indent                    | mixed-use-of-spaces-and-tabs    | warn    | MachineApplicable | ✅ phase 4; source-bytes scan; tab → 8 spaces |
+| RPM052 | trailing-whitespace           | n/a                             | allow   | MachineApplicable | ✅ phase 4; source-bytes scan; default `Allow` (turn on per-project) |
+| RPM053 | rpm-buildroot-shell-var       | rpm-buildroot-usage             | warn    | Manual            | ✅ phase 4; `$RPM_BUILD_ROOT` в любом ShellBody |
+| RPM054 | rpm-source-dir-shell-var      | use-of-RPM_SOURCE_DIR           | warn    | Manual            | ✅ phase 4; `$RPM_SOURCE_DIR` |
+| RPM055 | summary-ends-with-dot         | summary-ended-with-dot          | warn    | MachineApplicable | ✅ phase 4 |
+| RPM056 | summary-not-capitalized       | summary-not-capitalized         | warn    | MachineApplicable | ✅ phase 4 |
+| RPM057 | summary-too-long              | summary-too-long                | warn    | —                 | ✅ phase 4; hardcoded `MAX_SUMMARY_LEN = 80`. TODO: переезд в per-lint config с profile system. |
+| RPM058 | name-in-summary               | name-repeated-in-summary        | allow   | —                 | ✅ phase 4; whole-word case-insensitive match |
+| RPM059 | description-shorter-than-summary | description-shorter-than-summary | allow | —             | ✅ phase 4; **main package only**; subpackage `%description -n foo` — known limitation, требует pairing helper |
+
+Auto-fix для RPM053/054 и RPM050 — `Manual` (а не `MachineApplicable`),
+потому что `TextSegment` в AST не несёт per-segment span, и precise byte-range
+edit невозможен без расширения upstream-парсера. Диагностика всё равно
+показывает что заменить.
 
 ## Phase 5 — Modernization (planned)
 

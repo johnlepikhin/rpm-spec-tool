@@ -328,6 +328,70 @@ fn duplicate_buildscript_exits_one() {
     assert!(stderr.contains("duplicate-buildscript-section"));
 }
 
+// =====================================================================
+// Phase 4 rules — style / source-text.
+// =====================================================================
+
+#[test]
+fn summary_ends_with_dot_autofix() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: A library.\nLicense: MIT\n\
+URL: https://e.org\n\
+%description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let path = spec.path().to_str().unwrap();
+    let (code, _, _) = run(&["lint", "--fix", path], None);
+    assert_eq!(code, 0);
+    let after = std::fs::read_to_string(path).unwrap();
+    assert!(after.contains("Summary: A library\n"), "got:\n{after}");
+    assert!(!after.contains("Summary: A library.\n"));
+}
+
+#[test]
+fn hardcoded_paths_flags_install_script() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: Demo\nLicense: MIT\n\
+URL: https://e.org\n\
+%install\nmkdir -p /usr/lib/foo\n\
+%description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("hardcoded-paths"));
+}
+
+#[test]
+fn rpm_buildroot_shell_var_warns() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: Demo\nLicense: MIT\n\
+URL: https://e.org\n\
+%install\nmkdir -p $RPM_BUILD_ROOT/usr/bin\n\
+%description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("rpm-buildroot-shell-var"));
+}
+
+#[test]
+fn macro_in_hash_comment_autofix_escapes() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: Demo\nLicense: MIT\n\
+URL: https://e.org\n\
+# %{name} is the thing\n\
+%description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let path = spec.path().to_str().unwrap();
+    let (code, _, _) = run(&["lint", "--fix", path], None);
+    assert_eq!(code, 0);
+    let after = std::fs::read_to_string(path).unwrap();
+    // The fix wraps `%{` into `%%{` so rpm leaves it alone.
+    assert!(
+        after.contains("# %%{name}"),
+        "expected `# %%{{name}}` after fix; got:\n{after}"
+    );
+}
+
 #[test]
 fn parser_bridge_silenced_by_cli_allow() {
     // Same fixture as `parser_bridge_surfaces_warnings`, but with the

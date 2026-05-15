@@ -67,6 +67,64 @@ pub fn drop_span(span: Span) -> Edit {
     Edit::new(span, "")
 }
 
+/// Mapping from a literal hardcoded path prefix to the RPM macro that
+/// should replace it. Used by [`RPM050 hardcoded-paths`] in
+/// `rules/hardcoded_paths.rs`.
+///
+/// **Order matters.** The table is scanned top-down; more-specific
+/// prefixes (`/usr/lib64`, `/var/log`) must precede their less-specific
+/// peers (`/usr/lib`, `/var/lib`) so that a literal like `/usr/lib64/foo`
+/// matches the right replacement.
+pub const HARDCODED_PATHS: &[(&str, &str)] = &[
+    ("/usr/lib64", "%{_libdir}"),
+    ("/usr/libexec", "%{_libexecdir}"),
+    ("/usr/include", "%{_includedir}"),
+    ("/usr/share", "%{_datadir}"),
+    ("/usr/bin", "%{_bindir}"),
+    ("/usr/sbin", "%{_sbindir}"),
+    ("/usr/lib", "%{_libdir}"),
+    ("/var/log", "%{_localstatedir}/log"),
+    ("/var/lib", "%{_sharedstatedir}"),
+    ("/etc", "%{_sysconfdir}"),
+];
+
+/// Match the longest hardcoded-path prefix from [`HARDCODED_PATHS`]
+/// against the start of `text`. Returns `(matched_prefix_len, replacement)`
+/// or `None` if no entry matches.
+///
+/// The match is valid when the byte after `prefix` is a *path-end* —
+/// end of string, a path separator (`/`), or any byte that can't
+/// continue a path name (whitespace, shell punctuation, …). This
+/// rejects `/usr/binfoo` (`/usr/bin` + `foo`) while still accepting
+/// `/usr/bin`, `/usr/bin/python3`, `/usr/bin\n`, `/usr/bin foo`,
+/// `/usr/bin"`.
+pub fn match_path_prefix(text: &str) -> Option<(usize, &'static str)> {
+    for &(prefix, replacement) in HARDCODED_PATHS {
+        if let Some(rest) = text.strip_prefix(prefix)
+            && is_path_boundary(rest)
+        {
+            return Some((prefix.len(), replacement));
+        }
+    }
+    None
+}
+
+/// `true` when `rest` (the bytes immediately after a candidate path
+/// prefix) marks the path's end. Name-continuation characters
+/// (`a-zA-Z0-9._-`) keep the match going; anything else terminates.
+fn is_path_boundary(rest: &str) -> bool {
+    match rest.as_bytes().first() {
+        None => true,
+        Some(b'/') => true,
+        Some(&b) => !is_name_byte(b),
+    }
+}
+
+#[inline]
+fn is_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.')
+}
+
 /// Return the resolved literal name of the main package, or `None`
 /// when the `Name:` tag is missing or contains macros (can't be
 /// safely compared by string).

@@ -40,5 +40,17 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::changelog_health::EmptyChangelogEntry::new()),
         Box::new(rules::changelog_health::ChangelogFutureDate::new()),
         Box::new(rules::changelog_health::ChangelogImplausibleDate::new()),
+        // Phase 4 — style / source-text.
+        Box::new(rules::macro_in_hash_comment::MacroInHashComment::new()),
+        Box::new(rules::hardcoded_paths::HardcodedPaths::new()),
+        Box::new(rules::shell_vars::RpmBuildrootShellVar::new()),
+        Box::new(rules::shell_vars::RpmSourceDirShellVar::new()),
+        Box::new(rules::summary_style::SummaryEndsWithDot::new()),
+        Box::new(rules::summary_style::SummaryNotCapitalized::new()),
+        Box::new(rules::summary_style::SummaryTooLong::new()),
+        Box::new(rules::summary_style::NameInSummary::new()),
+        Box::new(rules::description_health::DescriptionShorterThanSummary::new()),
+        Box::new(rules::tab_indent::TabIndent::new()),
+        Box::new(rules::trailing_whitespace::TrailingWhitespace::new()),
     ]
 }

@@ -89,8 +89,28 @@ pub fn analyze(source: &str, config: &Config) -> (ParseOutcome, Vec<Diagnostic>)
     let mut session = LintSession::from_config(config);
     let mut diags = session.run(&outcome.spec, source);
     diags.extend(bridge_parser_diagnostics(&outcome.parser_diagnostics, config));
-    diags.sort_by_key(|d| (d.primary_span.start_byte, d.lint_id));
+    sort_and_dedup(&mut diags);
     (outcome, diags)
+}
+
+/// Sort diagnostics by source location and drop exact duplicates.
+///
+/// Safety net against rules that anchor multiple findings at the same
+/// span (e.g. one diagnostic per AST node when the same source
+/// location is visited from several angles). Keying on the message
+/// preserves distinct findings that happen to share a span but
+/// suggest different fixes.
+fn sort_and_dedup(diags: &mut Vec<Diagnostic>) {
+    diags.sort_by(|a, b| {
+        a.primary_span
+            .start_byte
+            .cmp(&b.primary_span.start_byte)
+            .then_with(|| a.lint_id.cmp(b.lint_id))
+            .then_with(|| a.message.cmp(&b.message))
+    });
+    diags.dedup_by(|a, b| {
+        a.lint_id == b.lint_id && a.primary_span == b.primary_span && a.message == b.message
+    });
 }
 
 /// A parser code that we expose to users as a lint.
@@ -242,6 +262,10 @@ impl LintSession {
     /// via [`Lint::set_source`] before the visit pass starts. Rules that
     /// inspect raw bytes (whitespace, tabs, exact line slicing) use it;
     /// AST-only rules ignore it.
+    ///
+    /// Diagnostics are returned in lint-emission order. Callers that
+    /// want sorted, deduplicated output should use [`analyze`] (which
+    /// runs [`sort_and_dedup`]) instead of post-processing themselves.
     pub fn run(&mut self, spec: &SpecFile<Span>, source: &str) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         for ActiveLint { lint, severity } in &mut self.lints {
@@ -252,7 +276,6 @@ impl LintSession {
                 out.push(diag);
             }
         }
-        out.sort_by_key(|d| (d.primary_span.start_byte, d.lint_id));
         out
     }
 }
@@ -325,6 +348,31 @@ mod tests {
             message: msg.into(),
             notes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn sort_and_dedup_collapses_identical_diagnostics() {
+        use crate::diagnostic::{LintCategory, Severity};
+        use crate::lint::LintMetadata;
+
+        static META: LintMetadata = LintMetadata {
+            id: "RPM999",
+            name: "test-lint",
+            description: "",
+            default_severity: Severity::Warn,
+            category: LintCategory::Correctness,
+        };
+        let anchor = Span::from_bytes(10, 20);
+        let mk = |msg: &str| Diagnostic::new(&META, Severity::Warn, msg.to_owned(), anchor);
+        // Three diagnostics: two identical (same span + message), one
+        // with a different message at the same anchor.
+        let mut diags = vec![mk("same"), mk("same"), mk("different")];
+        sort_and_dedup(&mut diags);
+        assert_eq!(diags.len(), 2, "expected exact-dup to collapse: {diags:?}");
+        // Distinct messages must both survive.
+        let messages: Vec<_> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert!(messages.contains(&"same"));
+        assert!(messages.contains(&"different"));
     }
 
     #[test]

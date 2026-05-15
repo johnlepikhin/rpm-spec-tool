@@ -22,4 +22,13 @@ pub mod changelog_health;
 pub mod duplicate_buildscript;
 pub mod missing_section;
 
+// Phase 4 — Style / source-text.
+pub mod description_health;
+pub mod hardcoded_paths;
+pub mod macro_in_hash_comment;
+pub mod shell_vars;
+pub mod summary_style;
+pub mod tab_indent;
+pub mod trailing_whitespace;
+
 mod util;
