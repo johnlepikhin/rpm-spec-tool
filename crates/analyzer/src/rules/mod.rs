@@ -36,4 +36,35 @@ pub mod deprecated_commands;
 pub mod patch_tracking;
 pub mod setup_flags;
 
+// Phase 6 — Conditional-block lints.
+pub mod conditional_merge;
+pub mod conditional_simplify;
+pub mod conditional_structure;
+
+// Phase 7 — Conditional optimisation.
+pub mod conditional_optimize;
+
+// Phase 7b — extended conditional lints.
+pub mod conditional_factoring;
+pub mod conditional_idioms;
+
+// Phase 7c — multi-branch refactoring.
+pub mod conditional_hoist;
+
+// Phase 7d — interval analysis.
+pub mod conditional_intervals;
+
+// Phase 8a — boolean DNF normalisation.
+pub mod boolean_dnf;
+
+// Phase 8b — path-condition engine.
+pub(crate) mod path_cond;
+pub mod always_true_branch;
+pub mod dead_elif;
+pub mod exhaustive_chain;
+pub mod unreachable_branch;
+
+// Phase 8c — macro value propagation.
+pub mod macro_propagation;
+
 mod util;

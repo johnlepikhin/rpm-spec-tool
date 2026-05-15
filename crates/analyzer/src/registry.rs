@@ -67,5 +67,58 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         )),
         Box::new(rules::setup_flags::SetupWithoutQFlag::new()),
         Box::new(rules::patch_tracking::PatchDefinedNotApplied::new()),
+        // Phase 6 — conditional-block lints.
+        Box::new(rules::conditional_structure::DeepConditionalNesting::new()),
+        Box::new(rules::conditional_structure::UnreachableElifBranch::new()),
+        Box::new(rules::conditional_structure::EmptyConditionalBranch::new()),
+        Box::new(rules::conditional_structure::IfarchEmptyList::new()),
+        Box::new(rules::conditional_simplify::ConstantCondition::new()),
+        Box::new(rules::conditional_simplify::IdenticalConditionalBranches::new()),
+        Box::new(rules::conditional_simplify::RedundantNestedCondition::new()),
+        Box::new(rules::conditional_merge::AdjacentMergeableConditionals::new()),
+        // Phase 7 — conditional optimisation.
+        Box::new(rules::conditional_optimize::NestedAndCollapse::new()),
+        Box::new(rules::conditional_optimize::EmptyElseDrop::new()),
+        Box::new(rules::conditional_optimize::InvertEmptyIfArch::new()),
+        Box::new(rules::conditional_optimize::ConstantTautologyInExpr::new()),
+        Box::new(rules::conditional_optimize::DoubleNegationInExpr::new()),
+        // Phase 7b — extended conditional lints.
+        Box::new(rules::conditional_structure::SingleCommentOnlyBranch::new()),
+        Box::new(rules::conditional_structure::IfarchNoarch::new()),
+        Box::new(rules::conditional_structure::DuplicateArchInList::new()),
+        Box::new(rules::conditional_structure::ConditionalCyclomaticComplexity::new()),
+        Box::new(rules::conditional_optimize::CollapseElifIntoElse::new()),
+        Box::new(rules::conditional_optimize::IdempotentInExpr::new()),
+        Box::new(rules::conditional_optimize::SelfComparisonInExpr::new()),
+        Box::new(rules::conditional_optimize::LineContinuationInCondition::new()),
+        Box::new(rules::conditional_merge::IfNotXAfterIfX::new()),
+        Box::new(rules::conditional_factoring::ConditionMentionedManyTimes::new()),
+        Box::new(rules::conditional_idioms::PreferBcondForBuildOptions::new()),
+        Box::new(rules::conditional_idioms::IfOnlyBuildRequires::new()),
+        // Phase 7c — multi-branch refactoring.
+        Box::new(rules::conditional_hoist::HoistCommonPrefix::new()),
+        Box::new(rules::conditional_hoist::HoistCommonSuffix::new()),
+        Box::new(rules::conditional_merge::MergeElifSameBody::new()),
+        Box::new(rules::conditional_optimize::CollapseElseIfIntoElif::new()),
+        Box::new(rules::conditional_optimize::AbsorptionInExpr::new()),
+        // Phase 7d — interval analysis + anti-patterns.
+        Box::new(rules::conditional_intervals::InequalityRedundancy::new()),
+        Box::new(rules::conditional_intervals::InequalityContradiction::new()),
+        Box::new(rules::conditional_optimize::StringSetRedundancy::new()),
+        Box::new(rules::conditional_optimize::InvertedIfElse::new()),
+        Box::new(rules::conditional_idioms::ConditionalBuildArch::new()),
+        Box::new(rules::conditional_idioms::ConditionalNameTag::new()),
+        // Phase 8a — boolean DNF normalisation.
+        Box::new(rules::boolean_dnf::BooleanDnfRedundancy::new()),
+        Box::new(rules::boolean_dnf::BooleanTautologyByCubes::new()),
+        Box::new(rules::boolean_dnf::BooleanContradictionByCubes::new()),
+        // Phase 8b — path-condition engine.
+        Box::new(rules::unreachable_branch::UnreachableBranch::new()),
+        Box::new(rules::dead_elif::DeadElif::new()),
+        Box::new(rules::always_true_branch::AlwaysTrueBranch::new()),
+        Box::new(rules::exhaustive_chain::ExhaustiveChain::new()),
+        // Phase 8c — macro value propagation.
+        Box::new(rules::macro_propagation::MacroFoldsIfTrivial::new()),
+        Box::new(rules::macro_propagation::UnusedConditionalGlobal::new()),
     ]
 }

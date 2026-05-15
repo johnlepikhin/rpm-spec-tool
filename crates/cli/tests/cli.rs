@@ -569,6 +569,249 @@ fn format_check_with_indent_exits_one() {
     assert!(stderr.contains("would reformat"), "expected check-diff: {stderr}");
 }
 
+// =====================================================================
+// Phase 6 — conditional-block lints.
+// =====================================================================
+
+#[test]
+fn deep_conditional_nesting_warns() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if 1\n%if 1\n%if 1\n%if 1\n%if 1\nBuildArch: noarch\n\
+%endif\n%endif\n%endif\n%endif\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("deep-conditional-nesting"), "stderr:\n{stderr}");
+}
+
+#[test]
+fn constant_condition_warns() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if 0\nBuildArch: noarch\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("constant-condition"), "stderr:\n{stderr}");
+}
+
+#[test]
+fn empty_conditional_branch_warns() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if 0\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("empty-conditional-branch"), "stderr:\n{stderr}");
+}
+
+#[test]
+fn unreachable_elif_warns() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if 0\nBuildArch: noarch\n%elif 0\nBuildArch: x86_64\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("unreachable-elif-branch"), "stderr:\n{stderr}");
+}
+
+// =====================================================================
+// Phase 7 — conditional optimisation.
+// =====================================================================
+
+#[test]
+fn nested_and_collapse_warns() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if 1\n%if 1\nBuildArch: noarch\n%endif\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("nested-and-collapse"), "stderr:\n{stderr}");
+}
+
+#[test]
+fn double_negation_warns() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if !!0%{?rhel}\nBuildArch: noarch\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("double-negation-in-expr"), "stderr:\n{stderr}");
+}
+
+// =====================================================================
+// Phase 7d — interval analysis + anti-patterns.
+// =====================================================================
+
+#[test]
+fn inequality_contradiction_warns() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if X >= 10 && X < 5\nBuildArch: noarch\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("inequality-contradiction"), "stderr:\n{stderr}");
+}
+
+#[test]
+fn conditional_buildarch_warns_when_enabled() {
+    // RPM106 is Allow by default, so we need `--warn` to surface it.
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if 1\nBuildArch: noarch\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(
+        &[
+            "lint",
+            "--warn",
+            "conditional-buildarch",
+            spec.path().to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert!(stderr.contains("conditional-buildarch"), "stderr:\n{stderr}");
+}
+
+// =====================================================================
+// Phase 8b — path-condition engine (RPM113/114/115/116).
+// =====================================================================
+
+#[test]
+fn unreachable_branch_warns_on_nested_negation() {
+    // Outer path `!X` makes inner `X` impossible — RPM113.
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if !X\n%if X\nBuildArch: noarch\n%endif\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(
+        stderr.contains("unreachable-branch-under-parent"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn always_true_branch_warns_on_implied_inner() {
+    // path = X && Y; inner = X — path implies branch, RPM114.
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if X && Y\n%if X\nBuildArch: noarch\n%endif\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(
+        stderr.contains("always-true-branch-under-parent"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn dead_elif_warns_when_repeating_prior_branch() {
+    // `%if A %elif A` — the second branch's effective condition is
+    // `A ∧ ¬A` = ⊥ — RPM115.
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if A\nBuildArch: noarch\n%elif A\nBuildArch: x86_64\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(
+        stderr.contains("dead-elif-after-parent"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn exhaustive_chain_warns_when_else_is_implicit() {
+    // `%if A %elif !A` covers the whole boolean space — the final
+    // `%elif` is equivalent to `%else` — RPM116.
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%if A\nBuildArch: noarch\n%elif !A\nBuildArch: x86_64\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(
+        stderr.contains("mutex-branches-spell-out-else"),
+        "stderr:\n{stderr}"
+    );
+}
+
+// =====================================================================
+// Phase 8c — macro value propagation (RPM117/118).
+// =====================================================================
+
+#[test]
+fn macro_makes_if_trivial_warns_when_enabled() {
+    // RPM117 defaults to `Allow` because `%define FLAG <default>` is
+    // idiomatically a CLI knob (`rpmbuild --define`). Opt in via
+    // `--warn` for hygiene passes where genuine dead constants matter.
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%global with_python 1\n\
+%if %{with_python}\nBuildRequires: python3\n%endif\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(
+        &[
+            "lint",
+            "--warn",
+            "macro-defined-makes-if-trivial",
+            spec.path().to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        stderr.contains("macro-defined-makes-if-trivial"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn unused_global_warns_when_enabled() {
+    // RPM118 is Allow by default — opt in via `--warn`.
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+%global never_used 1\n\
+%description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(
+        &[
+            "lint",
+            "--warn",
+            "unused-conditional-global",
+            spec.path().to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        stderr.contains("unused-conditional-global"),
+        "stderr:\n{stderr}"
+    );
+}
+
 #[test]
 fn parser_bridge_silenced_by_cli_allow() {
     // Same fixture as `parser_bridge_surfaces_warnings`, but with the
