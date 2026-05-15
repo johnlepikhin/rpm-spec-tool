@@ -392,6 +392,54 @@ URL: https://e.org\n\
     );
 }
 
+// =====================================================================
+// Phase 5 rules — modernization.
+// =====================================================================
+
+#[test]
+fn egrep_autofix_replaces_with_grep_e() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: Demo\nLicense: MIT\n\
+URL: https://e.org\n\
+%build\nls | egrep foo\n\
+%description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let path = spec.path().to_str().unwrap();
+    let (code, _, _) = run(&["lint", "--fix", path], None);
+    assert_eq!(code, 0);
+    let after = std::fs::read_to_string(path).unwrap();
+    assert!(after.contains("ls | grep -E foo"), "got:\n{after}");
+    assert!(!after.contains("egrep"), "egrep should be gone:\n{after}");
+}
+
+#[test]
+fn setup_without_q_warns() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: Demo\nLicense: MIT\n\
+URL: https://e.org\n\
+%prep\n%setup -n foo\n\
+%description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("setup-without-q-flag"), "stderr:\n{stderr}");
+}
+
+#[test]
+fn patch_not_applied_warns() {
+    let spec = write_temp(
+        "Name: hello\nVersion: 1\nRelease: 1\nSummary: Demo\nLicense: MIT\n\
+URL: https://e.org\n\
+Patch1: missing.patch\n\
+%prep\n%setup -q\n\
+%description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+    );
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("patch-defined-not-applied"), "stderr:\n{stderr}");
+    assert!(stderr.contains("Patch1"), "stderr:\n{stderr}");
+}
+
 #[test]
 fn parser_bridge_silenced_by_cli_allow() {
     // Same fixture as `parser_bridge_surfaces_warnings`, but with the

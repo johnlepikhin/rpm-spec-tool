@@ -80,15 +80,15 @@ Auto-fix для RPM053/054 и RPM050 — `Manual` (а не `MachineApplicable`),
 edit невозможен без расширения upstream-парсера. Диагностика всё равно
 показывает что заменить.
 
-## Phase 5 — Modernization (planned)
+## Phase 5 — Modernization (✅ implemented)
 
 | ID     | Name                          | rpmlint analog                  | Default | Auto-fix          | Notes |
 |--------|-------------------------------|---------------------------------|---------|-------------------|-------|
-| RPM060 | python-setup-test-deprecated  | python-setup-test               | low     | Manual            | `python setup.py test` в ShellBody |
-| RPM061 | python-setup-install-deprecated | python-setup-install          | low     | Manual            | `python setup.py install` в ShellBody |
-| RPM062 | egrep-fgrep-deprecated        | deprecated-grep                 | low     | MachineApplicable | `egrep` → `grep -E`, `fgrep` → `grep -F` |
-| RPM063 | setup-without-q-flag          | setup-not-quiet                 | warn    | MachineApplicable | `%setup` без `-q` arg — `Statement(MacroRef)` где name == "setup" |
-| RPM064 | patch-defined-not-applied     | patch-not-applied               | warn    | Manual            | `Patch(N)` объявлен; ни `%patch -P N` / `%autopatch` / `%autosetup -p N` в %prep |
+| RPM060 | python-setup-test-deprecated  | python-setup-test               | allow   | Manual            | ✅ phase 5; needle `setup.py test` в shell body с word-boundary; default Allow (включать per-project) |
+| RPM061 | python-setup-install-deprecated | python-setup-install          | allow   | Manual            | ✅ phase 5; needle `setup.py install`; default Allow |
+| RPM062 | egrep-fgrep-deprecated        | deprecated-grep                 | warn    | MachineApplicable | ✅ phase 5; `egrep` → `grep -E`, `fgrep` → `grep -F`, точный sub-span на каждое вхождение |
+| RPM063 | setup-without-q-flag          | setup-not-quiet                 | warn    | Manual            | ✅ phase 5; `%setup` без `-q` (включая комбинированные `-qn`/`-nq` и `--quiet`); conservative bail-out на макросах в args. v2: MachineApplicable когда появится per-segment span у `MacroRef`. |
+| RPM064 | patch-defined-not-applied     | patch-not-applied               | warn    | —                 | ✅ phase 5; пары `PatchN:` ↔ `%patchN`/`%patch -P N`/`%patch -PN`; `%autopatch`/`%autosetup` = all applied; macro-arg в `-P` = conservative all applied; silent при отсутствии `%prep` |
 
 ## Maintenance rules
 

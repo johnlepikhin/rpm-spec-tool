@@ -120,10 +120,53 @@ fn is_path_boundary(rest: &str) -> bool {
     }
 }
 
+/// `true` when `b` can continue a shell-token / path-name. Used by
+/// boundary checks in path-prefix matching ([`match_path_prefix`]) and
+/// in command-word matching (e.g. RPM062 `egrep`/`fgrep` detection).
 #[inline]
-fn is_name_byte(b: u8) -> bool {
+pub(crate) fn is_name_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.')
 }
+
+/// One declared patch tag.
+///
+/// RPM treats the unnumbered `Patch:` form as `Patch0:` for application
+/// purposes, so we normalise both into `number` — but keep `explicit`
+/// around in case a future rule needs to distinguish them (e.g. to
+/// warn about the legacy shortcut).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PatchDecl {
+    pub number: u32,
+    pub span: Span,
+    /// `true` if the source wrote a number (`Patch5:`); `false` for
+    /// the bare `Patch:` shortcut, which RPM treats as `Patch0:`.
+    #[allow(dead_code)]
+    pub explicit: bool,
+}
+
+/// Collect every declared `Patch:` / `PatchN:` tag at the top level
+/// of `spec`, in source order. Used by [`RPM064 patch-defined-not-applied`]
+/// to pair declarations against applications inside `%prep`.
+pub(crate) fn collect_declared_patches(spec: &SpecFile<Span>) -> Vec<PatchDecl> {
+    let mut out = Vec::new();
+    for item in collect_top_level_preamble(spec) {
+        if let Tag::Patch(n) = item.tag {
+            out.push(PatchDecl {
+                number: n.unwrap_or(0),
+                span: item.data,
+                explicit: n.is_some(),
+            });
+        }
+    }
+    out
+}
+
+/// Names of well-known macros that lint rules inspect. Kept in one
+/// place so a rename in a future RPM release is a single-line change.
+pub(crate) const MACRO_SETUP: &str = "setup";
+pub(crate) const MACRO_AUTOSETUP: &str = "autosetup";
+pub(crate) const MACRO_AUTOPATCH: &str = "autopatch";
+pub(crate) const MACRO_PATCH_PREFIX: &str = "patch";
 
 /// Return the resolved literal name of the main package, or `None`
 /// when the `Name:` tag is missing or contains macros (can't be

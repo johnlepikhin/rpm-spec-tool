@@ -31,4 +31,9 @@ pub mod summary_style;
 pub mod tab_indent;
 pub mod trailing_whitespace;
 
+// Phase 5 — Modernization.
+pub mod deprecated_commands;
+pub mod patch_tracking;
+pub mod setup_flags;
+
 mod util;

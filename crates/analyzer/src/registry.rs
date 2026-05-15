@@ -52,5 +52,20 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::description_health::DescriptionShorterThanSummary::new()),
         Box::new(rules::tab_indent::TabIndent::new()),
         Box::new(rules::trailing_whitespace::TrailingWhitespace::new()),
+        // Phase 5 — modernization.
+        Box::new(rules::deprecated_commands::WordScanLint::new(
+            &rules::deprecated_commands::SETUP_TEST_METADATA,
+            rules::deprecated_commands::SETUP_TEST_NEEDLES,
+        )),
+        Box::new(rules::deprecated_commands::WordScanLint::new(
+            &rules::deprecated_commands::SETUP_INSTALL_METADATA,
+            rules::deprecated_commands::SETUP_INSTALL_NEEDLES,
+        )),
+        Box::new(rules::deprecated_commands::WordScanLint::new(
+            &rules::deprecated_commands::EGREP_FGREP_METADATA,
+            rules::deprecated_commands::EGREP_FGREP_NEEDLES,
+        )),
+        Box::new(rules::setup_flags::SetupWithoutQFlag::new()),
+        Box::new(rules::patch_tracking::PatchDefinedNotApplied::new()),
     ]
 }
