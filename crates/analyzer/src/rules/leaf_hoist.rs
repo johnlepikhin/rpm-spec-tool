@@ -278,7 +278,7 @@ BuildRequires: llvm
 
     #[test]
     fn rpm119_flags_line_shared_across_nested_arms() {
-        // Mirror of the postgrespro tower-of-ifs pattern: a shared
+        // Tower-of-ifs pattern from real-world specs: a shared
         // line buried in every leaf of a 2-level nest.
         let src = "\
 Name: x

@@ -370,6 +370,93 @@ RPM102/103 на:
 Требует более продвинутого engine. Возможно через Rust crate (`good_lp`?)
 или own (~1000 строк).
 
+## Phase 10 — Build-command modernization (planned)
+
+Brainstormed after a sweep of real-world `gcc.spec` (~4.4 kLOC).
+Several Fedora-style modern macros replace direct shell commands;
+authors who copy older specs keep emitting raw `make` etc.
+
+| ID | Name | Pattern | Suggestion |
+|----|------|---------|-----------|
+| RPM120 | make-without-make-build | `make %{?_smp_mflags}` / bare `make` in `%build` | `%make_build` |
+| RPM121 | make-install-without-make-install | `make install …` in `%install` | `%make_install` |
+| RPM122 | configure-without-configure-macro | `./configure …` / `../configure …` in `%build`/`%prep` | `%configure` |
+
+All three follow one shape: scan shell-body lines, match a token at
+line start (after whitespace), suggest the equivalent macro.
+Detection: line starts with `make`, `./configure`, `../configure`,
+or `make install` (latter beats first). Default `warn`,
+`Applicability::MachineApplicable` (autofix swaps text).
+
+**Implementation sketch:**
+
+Generic `ShellCommandModernization` rule parametrised by metadata
++ pattern (similar to Phase 5 `deprecated_commands::WordScanLint`).
+One module `shell_modernization.rs`, three registry entries.
+
+Walk every `Section::BuildScript` and `Section::Scriptlet` body line
+(`Text`); use `Text::literal_str()` to get the line text; check
+`first_word_after_indent(line) ∈ matchers` and emit. Macros and
+`make install` (two-word match) handled with simple lookahead.
+
+**Out of scope for Phase 10:**
+
+- `make check` → `%make_test` — fine, but `%make_test` is less
+  universally adopted than `%make_build/install`. Add later.
+- `cmake ..` → `%cmake_build` — separate buildsystem detector.
+- `autoreconf` / `libtoolize` patterns — out of scope.
+
+## Phase 11 — Subpackage hygiene (✅ implemented, opt-in)
+
+| ID | Name | Triggers | Default |
+|----|------|---------|---------|
+| RPM123 | package-without-description | `%package X` declared, no matching `%description X` | **allow** (opt-in) |
+| RPM124 | package-without-files | `%package X` declared, no matching `%files X` | **allow** (opt-in) |
+
+Implementation walks AST, collects subpkg names from
+`Section::Package` / `Section::Description` / `Section::Files`,
+canonicalises against the main `Name:` (relative ⇒ `<main>-<suffix>`,
+absolute ⇒ raw text), and emits at the `%package` header span on
+unmatched declarations.
+
+**Known limitation (drives the `Allow` default):** the parser models
+`%files X` / `%description X` blocks **nested inside a `%if`-block**
+as `FilesContent::Conditional` / `PreambleContent::Conditional`
+within the surrounding section, not as standalone
+`Section::Files` / `Section::Description` items. Real specs
+(gcc.spec) wrap arch-conditional subpackage `%files` blocks in
+`%if %{build_X}`, so our visitor never sees them as sections — the
+default-`Warn` rule would systematically over-fire (~46 spurious hits
+on gcc.spec). Opt in per-project via
+`.rpmspec.toml`/`--warn package-without-files` once the project
+keeps subpackage sections at top level, or wait for an upstream
+parser fix that surfaces conditional-buried sections.
+
+## Phase 12 — Source/Patch hygiene (✅ implemented)
+
+| ID | Name | Triggers | Default |
+|----|------|---------|---------|
+| RPM125 | source-without-url | `Source0: foo.tar.xz` has no URL scheme | warn |
+| RPM126 | description-leads-with-this-package | `%description` body first non-blank starts with `This package`, `This is the`, `The X package` | allow |
+
+Both walk only literal `Text` segments and skip pure-macro values
+(`Source0: %{upstream_tarball}` / `%{summary} — …`) — we can't see
+through the macro at lint time and would over-fire otherwise.
+RPM126 stays opt-in: style preference, individual projects may
+disagree on the rule.
+
+gcc.spec impact: **3 RPM125** (Source0/1/2 filename-only),
+**55 RPM126** under `--warn` (descriptions across all subpackages).
+
+**Deferred / dropped:**
+
+- patch-number-gap (`Patch0, Patch2, …`) — too noisy; many real specs
+  intentionally group patches by topic.
+- defattr-redundant — disputed in community.
+- archive-not-extracted-via-setup — many edge cases.
+- buildroot-tag-declared — could add if seen, but rare in modern
+  specs.
+
 ## Maintenance rules
 
 - Новые правила получают **следующий свободный ID в своей сотне** (Packaging: 0xx, Correctness: 03x, Sections: 01x/02x/03x на конкретный диапазон, Style: 05x, Modernization: 06x).

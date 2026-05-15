@@ -70,4 +70,13 @@ pub mod macro_propagation;
 // Phase 9 — tree-level hoisting.
 pub mod leaf_hoist;
 
+// Phase 10 — shell-command modernization.
+pub mod shell_modernization;
+
+// Phase 11 — subpackage hygiene.
+pub mod subpackage_hygiene;
+
+// Phase 12 — source URL + description style.
+pub mod source_style;
+
 mod util;

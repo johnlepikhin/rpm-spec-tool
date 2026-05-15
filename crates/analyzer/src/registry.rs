@@ -122,5 +122,15 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::macro_propagation::UnusedConditionalGlobal::new()),
         // Phase 9 — tree-level hoisting.
         Box::new(rules::leaf_hoist::CommonLeafLineHoistable::new()),
+        // Phase 10 — shell-command modernization.
+        Box::new(rules::shell_modernization::MakeWithoutMakeBuild::new()),
+        Box::new(rules::shell_modernization::MakeInstallWithoutMakeInstall::new()),
+        Box::new(rules::shell_modernization::ConfigureWithoutConfigureMacro::new()),
+        // Phase 11 — subpackage hygiene.
+        Box::new(rules::subpackage_hygiene::PackageWithoutDescription::new()),
+        Box::new(rules::subpackage_hygiene::PackageWithoutFiles::new()),
+        // Phase 12 — source URL + description style.
+        Box::new(rules::source_style::SourceWithoutUrl::new()),
+        Box::new(rules::source_style::DescriptionLeadsWithThisPackage::new()),
     ]
 }
