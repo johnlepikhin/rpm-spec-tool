@@ -419,18 +419,13 @@ impl GroupList {
 /// Three-valued whitelist mode. `Off` is the contract: consumer lints
 /// MUST emit nothing when their list is `Off`. `Warn`/`Strict` differ
 /// only in default severity for the consumer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ValidationMode {
+    #[default]
     Off,
     Warn,
     Strict,
-}
-
-impl Default for ValidationMode {
-    fn default() -> Self {
-        Self::Off
-    }
 }
 
 /// One layer in the merge chain — recorded so `profile show` can render

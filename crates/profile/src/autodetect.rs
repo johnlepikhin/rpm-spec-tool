@@ -48,11 +48,11 @@ where
         ("fedora", Family::Fedora),
     ];
     for (marker, family) in MARKERS {
-        if let Some(entry) = by_name.get(*marker) {
-            if literal(entry).is_some() {
-                out.family = Some(*family);
-                break;
-            }
+        if let Some(entry) = by_name.get(*marker)
+            && literal(entry).is_some()
+        {
+            out.family = Some(*family);
+            break;
         }
     }
 
