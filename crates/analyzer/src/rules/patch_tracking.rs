@@ -1,12 +1,19 @@
-//! RPM064 `patch-defined-not-applied` — flag `PatchN:` tags whose
-//! patch never gets applied in `%prep`.
+//! Patch-tracking lints over `%prep`.
+//!
+//! - **RPM064 `patch-defined-not-applied`** — flag `PatchN:` tags whose
+//!   patch never gets applied in `%prep`.
+//! - **RPM306 `patch-applied-more-than-once`** — flag patches that
+//!   appear to be applied twice (explicit + explicit, or explicit +
+//!   `%autopatch`/`%autosetup`). RPM may silently reverse or re-apply
+//!   the second hunk, leading to build failures or, worse, silent
+//!   corruption.
 //!
 //! Recognised application forms:
 //! - `%patch -P N` / `%patch -PN` — explicit numbered application
 //! - `%patchN` — legacy numbered form
 //! - `%autopatch` or `%autosetup` — applies all declared patches
 //!
-//! Bail-out behaviour:
+//! Bail-out behaviour (RPM064):
 //! - If `%prep` is missing entirely, the rule stays silent (the spec
 //!   has bigger problems — `missing-prep-section` covers that).
 //! - If `%autopatch`/`%autosetup` is invoked, the rule treats every
@@ -207,6 +214,179 @@ fn parse_dash_p(trailing: &[TextSegment]) -> DashP {
     DashP::Missing
 }
 
+// =====================================================================
+// RPM306 patch-applied-more-than-once
+// =====================================================================
+
+/// Lint metadata for RPM306 `patch-applied-more-than-once`.
+pub static APPLIED_TWICE_METADATA: LintMetadata = LintMetadata {
+    id: "RPM306",
+    name: "patch-applied-more-than-once",
+    description: "A patch appears to be applied twice in `%prep` — either by two explicit \
+                  `%patch -P N` / `%patchN` invocations, or by mixing one of those with \
+                  `%autopatch` / `%autosetup` which applies the patch implicitly.",
+    default_severity: Severity::Warn,
+    category: LintCategory::Correctness,
+};
+
+#[derive(Debug, Default)]
+pub struct PatchAppliedMoreThanOnce {
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl PatchAppliedMoreThanOnce {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl<'ast> Visit<'ast> for PatchAppliedMoreThanOnce {
+    fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
+        let Some((prep_body, prep_span)) = find_prep_body_and_span(spec) else {
+            return;
+        };
+
+        let mut accum = PatchAccumulator::default();
+        for line in &prep_body.lines {
+            for event in patch_events(line) {
+                accum.absorb(event);
+            }
+        }
+
+        // Macro-based `%patch -P %{x}` already short-circuits RPM064 to
+        // "all applied". For RPM306 we conservatively skip the duplicate
+        // check if we saw one — we cannot tell which patch number it
+        // referred to, so any "twice" claim would be a guess.
+        if accum.macro_unresolvable {
+            return;
+        }
+
+        let mut reported = std::collections::BTreeSet::new();
+        for (&num, &count) in &accum.explicit {
+            if count >= 2 {
+                self.diagnostics.push(Diagnostic::new(
+                    &APPLIED_TWICE_METADATA,
+                    Severity::Warn,
+                    format!("Patch{num} is applied {count} times in %prep — remove the duplicate",),
+                    prep_span,
+                ));
+                reported.insert(num);
+            }
+        }
+
+        if accum.autopatch_present {
+            // `%autopatch` already applies every declared patch. Any
+            // explicit `%patch -P N` / `%patchN` next to it is a
+            // double-apply. Flag each distinct one.
+            for &num in accum.explicit.keys() {
+                if reported.contains(&num) {
+                    continue;
+                }
+                self.diagnostics.push(Diagnostic::new(
+                    &APPLIED_TWICE_METADATA,
+                    Severity::Warn,
+                    format!(
+                        "Patch{num} is applied both explicitly and via \
+                         `%autopatch`/`%autosetup` — pick one",
+                    ),
+                    prep_span,
+                ));
+            }
+        }
+    }
+}
+
+/// One thing observed on a single `%prep` line. Lines may emit zero,
+/// one, or several events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PatchEvent {
+    /// `%autopatch` / `%autosetup` — applies every declared patch.
+    Autopatch,
+    /// `%patch -P N` or `%patchN` — explicit application of a single
+    /// numbered patch.
+    Explicit(u32),
+    /// `%patch -P %{macro}` — macro-valued patch number; the caller
+    /// must treat the line as touching some unknown patch.
+    UnresolvableMacro,
+}
+
+/// Folded view of all `PatchEvent`s seen in `%prep`. Decoupled from
+/// the visit logic so the event yielder ([`patch_events`]) and the
+/// per-line accumulation can be tested independently of diagnostic
+/// emission.
+#[derive(Debug, Default)]
+struct PatchAccumulator {
+    explicit: std::collections::HashMap<u32, usize>,
+    autopatch_present: bool,
+    macro_unresolvable: bool,
+}
+
+impl PatchAccumulator {
+    fn absorb(&mut self, event: PatchEvent) {
+        match event {
+            PatchEvent::Autopatch => self.autopatch_present = true,
+            PatchEvent::Explicit(n) => *self.explicit.entry(n).or_insert(0) += 1,
+            PatchEvent::UnresolvableMacro => self.macro_unresolvable = true,
+        }
+    }
+}
+
+impl Lint for PatchAppliedMoreThanOnce {
+    fn metadata(&self) -> &'static LintMetadata {
+        &APPLIED_TWICE_METADATA
+    }
+    fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+        std::mem::take(&mut self.diagnostics)
+    }
+}
+
+fn find_prep_body_and_span(spec: &SpecFile<Span>) -> Option<(&ShellBody, Span)> {
+    for item in &spec.items {
+        if let SpecItem::Section(boxed) = item
+            && let Section::BuildScript { kind, body, data } = boxed.as_ref()
+            && *kind == rpm_spec::ast::BuildScriptKind::Prep
+        {
+            return Some((body, *data));
+        }
+    }
+    None
+}
+
+/// Yield every patch-related event observed on one `%prep` line.
+/// Decoupled from accumulation so RPM306's "applied twice" logic and
+/// any future caller can plug in their own folding strategy.
+///
+/// Returns an owned `Vec` instead of an iterator to keep the borrow
+/// of `line` from leaking into the caller's accumulator type.
+fn patch_events(line: &Text) -> Vec<PatchEvent> {
+    let mut out = Vec::new();
+    for (i, seg) in line.segments.iter().enumerate() {
+        let TextSegment::Macro(m) = seg else { continue };
+        let name = m.name.as_str();
+        if name == MACRO_AUTOPATCH || name == MACRO_AUTOSETUP {
+            out.push(PatchEvent::Autopatch);
+            continue;
+        }
+        let Some(rest) = name.strip_prefix(MACRO_PATCH_PREFIX) else {
+            continue;
+        };
+        if rest.is_empty() {
+            // `%patch ...` — inspect `-P N` arguments.
+            let trailing = &line.segments[i + 1..];
+            match parse_dash_p(trailing) {
+                DashP::Number(n) => out.push(PatchEvent::Explicit(n)),
+                // Bare `%patch` ≡ `%patch -P 0`.
+                DashP::Missing => out.push(PatchEvent::Explicit(0)),
+                DashP::Macro => out.push(PatchEvent::UnresolvableMacro),
+            }
+        } else if let Ok(n) = rest.parse::<u32>() {
+            // `%patchN` legacy form.
+            out.push(PatchEvent::Explicit(n));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +395,13 @@ mod tests {
     fn run(src: &str) -> Vec<Diagnostic> {
         let outcome = parse(src);
         let mut lint = PatchDefinedNotApplied::new();
+        lint.visit_spec(&outcome.spec);
+        lint.take_diagnostics()
+    }
+
+    fn run306(src: &str) -> Vec<Diagnostic> {
+        let outcome = parse(src);
+        let mut lint = PatchAppliedMoreThanOnce::new();
         lint.visit_spec(&outcome.spec);
         lint.take_diagnostics()
     }
@@ -310,5 +497,66 @@ mod tests {
         // pairs with the unnumbered `Patch:` declaration.
         let src = "Name: x\nPatch: foo.patch\n%prep\n%setup -q\n%patch\n";
         assert!(run(src).is_empty());
+    }
+
+    // ---------------- RPM306 ----------------
+
+    #[test]
+    fn rpm306_flags_double_explicit_application() {
+        let src = "Name: x\nPatch1: a.patch\n\
+%prep\n%setup -q\n%patch -P 1\n%patch -P 1\n";
+        let diags = run306(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].lint_id, "RPM306");
+        assert!(diags[0].message.contains("Patch1"));
+        assert!(diags[0].message.contains("2 times"));
+    }
+
+    #[test]
+    fn rpm306_flags_legacy_plus_dash_p_for_same_number() {
+        let src = "Name: x\nPatch1: a.patch\n\
+%prep\n%setup -q\n%patch1\n%patch -P 1\n";
+        let diags = run306(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn rpm306_flags_autopatch_plus_explicit() {
+        // `%autopatch` already applies Patch1; the explicit line is a
+        // double-apply.
+        let src = "Name: x\nPatch1: a.patch\n\
+%prep\n%setup -q\n%autopatch\n%patch -P 1\n";
+        let diags = run306(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("autopatch"));
+    }
+
+    #[test]
+    fn rpm306_silent_when_each_patch_applied_once() {
+        let src = "Name: x\nPatch1: a.patch\nPatch2: b.patch\n\
+%prep\n%setup -q\n%patch -P 1\n%patch -P 2\n";
+        assert!(run306(src).is_empty());
+    }
+
+    #[test]
+    fn rpm306_silent_when_no_prep_section() {
+        let src = "Name: x\nPatch1: a.patch\n";
+        assert!(run306(src).is_empty());
+    }
+
+    #[test]
+    fn rpm306_silent_when_only_autopatch() {
+        let src = "Name: x\nPatch1: a.patch\nPatch2: b.patch\n\
+%prep\n%autopatch\n";
+        assert!(run306(src).is_empty());
+    }
+
+    #[test]
+    fn rpm306_silent_when_dash_p_is_macro() {
+        // Macro-valued `-P` means we can't resolve which patch
+        // number — skip the duplicate check rather than guess.
+        let src = "Name: x\nPatch1: a.patch\n\
+%prep\n%setup -q\n%patch -P %{patchnum}\n%patch -P 1\n";
+        assert!(run306(src).is_empty());
     }
 }

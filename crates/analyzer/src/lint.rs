@@ -58,6 +58,15 @@ pub trait Lint: for<'ast> Visit<'ast> + Send {
         let _ = profile;
     }
 
+    /// Called once with the on-disk path of the source being linted,
+    /// or `None` when the source is stdin / an in-memory string. Rules
+    /// that need to inspect the *file name* (e.g. RPM312
+    /// `spec-filename-mismatch`) store it here; AST-only rules ignore
+    /// it. Default is a no-op so existing rules don't need to opt in.
+    fn set_source_path(&mut self, path: Option<&std::path::Path>) {
+        let _ = path;
+    }
+
     /// Called once by [`crate::session::LintSession::from_config_with_profile`]
     /// **before** [`Self::set_config`] / [`Self::set_profile`] — gating
     /// happens first so we don't pay the (often non-trivial)

@@ -20,7 +20,7 @@ pub use diagnostic::{Applicability, Diagnostic, Edit, Label, LintCategory, Sever
 pub use lint::{Lint, LintMetadata};
 pub use session::{
     LintSession, ParseOutcome, ParserDiagnostic, ParserSeverity, analyze, analyze_with_profile,
-    parse,
+    analyze_with_profile_at, parse,
 };
 pub use visit::Visit;
 

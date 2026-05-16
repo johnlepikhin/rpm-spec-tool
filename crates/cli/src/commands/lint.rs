@@ -11,7 +11,7 @@ use anyhow::Result;
 use clap::{Args, ValueEnum};
 use rpm_spec_analyzer::config::Config;
 use rpm_spec_analyzer::profile::Profile;
-use rpm_spec_analyzer::{Diagnostic, Severity, analyze_with_profile};
+use rpm_spec_analyzer::{Diagnostic, Severity, analyze_with_profile_at};
 
 use crate::app::ColorChoice;
 use crate::config as cli_config;
@@ -197,8 +197,13 @@ impl Cmd {
                 }
             };
 
+            let source_path = if source.is_stdin {
+                None
+            } else {
+                Some(source.path.as_path())
+            };
             let (_outcome, diags) =
-                analyze_with_profile(&source.contents, config, (*profile).clone());
+                analyze_with_profile_at(&source.contents, source_path, config, (*profile).clone());
             any_deny |= diags.iter().any(|d| d.severity == Severity::Deny);
             all_diagnostics.push((source, diags));
         }

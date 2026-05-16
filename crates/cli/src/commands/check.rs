@@ -9,7 +9,7 @@ use anyhow::Result;
 use clap::Args;
 use rpm_spec::printer::print_with;
 use rpm_spec_analyzer::profile::Profile;
-use rpm_spec_analyzer::{Severity, analyze_with_profile};
+use rpm_spec_analyzer::{Severity, analyze_with_profile_at};
 
 use crate::app::ColorChoice;
 use crate::config as cli_config;
@@ -83,8 +83,17 @@ impl Cmd {
                 }
             };
 
-            let (outcome, diags) =
-                analyze_with_profile(&source.contents, &analyzer_cfg, (*profile).clone());
+            let source_path = if source.is_stdin {
+                None
+            } else {
+                Some(source.path.as_path())
+            };
+            let (outcome, diags) = analyze_with_profile_at(
+                &source.contents,
+                source_path,
+                &analyzer_cfg,
+                (*profile).clone(),
+            );
 
             if diags.iter().any(|d| d.severity == Severity::Deny) {
                 any_failure = true;

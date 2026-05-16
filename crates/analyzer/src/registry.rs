@@ -144,5 +144,17 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::legacy_license_syntax::LegacyLicenseSyntax::new()),
         Box::new(rules::group_tag_required_on_suse::GroupTagRequiredOnSuse::new()),
         Box::new(rules::bcond_on_non_fedora::BcondOnNonFedora::new()),
+        // Phase 17 — metadata / cross-tag consistency.
+        Box::new(rules::duplicate_singleton_tag::DuplicateSingletonTag::new()),
+        Box::new(rules::subpackage_name_collision::SubpackageNameCollision::new()),
+        Box::new(rules::nvre_format::InvalidNvreFormat::new()),
+        Box::new(rules::source_version_consistency::SourceVersionMismatch::new()),
+        Box::new(rules::source_patch_list::SourcePatchListMixing::new()),
+        Box::new(rules::patch_tracking::PatchAppliedMoreThanOnce::new()),
+        Box::new(rules::autoreqprov_comment::AutoreqprovWithoutComment::new()),
+        Box::new(rules::buildarch_reparse::BuildarchReparseHazard::new()),
+        Box::new(rules::arch_policy::ArchPolicyContradiction::new()),
+        Box::new(rules::changelog_health::ChangelogOrderWeekdayEvr::new()),
+        Box::new(rules::spec_filename::SpecFilenameMismatch::new()),
     ]
 }

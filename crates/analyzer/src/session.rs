@@ -102,13 +102,39 @@ pub fn analyze(source: &str, config: &Config) -> (ParseOutcome, Vec<Diagnostic>)
 /// Like [`analyze`] but runs lints against an explicit, pre-resolved
 /// [`Profile`]. CLI front-ends use this so profile-aware lints see the
 /// user's `[profiles.*]` configuration and `--profile <name>` overrides.
+///
+/// Thin convenience wrapper around [`analyze_with_profile_at`] with
+/// `source_path = None`. New call sites should prefer the `_at`
+/// variant directly — passing the real path enables filename-aware
+/// rules (currently RPM312 `spec-filename-mismatch`, future rules may
+/// add more). This shim is retained for API compatibility and for
+/// pure in-memory consumers (tests, library users that do not have a
+/// filesystem path).
 pub fn analyze_with_profile(
     source: &str,
     config: &Config,
     profile: Profile,
 ) -> (ParseOutcome, Vec<Diagnostic>) {
+    analyze_with_profile_at(source, None, config, profile)
+}
+
+/// Canonical analyzer entry point: parse `source`, run all active
+/// rules against the resolved `profile`, return the parse outcome
+/// (parser diagnostics) plus the lint diagnostics.
+///
+/// `source_path` is the spec's on-disk path when one exists (so
+/// filename-aware rules like RPM312 can compare it against `Name:`).
+/// Pass `None` for stdin or in-memory sources; affected rules stay
+/// silent rather than guess.
+pub fn analyze_with_profile_at(
+    source: &str,
+    source_path: Option<&std::path::Path>,
+    config: &Config,
+    profile: Profile,
+) -> (ParseOutcome, Vec<Diagnostic>) {
     let outcome = parse(source);
     let mut session = LintSession::from_config_with_profile(config, profile);
+    session.set_source_path(source_path);
     let mut diags = session.run(&outcome.spec, source);
     diags.extend(bridge_parser_diagnostics(
         &outcome.parser_diagnostics,
@@ -347,6 +373,16 @@ impl LintSession {
         // `profile` is dropped here; rules have already copied whatever
         // fields they need into their own state via `Lint::set_profile`.
         Self { lints: active }
+    }
+
+    /// Forward an optional source-file path to every active rule. Must
+    /// be called *before* [`Self::run`] if any rule reads the path via
+    /// [`Lint::set_source_path`]. Calling this with `None` is fine and
+    /// is the default if you skip it.
+    pub fn set_source_path(&mut self, path: Option<&std::path::Path>) {
+        for ActiveLint { lint, .. } in &mut self.lints {
+            lint.set_source_path(path);
+        }
     }
 
     /// Run every active rule over `spec`. Each rule is invoked in its own

@@ -92,4 +92,15 @@ pub mod bcond_on_non_fedora;
 pub mod group_tag_required_on_suse;
 pub mod legacy_license_syntax;
 
+// Phase 17 — metadata / cross-tag consistency.
+pub mod arch_policy;
+pub mod autoreqprov_comment;
+pub mod buildarch_reparse;
+pub mod duplicate_singleton_tag;
+pub mod nvre_format;
+pub mod source_patch_list;
+pub mod source_version_consistency;
+pub mod spec_filename;
+pub mod subpackage_name_collision;
+
 mod util;
