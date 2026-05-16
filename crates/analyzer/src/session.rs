@@ -243,12 +243,13 @@ impl LintSession {
     /// severity is `Allow` are dropped at construction so they never run.
     pub fn from_config(config: &Config) -> Self {
         let mut active: Vec<ActiveLint> = Vec::new();
-        for lint in registry::builtin_lints() {
+        for mut lint in registry::builtin_lints() {
             let meta = lint.metadata();
             let sev = config.severity_for(meta.name, meta.default_severity);
             if sev.is_silenced() {
                 continue;
             }
+            lint.set_config(config);
             active.push(ActiveLint { lint, severity: sev });
         }
         Self { lints: active }

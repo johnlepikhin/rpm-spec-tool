@@ -18,6 +18,40 @@ pub struct Config {
     pub lints: BTreeMap<String, Severity>,
     #[serde(default)]
     pub format: FormatConfig,
+    #[serde(default)]
+    pub shellcheck: ShellcheckConfig,
+}
+
+/// Configuration for the `shellcheck` umbrella lint (RPM200).
+///
+/// Severity is controlled through `[lints]` like every other rule
+/// (`shellcheck = "warn"`); this struct only carries options that have
+/// no natural representation as a severity (binary path, per-SC-code
+/// disable list).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+#[non_exhaustive]
+pub struct ShellcheckConfig {
+    /// Override path to the shellcheck binary. When `None`, the rule
+    /// looks up `shellcheck` in `$PATH`.
+    pub binary: Option<String>,
+    /// SC codes to suppress *in addition to* the built-in RPM-context
+    /// baseline. Accepts the canonical `SC<n>` form (case-insensitive)
+    /// or a bare number such as `"2086"`.
+    pub disable: Vec<String>,
+    /// SC codes to re-enable from the built-in baseline. Same accepted
+    /// forms as `disable`. Useful for users who explicitly want
+    /// `SC2164` (`pushd … || exit`) etc.
+    pub enable: Vec<String>,
+    /// Shell dialect passed to `shellcheck --shell=<dialect>`. Defaults
+    /// to `bash`, which matches `/bin/sh` on every major RPM-based
+    /// distribution. Set to `sh` for strict POSIX checking. Accepted
+    /// values: `sh`, `bash`, `dash`, `ksh`.
+    pub shell: Option<String>,
+    /// Per-section timeout, in seconds, for the shellcheck subprocess.
+    /// On timeout the process is killed and a single `RPM201` is
+    /// emitted; subsequent sections are skipped. Defaults to 30s.
+    pub timeout_secs: Option<u64>,
 }
 
 /// Subset that affects the pretty-printer. Mapped onto
@@ -151,5 +185,17 @@ preamble-align-column = 20
         let mut cfg = Config::default();
         cfg.apply_cli_overrides::<&str>(&["bar"], &["bar"], &[]);
         assert_eq!(cfg.severity_for("bar", Severity::Deny), Severity::Warn);
+    }
+
+    #[test]
+    fn shellcheck_config_round_trip() {
+        let toml_str = r#"
+[shellcheck]
+binary = "/opt/sc"
+disable = ["SC2086", "2155"]
+"#;
+        let cfg = Config::from_toml_str(toml_str).unwrap();
+        assert_eq!(cfg.shellcheck.binary.as_deref(), Some("/opt/sc"));
+        assert_eq!(cfg.shellcheck.disable, vec!["SC2086", "2155"]);
     }
 }

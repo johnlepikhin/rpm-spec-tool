@@ -1,5 +1,6 @@
 //! Lint trait and metadata.
 
+use crate::config::Config;
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
 use crate::visit::Visit;
 
@@ -35,5 +36,13 @@ pub trait Lint: for<'ast> Visit<'ast> + Send {
     /// rules don't need to opt in.
     fn set_source(&mut self, source: &str) {
         let _ = source;
+    }
+
+    /// Called once by [`crate::session::LintSession::from_config`] after
+    /// the rule is constructed and before any visit pass. Rules that
+    /// read out-of-band configuration (e.g. external-tool paths, code
+    /// disable lists) copy the relevant fields here. Default is a no-op.
+    fn set_config(&mut self, config: &Config) {
+        let _ = config;
     }
 }

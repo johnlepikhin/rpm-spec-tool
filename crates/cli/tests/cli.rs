@@ -1097,3 +1097,22 @@ fn multiple_changelog_sections_exits_one() {
     assert_eq!(code, 1, "duplicate %changelog is deny");
     assert!(stderr.contains("multiple-changelog-sections"));
 }
+
+#[test]
+fn shellcheck_fixture_emits_rpm200_or_rpm201() {
+    // Verifies the shellcheck umbrella (RPM200) end-to-end via the
+    // bundled fixture. We do not assume shellcheck is installed on
+    // every CI host — either the rule produces RPM200 findings (when
+    // the binary is present) or a single RPM201 unavailable diag (when
+    // it is not). Both outcomes prove the pipeline is wired up.
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/bad_shellcheck.spec"
+    );
+    let (code, _, stderr) = run(&["lint", fixture], None);
+    assert_eq!(code, 0, "shellcheck is default-warn, must not fail run");
+    assert!(
+        stderr.contains("shellcheck") || stderr.contains("RPM200") || stderr.contains("RPM201"),
+        "expected shellcheck-related diagnostics; got: {stderr}"
+    );
+}

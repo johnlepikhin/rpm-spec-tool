@@ -132,5 +132,7 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         // Phase 12 — source URL + description style.
         Box::new(rules::source_style::SourceWithoutUrl::new()),
         Box::new(rules::source_style::DescriptionLeadsWithThisPackage::new()),
+        // Phase 13 — shellcheck integration.
+        Box::new(rules::shellcheck::ShellcheckLint::new()),
     ]
 }

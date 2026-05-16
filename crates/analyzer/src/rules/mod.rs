@@ -79,4 +79,7 @@ pub mod subpackage_hygiene;
 // Phase 12 — source URL + description style.
 pub mod source_style;
 
+// Phase 13 — shellcheck integration.
+pub mod shellcheck;
+
 mod util;
