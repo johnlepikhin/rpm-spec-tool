@@ -9,10 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `completions <SHELL>` subcommand — emits a `clap_complete`-generated
-  completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish`
-  to stdout.
-
 ### Changed
 
 ### Fixed
@@ -52,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   downstream tooling.
 - Added the `check` subcommand for one-shot CI gating that combines lint and
   format-check and exits non-zero on any issue.
+- `completions <SHELL>` subcommand — emits a `clap_complete`-generated
+  completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish`
+  to stdout.
 - Added a GitHub Actions CI workflow and a release workflow that publishes
   `.tar.gz`, `.deb`, and `.rpm` artifacts (plus `SHA256SUMS`) for Linux
   `x86_64` and `aarch64` on each `vX.Y.Z` tag.

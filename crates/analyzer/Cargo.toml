@@ -21,5 +21,9 @@ serde_json.workspace = true
 thiserror.workspace  = true
 toml.workspace       = true
 tracing.workspace    = true
-time                 = { version = "0.3", default-features = false, features = ["std"] }
+time.workspace       = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
