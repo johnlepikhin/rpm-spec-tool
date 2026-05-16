@@ -179,5 +179,12 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::install_make::MakeinstallWithoutUnderscore::new()),
         Box::new(rules::install_make::MakeInstallMissingDestdir::new()),
         Box::new(rules::install_chown::InstallChownOrOwner::new()),
+        // Phase 20 — PolicyRegistry-driven rules.
+        Box::new(rules::release_disttag::ReleaseDisttagPolicy::new()),
+        Box::new(rules::systemd_units::SystemdUnitWithoutHelperMacros::new()),
+        Box::new(rules::systemd_units::SystemdUnitUnderEtcOrConfig::new()),
+        Box::new(rules::ldconfig_style::LdconfigScriptletStyle::new()),
+        Box::new(rules::tmpfiles_create::TmpfilesWithoutCreate::new()),
+        Box::new(rules::users_groups::UnsafeUseraddGroupadd::new()),
     ]
 }

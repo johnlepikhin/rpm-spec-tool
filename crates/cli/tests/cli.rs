@@ -106,6 +106,45 @@ fn lint_deny_override_exits_one() {
 }
 
 #[test]
+fn lint_deny_warnings_meta_fails_on_any_warning() {
+    let spec = write_temp(MISSING_CHANGELOG_SPEC);
+    let (code, _, stderr) = run(
+        &["lint", "--deny", "warnings", spec.path().to_str().unwrap()],
+        None,
+    );
+    assert_eq!(code, 1, "`-D warnings` must promote warns to exit 1");
+    // The warning still appears in output (now as deny-level), per
+    // clippy semantics: `-D warnings` *fails*, it doesn't silence.
+    assert!(stderr.contains("missing-changelog"));
+}
+
+#[test]
+fn lint_deny_warnings_respects_per_lint_allow() {
+    // `--allow X --deny warnings` keeps X silent even though every
+    // other Warn promotes to Deny. We can't assert exit code 0 here
+    // because the fixture trips on plenty of *other* warnings that
+    // RPM rightly flags — we assert the targeted lint stays out of
+    // the output, while the overall run still fails.
+    let spec = write_temp(MISSING_CHANGELOG_SPEC);
+    let (code, _, stderr) = run(
+        &[
+            "lint",
+            "--allow",
+            "missing-changelog",
+            "--deny",
+            "warnings",
+            spec.path().to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(code, 1, "other warnings still promote to deny");
+    assert!(
+        !stderr.contains("missing-changelog"),
+        "missing-changelog must be silenced by --allow"
+    );
+}
+
+#[test]
 fn lint_allow_override_silences_diagnostic() {
     let spec = write_temp(MISSING_CHANGELOG_SPEC);
     let (code, _, stderr) = run(

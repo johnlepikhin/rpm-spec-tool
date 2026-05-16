@@ -121,4 +121,11 @@ pub mod install_make;
 pub mod scriptlet_commands;
 pub mod scriptlet_health;
 
+// Phase 20 — PolicyRegistry-driven systemd/tmpfiles/users rules.
+pub mod ldconfig_style;
+pub mod release_disttag;
+pub mod systemd_units;
+pub mod tmpfiles_create;
+pub mod users_groups;
+
 mod util;

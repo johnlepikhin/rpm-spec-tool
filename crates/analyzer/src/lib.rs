@@ -12,6 +12,7 @@ pub mod config;
 pub mod diagnostic;
 pub(crate) mod files;
 pub mod lint;
+pub(crate) mod policy;
 pub mod registry;
 pub mod rules;
 pub mod session;

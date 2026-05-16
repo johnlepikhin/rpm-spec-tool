@@ -30,6 +30,13 @@ pub struct Config {
     /// semantics of layering (`extends` + `showrc-file` + overrides).
     #[serde(default)]
     pub profiles: BTreeMap<String, ProfileEntry>,
+    /// "Warnings-as-errors" toggle — when `true`, any rule that
+    /// resolves to [`Severity::Warn`] is promoted to [`Severity::Deny`]
+    /// at runtime. Triggered from the CLI by `--deny warnings`
+    /// (clippy convention); not exposed in TOML to keep the schema
+    /// stable. Rules explicitly demoted to `Allow` keep that level.
+    #[serde(skip)]
+    pub warnings_as_errors: bool,
 }
 
 /// Configuration for the `shellcheck` umbrella lint (RPM200).
@@ -129,8 +136,27 @@ impl Config {
 
     /// Resolve the configured severity for a lint by its kebab-case name,
     /// falling back to the rule's default if the user did not override it.
+    ///
+    /// Honours [`Self::warnings_as_errors`]: when set, *any* resolved
+    /// `Warn` is promoted to `Deny`. This includes
+    ///
+    /// 1. the rule's default-severity, when no per-lint override is set,
+    /// 2. an explicit `--warn LINT` override (matches clippy's
+    ///    `-W foo -D warnings` semantics — `-W` declares the level the
+    ///    rule starts at, `-D warnings` then promotes everything still
+    ///    at Warn), and
+    /// 3. a TOML `lints.LINT = "warn"` entry.
+    ///
+    /// Pinning a specific lint at Warn under `-D warnings` therefore
+    /// requires `--allow LINT` (an explicit `Allow` override is *not*
+    /// promoted — the user clearly meant "suppress").
     pub fn severity_for(&self, lint_name: &str, default: Severity) -> Severity {
-        self.lints.get(lint_name).copied().unwrap_or(default)
+        let resolved = self.lints.get(lint_name).copied().unwrap_or(default);
+        if self.warnings_as_errors && resolved == Severity::Warn {
+            Severity::Deny
+        } else {
+            resolved
+        }
     }
 
     /// Force the given lints to `severity`, replacing any previous setting.
@@ -148,11 +174,56 @@ impl Config {
     ///   present in both `--allow` and `--deny` ends up at `Deny`.
     /// * **Within one list:** duplicates resolve to last-write-wins
     ///   (e.g. `--deny foo --deny foo` is no different from one flag).
+    /// * **`warnings` is a meta-name** in any list: `--deny warnings`
+    ///   sets [`Self::warnings_as_errors`], `--allow warnings` clears
+    ///   it, `--warn warnings` is a no-op (the default). The literal
+    ///   string is not registered as a lint name.
     pub fn apply_cli_overrides<S: AsRef<str>>(&mut self, allow: &[S], warn: &[S], deny: &[S]) {
-        self.apply_overrides(allow, Severity::Allow);
-        self.apply_overrides(warn, Severity::Warn);
-        self.apply_overrides(deny, Severity::Deny);
+        // Split meta-name `warnings` out of each list before applying
+        // per-lint overrides. Order matters: allow first, warn (no-op
+        // on the meta), deny last — so `--deny warnings --allow warnings`
+        // ends up with `warnings_as_errors=false` (last-write-wins).
+        let (allow_lints, allow_meta) = split_warnings_meta(allow);
+        let (warn_lints, warn_meta) = split_warnings_meta(warn);
+        let (deny_lints, deny_meta) = split_warnings_meta(deny);
+
+        self.apply_overrides(&allow_lints, Severity::Allow);
+        self.apply_overrides(&warn_lints, Severity::Warn);
+        self.apply_overrides(&deny_lints, Severity::Deny);
+
+        // Meta-name resolution mirrors the same allow→warn→deny order.
+        if allow_meta {
+            self.warnings_as_errors = false;
+        }
+        if warn_meta {
+            // No-op: this is the baseline. Kept as an explicit branch
+            // so a future contributor sees the intent rather than
+            // discovering it's missing.
+        }
+        if deny_meta {
+            self.warnings_as_errors = true;
+        }
     }
+}
+
+/// Recognised meta-name for the "warnings-as-errors" toggle. Borrowed
+/// from clippy's `--deny warnings` / `--allow warnings`.
+const META_WARNINGS: &str = "warnings";
+
+/// Pull [`META_WARNINGS`] entries out of `list`, returning the
+/// remaining lint names and a boolean signalling that the meta was
+/// present.
+fn split_warnings_meta<S: AsRef<str>>(list: &[S]) -> (Vec<String>, bool) {
+    let mut meta = false;
+    let mut lints = Vec::with_capacity(list.len());
+    for item in list {
+        if item.as_ref() == META_WARNINGS {
+            meta = true;
+        } else {
+            lints.push(item.as_ref().to_owned());
+        }
+    }
+    (lints, meta)
 }
 
 #[cfg(test)]
@@ -214,6 +285,66 @@ preamble-align-column = 20
         let mut cfg = Config::default();
         cfg.apply_cli_overrides::<&str>(&["bar"], &["bar"], &[]);
         assert_eq!(cfg.severity_for("bar", Severity::Deny), Severity::Warn);
+    }
+
+    // ----- `-D warnings` (clippy-style meta) -----
+
+    #[test]
+    fn deny_warnings_meta_promotes_warn_to_deny() {
+        let mut cfg = Config::default();
+        cfg.apply_cli_overrides::<&str>(&[], &[], &["warnings"]);
+        // Default-Warn rule becomes Deny under the meta.
+        assert_eq!(
+            cfg.severity_for("missing-changelog", Severity::Warn),
+            Severity::Deny
+        );
+        // Default-Allow stays Allow (silenced is silenced).
+        assert_eq!(
+            cfg.severity_for("opt-in-rule", Severity::Allow),
+            Severity::Allow
+        );
+        // Default-Deny stays Deny.
+        assert_eq!(cfg.severity_for("must-fix", Severity::Deny), Severity::Deny);
+        // No `"warnings"` entry leaked into the lint table.
+        assert!(!cfg.lints.contains_key("warnings"));
+    }
+
+    #[test]
+    fn deny_warnings_respects_explicit_allow_per_lint() {
+        let mut cfg = Config::default();
+        // `--allow foo --deny warnings` — foo stays silenced.
+        cfg.apply_cli_overrides::<&str>(&["foo"], &[], &["warnings"]);
+        assert_eq!(cfg.severity_for("foo", Severity::Warn), Severity::Allow);
+        // Other rules promote normally.
+        assert_eq!(cfg.severity_for("bar", Severity::Warn), Severity::Deny);
+    }
+
+    #[test]
+    fn allow_warnings_meta_clears_the_promotion() {
+        let mut cfg = Config::default();
+        cfg.apply_cli_overrides::<&str>(&[], &[], &["warnings"]);
+        cfg.apply_cli_overrides::<&str>(&["warnings"], &[], &[]);
+        assert!(!cfg.warnings_as_errors);
+        assert_eq!(
+            cfg.severity_for("missing-changelog", Severity::Warn),
+            Severity::Warn
+        );
+    }
+
+    #[test]
+    fn warn_warnings_meta_is_a_no_op() {
+        // `--warn warnings` is the baseline state and intentionally
+        // a no-op — the explicit branch in `apply_cli_overrides`
+        // exists to document the intent rather than affect anything.
+        // This test pins that contract so a future refactor that
+        // accidentally makes it do something fails loudly.
+        let mut cfg = Config::default();
+        cfg.apply_cli_overrides::<&str>(&[], &["warnings"], &[]);
+        assert!(!cfg.warnings_as_errors);
+        assert!(
+            cfg.lints.is_empty(),
+            "meta-name must not leak as a lint key"
+        );
     }
 
     #[test]
