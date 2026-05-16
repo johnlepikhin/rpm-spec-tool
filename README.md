@@ -165,13 +165,8 @@ Subcommand options that override the config:
 The catalogue of available lints (rule IDs, severities, autofixes, examples)
 will live in a dedicated reference document — _coming soon: `doc/lints.md`_.
 
-Related design notes already in the repo:
-
-- [`doc/profiles.md`](doc/profiles.md) — distribution profile model
-- [`doc/profile-aware-lints.md`](doc/profile-aware-lints.md) — how
-  family-gated rules dispatch on the resolved profile
-- [`doc/extended-lints-roadmap.md`](doc/extended-lints-roadmap.md) — what's on
-  the way
+The distribution-profile model is documented in
+[`doc/profiles.md`](doc/profiles.md).
 
 ## Installation
 

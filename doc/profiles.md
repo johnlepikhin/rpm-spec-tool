@@ -1,15 +1,15 @@
-# Профили дистрибутивов
+# Distribution profiles
 
-Профиль — это описание целевого окружения сборки: identity дистрибутива
-(family / vendor / dist-tag), макросы, rpmlib-фичи, whitelists лицензий
-и групп. Лента ничего не «угадывает» о системе — она читает то, что
-профиль ей сообщил.
+A *profile* describes the target build environment: distribution identity
+(family / vendor / dist-tag), macros, rpmlib features, and license / group
+whitelists. The analyzer does not guess anything about the host — it
+reads only what the profile tells it.
 
-Профили задаются в `.rpmspec.toml`. Дополнительно можно подложить дамп
-команды `rpm --showrc`, выполненной на целевой машине: парсер
-анализатора извлечёт оттуда identity и все макросы автоматически.
+Profiles are configured in `.rpmspec.toml`. Optionally, you can drop in a
+dump of `rpm --showrc` taken on the target machine: the analyzer's parser
+extracts identity and all macros from it automatically.
 
-## Минимальный конфиг
+## Minimal config
 
 ```toml
 profile = "rhel-9"
@@ -18,202 +18,200 @@ profile = "rhel-9"
 showrc-file = "vendor/rpm-showrc-rhel9.txt"
 ```
 
-Дамп `vendor/rpm-showrc-rhel9.txt` генерируется на целевой машине:
+Generate the `vendor/rpm-showrc-rhel9.txt` dump on the target machine:
 
 ```bash
 rpm --showrc > vendor/rpm-showrc-rhel9.txt
 ```
 
-Этого достаточно: identity (`family=RHEL`, `vendor=redhat`,
-`dist-tag=.el9`) и все 700+ макросов извлекаются из дампа
-автоматически.
+That is enough: identity (`family=RHEL`, `vendor=redhat`, `dist-tag=.el9`)
+and all 700+ macros are extracted from the dump automatically.
 
-## Активный профиль
+## Active profile
 
-Выбор активного профиля идёт в порядке:
+The active profile is resolved in this order:
 
-1. CLI-флаг `--profile <name>` (для подкоманды `lint` / `check`).
-2. Ключ `profile = "<name>"` в `.rpmspec.toml`.
-3. Встроенный профиль `generic` (пустой template).
+1. CLI flag `--profile <name>` (on the `lint` / `check` subcommands).
+2. The `profile = "<name>"` key in `.rpmspec.toml`.
+3. The built-in `generic` profile (empty template).
 
-Имя `<name>` может ссылаться на:
+`<name>` may reference:
 
-- встроенный профиль (см. список ниже в разделе «Встроенные профили
-  дистрибутивов»);
-- ключ из секции `[profiles.<name>]`.
+- a built-in profile (see the "Built-in distribution profiles" section
+  below), or
+- a key from a `[profiles.<name>]` section.
 
-Несколько `[profiles.*]` могут сосуществовать в одном конфиге — это
-удобно, если репозиторий собирает один и тот же spec под несколько
-целевых дистрибутивов. Активен всегда **ровно один** профиль за прогон;
-никакого автоматического слияния разных профилей нет.
+Several `[profiles.*]` sections may coexist in one config — useful when a
+repository builds the same spec for multiple target distributions.
+Exactly **one** profile is active per run; there is no automatic merging
+between different profiles.
 
-## Слои профиля
+## Profile layers
 
-При резолве активного профиля анализатор накладывает слои в порядке от
-низкого приоритета к высокому:
+When resolving the active profile, the analyzer layers data from lowest
+to highest priority:
 
-1. **Builtin baseline** — `data/<extends>.toml` (по умолчанию `generic`).
-2. **Builtin showrc layer** — для дистрибутивных встроенных профилей в
-   бинарь вшит реальный дамп `rpm --showrc` с целевой машины
-   (`data/<name>.showrc`). Применяется сразу за TOML-метаданными.
-3. **Showrc layer** — содержимое файла из `showrc-file`, если задан.
-   Накладывается поверх builtin-showrc; user-дамп выигрывает при
-   коллизиях имён макросов.
-4. **Auto-detect identity** — `vendor`, `dist-tag`, `family` выводятся
-   из showrc-макросов (только для полей, которые пользователь не задал
-   явно). Auto-detect отрабатывает по обоим showrc-слоям.
-5. **Inline overrides** — секции `[profiles.<name>.*]` в конфиге.
+1. **Builtin baseline** — `data/<extends>.toml` (`generic` by default).
+2. **Builtin showrc layer** — for built-in distribution profiles, a real
+   `rpm --showrc` dump from the target machine is embedded in the binary
+   (`data/<name>.showrc`). Applied immediately after the TOML metadata.
+3. **Showrc layer** — the contents of the file referenced by
+   `showrc-file`, if specified. Layered on top of the builtin showrc;
+   the user dump wins on macro-name collisions.
+4. **Auto-detect identity** — `vendor`, `dist-tag`, `family` are derived
+   from showrc macros (only for fields the user did not set explicitly).
+   Auto-detect runs across both showrc layers.
+5. **Inline overrides** — `[profiles.<name>.*]` sections in the config.
 
-Подкоманда `rpm-spec-tool profile show [NAME]` печатает резолвнутый
-профиль и список применившихся слоёв. С `--full` выводится весь
-макрорегистр с пометками источника.
+The `rpm-spec-tool profile show [NAME]` subcommand prints the resolved
+profile and the list of layers applied. With `--full` it dumps the
+entire macro registry with provenance annotations.
 
 ## Auto-detect identity
 
-Из showrc извлекаются:
+The following fields are extracted from showrc:
 
-| Поле в `Profile` | Источник в showrc |
-|---|---|
-| `identity.vendor` | макрос `_vendor` (literal value) |
-| `identity.dist_tag` | макрос `dist` (literal value) |
-| `identity.family` | первый из маркеров: `altlinux`, `mageia`, `suse_version`, `rhel`, `fedora` |
+| `Profile` field   | Source in showrc                                                                |
+| ----------------- | ------------------------------------------------------------------------------- |
+| `identity.vendor` | the `_vendor` macro (literal value)                                             |
+| `identity.dist_tag` | the `dist` macro (literal value)                                              |
+| `identity.family` | first marker found, in order: `altlinux`, `mageia`, `suse_version`, `rhel`, `fedora` |
 
-Приоритет в выборе family фиксированный. Производные дистрибутивы
-(AlmaLinux, Rocky, CentOS Stream) экспонируют сразу несколько маркеров —
-порядок гарантирует, что они оказываются в семействе родителя. Любое
-поле, которое пользователь явно прописал в `[profiles.X.identity]`,
-выигрывает у auto-detect.
+The family resolution order is fixed. Derived distributions (AlmaLinux,
+Rocky, CentOS Stream) expose several markers at once — the order
+guarantees that they end up in their parent family. Any field the user
+sets explicitly in `[profiles.X.identity]` wins over auto-detect.
 
-## Полный конфиг
+## Full config
 
 ```toml
 profile = "rhel-9-prod"
 
 [profiles.rhel-9-prod]
-extends = "generic"                          # базовый builtin; default = "generic"
-showrc-file = "vendor/rpm-showrc-rhel9.txt"  # путь относительно .rpmspec.toml
+extends = "generic"                          # base builtin; default = "generic"
+showrc-file = "vendor/rpm-showrc-rhel9.txt"  # path relative to .rpmspec.toml
 
-# Все секции ниже — опциональны. Прописываются, только если нужно
-# переопределить то, что пришло из showrc / builtin.
+# All sections below are optional. Use them only if you need to
+# override what showrc / the builtin layer already provides.
 
 [profiles.rhel-9-prod.identity]
-name = "RHEL 9 production"                   # человекочитаемый label
+name = "RHEL 9 production"                   # human-readable label
 family = "rhel"                              # fedora | rhel | opensuse | alt | mageia | generic
 vendor = "mycompany"
 dist-tag = ".mc1"
 
 [profiles.rhel-9-prod.macros]
-# Короткая форма: literal value.
+# Short form: literal value.
 _vendor = "mycompany"
-# Расширенная форма (для параметризованных или multiline макросов).
+# Expanded form (for parameterised or multiline macros).
 custom = { value = "...", opts = "(n:)" }
 
 [profiles.rhel-9-prod.licenses]
 mode = "strict"            # off (default) | warn | strict
-replace = false            # false (default) = union с builtin/showrc; true = заменить целиком
+replace = false            # false (default) = union with builtin/showrc; true = replace entirely
 allow = ["GPL-2.0-or-later", "Proprietary"]
 
 [profiles.rhel-9-prod.groups]
 mode = "warn"
 allow = ["System Environment/Daemons"]
 
-# Второй профиль — например, для сборки под ALT.
+# A second profile — for example, an ALT build target.
 [profiles.altp10]
 showrc-file = "vendor/rpm-showrc-altp10.txt"
 ```
 
-## Семантика слияния
+## Merge semantics
 
-- **Macros**: при конфликте имени последний слой выигрывает; в записи
-  обновляется `provenance` (виден в `profile show --full`).
-- **Identity-поля**: explicit override в `[profiles.X.identity]`
-  выигрывает над auto-detect.
-- **Licenses / groups**: при `replace = false` (default) списки объединяются
-  union'ом; при `replace = true` сбрасываются и переинициализируются.
-  Поле `mode` — sticky: оно меняется только тогда, когда какой-то слой
-  его задал явно. Default — `off` (соответствующие ленты молчат).
+- **Macros**: on a name collision the later layer wins; the entry's
+  `provenance` is updated (visible via `profile show --full`).
+- **Identity fields**: an explicit override in `[profiles.X.identity]`
+  wins over auto-detect.
+- **Licenses / groups**: with `replace = false` (default) lists are
+  union-merged; with `replace = true` they are reset and reinitialised.
+  The `mode` field is sticky — it only changes when a layer sets it
+  explicitly. Default is `off` (the corresponding lints stay silent).
 
-## Подкоманды `profile`
+## `profile` subcommands
 
 ### `profile list`
 
-Табличный обзор всех доступных профилей: встроенных и определённых в
-`.rpmspec.toml`. Активный профиль помечен `*` в первой колонке.
+Tabular catalogue of every available profile — built-ins plus those
+defined in `.rpmspec.toml`. The active profile is marked with `*` in
+the first column.
 
 ```bash
-# Полный список (builtin + user).
+# Full list (builtin + user).
 rpm-spec-tool profile list
 
-# Только встроенные.
+# Built-ins only.
 rpm-spec-tool profile list --builtin-only
 
-# Только user-профили из найденного .rpmspec.toml.
+# Only user-defined profiles from the loaded .rpmspec.toml.
 rpm-spec-tool profile list --user-only
 ```
 
-Для встроенных колонки: `NAME · FAMILY · VENDOR · DIST-TAG · MACROS · ARCH`.
-Для user-профилей: `NAME · EXTENDS · DETAILS` (DETAILS суммирует
-`showrc-file` и перечисляет переопределённые секции — `vendor`, `family`,
-`macros`, `licenses`, …).
+Columns for built-ins: `NAME · FAMILY · VENDOR · DIST-TAG · MACROS · ARCH`.
+Columns for user-defined profiles: `NAME · EXTENDS · DETAILS` (DETAILS
+summarises `showrc-file` and lists which sections were overridden —
+`vendor`, `family`, `macros`, `licenses`, …).
 
 ### `profile show`
 
-Подробности по одному профилю — identity, цепочка слоёв, счётчики.
+Details for a single profile — identity, layer chain, counts.
 
 ```bash
-# Показать профиль, выбранный конфигом или CLI.
+# Show the profile selected by config or CLI.
 rpm-spec-tool profile show
 
-# Резолвить конкретный профиль по имени.
+# Resolve a specific profile by name.
 rpm-spec-tool profile show rhel-9-x86_64
 
-# Вывести весь макро-регистр (с provenance каждой записи).
+# Dump the full macro registry (with provenance per entry).
 rpm-spec-tool profile show --full
 ```
 
-Полезно при отладке: с `--full` дампит каждый макрос с пометкой источника
-(`showrc:-13`, `override`, `builtin:generic`).
+Useful when debugging: with `--full` every macro is printed with a source
+annotation (`showrc:-13`, `override`, `builtin:generic`).
 
 ### `profile macros`
 
-Список макрорегистра одного профиля с фильтрацией по имени и/или
-источнику. В отличие от `show --full`, не печатает identity-блок и
-позволяет сузить вывод.
+List of a single profile's macro registry with filtering by name and/or
+source. Unlike `show --full`, it does not print the identity block and
+lets you narrow the output.
 
 ```bash
-# Все макросы активного профиля.
+# All macros in the active profile.
 rpm-spec-tool profile macros
 
-# Все макросы конкретного профиля.
+# All macros in a specific profile.
 rpm-spec-tool profile macros rhel-9-x86_64
 
-# По подстроке имени (case-insensitive).
+# Filter by name substring (case-insensitive).
 rpm-spec-tool profile macros rhel-9-x86_64 --filter optflags
 
-# По источнику: builtin / showrc / override.
+# Filter by source: builtin / showrc / override.
 rpm-spec-tool profile macros rhel-9-x86_64 --source override
 ```
 
-Колонки выравнены, длинные multiline-значения сворачиваются в маркер
-`<multiline N chars>` — для полного тела используй `profile macro`.
+Columns are aligned; long multiline values collapse to a
+`<multiline N chars>` marker — use `profile macro` for the full body.
 
 ### `profile common`
 
-Пересечение макрорегистров двух или более профилей — отвечает на вопрос
-«какие макросы общие». Два режима через `--mode`:
+Intersection of macro registries across two or more profiles — answers
+"which macros are shared?". Two modes via `--mode`:
 
-* **`--mode existence`** (по умолчанию) — макрос считается общим, если
-  определён во всех профилях, независимо от значения. Выводит просто
-  список имён.
-* **`--mode value`** — добавляет требование одинакового значения (`opts`
-  + тело макроса). `Provenance` игнорируется: макрос, унаследованный
-  из showrc в одном профиле и переопределённый в `.rpmspec.toml`
-  в другом, считается одинаковым при совпадении значения. Выводит
-  `name = value`.
+* **`--mode existence`** (default) — a macro is "common" when it is
+  defined in every profile, regardless of value. Output is a simple
+  name list.
+* **`--mode value`** — adds the requirement that values match (`opts` +
+  macro body). `Provenance` is ignored: a macro inherited from showrc in
+  one profile and overridden in `.rpmspec.toml` in another counts as
+  identical if the value matches. Output is `name = value`.
 
 ```bash
-# Без аргументов: пересечение по всем builtin-профилям с непустым
-# регистром (т.е. без generic).
+# No arguments: intersection across every built-in profile with a
+# non-empty registry (i.e. excludes generic).
 $ rpm-spec-tool profile common
 # Common macros across 23 profile(s): 188
 
@@ -221,7 +219,7 @@ $ rpm-spec-tool profile common
   ___build_cmd
   ...
 
-# Конкретный набор профилей по существованию.
+# An explicit set of profiles, existence mode.
 $ rpm-spec-tool profile common rhel-8-x86_64 rhel-9-x86_64 rhel-10-x86_64
 # Common macros across 3 profile(s): 292
 
@@ -229,7 +227,7 @@ $ rpm-spec-tool profile common rhel-8-x86_64 rhel-9-x86_64 rhel-10-x86_64
   ___build_args
   ...
 
-# То же по значению — узкий срез действительно портативных дефолтов.
+# Same set in value mode — the narrow slice of truly portable defaults.
 $ rpm-spec-tool profile common --mode value rhel-8-x86_64 rhel-9-x86_64 rhel-10-x86_64
 # Macros with identical values across 3 profile(s): 242
 
@@ -238,34 +236,36 @@ $ rpm-spec-tool profile common --mode value rhel-8-x86_64 rhel-9-x86_64 rhel-10-
   ___build_shell  = %{?_buildshell:%{_buildshell}}%{!?_buildshell:/bin/sh}
   ...
 
-# С фильтром по имени.
+# With a name filter.
 $ rpm-spec-tool profile common --filter build rhel-8-x86_64 rhel-9-x86_64
 # Common macros across 2 profile(s): 358 total, 45 matching "build"
   ...
 ```
 
-Длинные значения в `--mode value` обрезаются до 80 символов,
-multiline-тела сворачиваются в `<multiline N chars>`. Минимум два
-профиля — одиночный аргумент отклоняется с exit code `2`. Пустое
-пересечение — exit `0` с маркером `(no common macros)`.
+In `--mode value`, long values are truncated to 80 characters and
+multiline bodies collapse to `<multiline N chars>`. At least two
+profiles are required — a single argument is rejected with exit code
+`2`. An empty intersection exits `0` with the `(no common macros)`
+marker.
 
-При активном `--filter` заголовок печатает оба числа:
+When `--filter` is active the header reports both counts:
 `# Common macros across N profile(s): {total} total, {matching} matching "X"`
-— total — размер полного пересечения, matching — после применения фильтра.
+— `total` is the size of the full intersection, `matching` is after
+applying the filter.
 
 ### `profile macro`
 
-Универсальный lookup значения одного макроса. Поведение зависит от
-количества переданных профилей:
+A general-purpose lookup of a single macro's value. Behaviour scales
+with the number of profile arguments:
 
-| Аргументы            | Поведение                                                  | Exit code           |
-| -------------------- | ---------------------------------------------------------- | ------------------- |
-| `<macro>`            | Таблица значения по **всем доступным** профилям            | `0`                 |
-| `<macro> <p>`        | Компактный вывод значения в одном профиле; multiline-тело раскрыто построчно | `0` / `2` если не определён |
-| `<macro> <p1> <p2>…` | Таблица сравнения по перечисленным профилям                | `0`                 |
+| Arguments              | Behaviour                                                                  | Exit code                |
+| ---------------------- | -------------------------------------------------------------------------- | ------------------------ |
+| `<macro>`              | Table of the value across **every available** profile                      | `0`                      |
+| `<macro> <p>`          | Compact value in a single profile; multiline body is expanded line-by-line | `0` / `2` if undefined   |
+| `<macro> <p1> <p2>…`   | Comparison table across the listed profiles                                | `0`                      |
 
 ```bash
-# Сравнить макрос по всем профилям (24 builtin + user-определённые).
+# Compare a macro across every profile (24 builtin + user-defined).
 $ rpm-spec-tool profile macro dist
 # Macro `dist` across 24 profile(s)
 
@@ -275,7 +275,7 @@ $ rpm-spec-tool profile macro dist
   altlinux-10-x86_64      = (undefined)
   ...
 
-# Конкретный профиль — компактно, с раскрытием multiline-тела.
+# A specific profile — compact, with multiline bodies expanded.
 $ rpm-spec-tool profile macro dist rhel-9-x86_64
 dist = %{!?distprefix0:...}.el9...  [showrc:-13]
 
@@ -285,7 +285,7 @@ ___build_pre =  [showrc:-13]
     RPM_BUILD_DIR="%{u2p:%{_builddir}}"
     ...
 
-# Сравнить произвольный набор профилей.
+# An arbitrary set of profiles to compare.
 $ rpm-spec-tool profile macro dist rhel-8-x86_64 rhel-9-x86_64 altlinux-10-x86_64
 # Macro `dist` across 3 profile(s)
 
@@ -294,9 +294,10 @@ $ rpm-spec-tool profile macro dist rhel-8-x86_64 rhel-9-x86_64 altlinux-10-x86_6
   altlinux-10-x86_64 = (undefined)
 ```
 
-В режимах с таблицей длинные значения обрезаются до 80 символов; полное
-тело — через одно-профильный вариант. Exit code `2` возможен **только**
-в одно-профильном режиме (макрос не определён), что удобно для shell:
+In the table modes long values are truncated to 80 characters; the full
+body is available via the single-profile form. Exit code `2` is emitted
+**only** in the single-profile mode (macro undefined), which is
+convenient for shell:
 
 ```bash
 if ! rpm-spec-tool profile macro __python3 sles-15-x86_64 >/dev/null; then
@@ -304,35 +305,34 @@ if ! rpm-spec-tool profile macro __python3 sles-15-x86_64 >/dev/null; then
 fi
 ```
 
-## Встроенные профили дистрибутивов
+## Built-in distribution profiles
 
-В бинарь вшиты предопределённые профили для типовых целевых систем —
-работают без `.rpmspec.toml`:
+A set of predefined profiles for common target systems is embedded in
+the binary and works without a `.rpmspec.toml`:
 
 ```bash
 rpm-spec-tool check --profile rhel-9-x86_64 build.spec
 rpm-spec-tool profile show altlinux-10-e2k
 ```
 
-Каждый дистрибутивный профиль включает дамп `rpm --showrc`, снятый с
-живой машины: настоящий макрорегистр (400–600 макросов), rpmlib-фичи,
-arch / build-os, и identity (`family` / `vendor` / `dist-tag`).
-Identity для распознанных через marker-макросы distro вычисляется
-автоматически; для тех, где marker отсутствует (REDos, ALT Linux,
-Rosa, MOSos), `family` зафиксирована в `data/<name>.toml`.
+Every distribution profile includes an `rpm --showrc` dump taken on a
+live machine: the real macro registry (400–600 macros), rpmlib features,
+arch / build-os, and identity (`family` / `vendor` / `dist-tag`).
+Identity for distributions that expose marker macros is computed
+automatically; for the rest (REDos, ALT Linux, Rosa, MOSos) `family` is
+pinned in `data/<name>.toml`.
 
-| Семейство     | Профили                                                                                                                                |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| RHEL          | `rhel-8-x86_64`, `rhel-8-aarch64`, `rhel-9-x86_64`, `rhel-9-aarch64`, `rhel-10-x86_64`, `rhel-10-aarch64`                              |
-| REDos         | `redos-7.3-x86_64`, `redos-7.3-aarch64`, `redos-8-x86_64`, `redos-8-aarch64`                                                          |
-| ALT Linux     | `altlinux-10-x86_64`, `altlinux-10-aarch64`, `altlinux-10-e2k`, `altlinux-10-e2kv4`, `altlinux-11-x86_64`, `altlinux-11-aarch64`      |
-| ALT Linux SPT | `altlinux-spt-10-x86_64`, `altlinux-spt-10-aarch64`, `altlinux-spt-10-e2k`, `altlinux-spt-10-e2kv4`                                    |
-| openSUSE-like | `sles-15-x86_64`, `mosos-15-x86_64`                                                                                                    |
-| Rosa          | `rosa-2021.1-x86_64`                                                                                                                   |
-| baseline      | `generic` (пустой template, fallback по умолчанию)                                                                                     |
+| Family        | Profiles                                                                                                                                |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| RHEL          | `rhel-8-x86_64`, `rhel-8-aarch64`, `rhel-9-x86_64`, `rhel-9-aarch64`, `rhel-10-x86_64`, `rhel-10-aarch64`                                |
+| REDos         | `redos-7.3-x86_64`, `redos-7.3-aarch64`, `redos-8-x86_64`, `redos-8-aarch64`                                                             |
+| ALT Linux     | `altlinux-10-x86_64`, `altlinux-10-aarch64`, `altlinux-10-e2k`, `altlinux-10-e2kv4`, `altlinux-11-x86_64`, `altlinux-11-aarch64`         |
+| ALT Linux SPT | `altlinux-spt-10-x86_64`, `altlinux-spt-10-aarch64`, `altlinux-spt-10-e2k`, `altlinux-spt-10-e2kv4`                                      |
+| openSUSE-like | `sles-15-x86_64`, `mosos-15-x86_64`                                                                                                     |
+| Rosa          | `rosa-2021.1-x86_64`                                                                                                                    |
+| baseline      | `generic` (empty template, default fallback)                                                                                            |
 
-Любой встроенный профиль можно использовать как базу для собственных
-override'ов:
+Any built-in profile can be used as a base for your own overrides:
 
 ```toml
 profile = "ourbuild"
@@ -347,13 +347,3 @@ dist-tag = ".mc1"
 [profiles.ourbuild.macros]
 _vendor = "mycompany"
 ```
-
-## Связь с ленточными правилами
-
-В данном PR профиль доступен через `Lint::set_profile` (метод трейта
-`Lint` в анализаторе), но существующие правила его пока не читают. Профильно-зависимые правила
-(RPM024 invalid-license, RPM025 non-standard-group, RPM030
-requires-no-version, RPM050 hardcoded-paths) подключаются отдельными
-PR'ами и опираются на `profile.licenses`, `profile.groups` и
-`profile.macros`. При `mode = "off"` (default) такие правила не должны
-эмиттить ни одного диагноса — это часть контракта.
