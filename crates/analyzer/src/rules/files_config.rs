@@ -182,8 +182,8 @@ impl PlainConfigWithoutComment {
 impl<'ast> Visit<'ast> for PlainConfigWithoutComment {
     fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
         let classifier = FilesClassifier::new(&self.profile);
-        for_each_files_section(spec, |_subpkg, content| {
-            for (i, item) in content.iter().enumerate() {
+        for_each_files_section(spec, |sec| {
+            for (i, item) in sec.content.iter().enumerate() {
                 let FilesContent::Entry(entry) = item else {
                     continue;
                 };
@@ -191,7 +191,7 @@ impl<'ast> Visit<'ast> for PlainConfigWithoutComment {
                 if cls.directives.config != Some(ConfigKind::Plain) {
                     continue;
                 }
-                if neighbour_is_comment(content, i) {
+                if neighbour_is_comment(sec.content, i) {
                     continue;
                 }
                 let path = cls.resolved_path.as_deref().unwrap_or("");

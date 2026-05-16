@@ -20,7 +20,7 @@
 //! analyzer.
 
 use rpm_spec::ast::{
-    AttrField, AttrFields, ConfigFlag, FileDirective, FileEntry, FilePath, Span, Text, TextSegment,
+    AttrField, AttrFields, ConfigFlag, FileDirective, FileEntry, Span, Text, TextSegment,
 };
 use rpm_spec_profile::Profile;
 
@@ -198,9 +198,18 @@ impl<'a> FilesClassifier<'a> {
 /// (the entry itself) plus owned derived data.
 #[derive(Debug)]
 pub struct EntryClassification<'a> {
+    /// The original AST node. Use [`Self::span`] for the diagnostic
+    /// anchor.
     pub entry: &'a FileEntry<Span>,
+    /// Fully macro-expanded path string. `None` when any macro on the
+    /// path is not literal-resolvable against the active profile;
+    /// downstream rules treat that as "can't tell" and stay silent.
     pub resolved_path: Option<String>,
+    /// Flattened view of every `%attr`/`%config`/`%doc`/`%license`/…
+    /// directive on the entry's line.
     pub directives: DirectiveSummary,
+    /// Path-shape hints derived from [`Self::resolved_path`]. Empty
+    /// (all-false) when the path is unresolved.
     pub kind_hints: KindHints,
 }
 
@@ -209,11 +218,6 @@ impl EntryClassification<'_> {
     pub fn span(&self) -> Span {
         self.entry.data
     }
-
-    /// Convenience accessor for the raw `FilePath` AST node if present.
-    pub fn file_path(&self) -> Option<&FilePath> {
-        self.entry.path.as_ref()
-    }
 }
 
 /// Flat view of an entry's directives. Multiple directives on one line
@@ -221,14 +225,25 @@ impl EntryClassification<'_> {
 /// yields `config = Some(NoReplace)` and `attr = Some(...)`.
 #[derive(Debug, Default, Clone)]
 pub struct DirectiveSummary {
+    /// `%config` / `%config(noreplace)` form, or `None` when absent.
     pub config: Option<ConfigKind>,
+    /// `%doc` directive present.
     pub is_doc: bool,
+    /// `%license` directive present.
     pub is_license: bool,
+    /// `%ghost` directive present.
     pub is_ghost: bool,
+    /// `%dir` directive present — the package owns the directory but
+    /// not its contents.
     pub is_dir: bool,
+    /// `%artifact` directive (rpm ≥ 4.14.1).
     pub is_artifact: bool,
+    /// `%missingok` directive (rpm ≥ 4.14).
     pub is_missing_ok: bool,
+    /// `%lang(...)` directive present.
     pub has_lang: bool,
+    /// `%attr(...)` summary (mode + literal owner/group flags),
+    /// `None` when no `%attr` is set on this entry.
     pub attr: Option<AttrSummary>,
 }
 
@@ -242,15 +257,19 @@ pub enum ConfigKind {
 }
 
 /// Numeric/literal summary of an `%attr(mode, user, group)` directive.
-/// Each field is `Some` only when a literal value was supplied; `-`
-/// placeholders and macro-valued slots stay `None`.
+/// Each field is `Some`/`true` only when a literal value was supplied;
+/// `-` placeholders and macro-valued slots stay `None`/`false`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct AttrSummary {
+    /// Numeric octal mode (e.g. `0o755`). `None` when the slot is `-`
+    /// or contains a macro.
     pub mode: Option<u32>,
-    /// `true` when the user slot was a literal name (currently we don't
-    /// expose the name itself — RPM370 only needs the mode + a tristate
-    /// `is_root_owner` hint, which we can grow into).
+    /// `true` when the user slot was a literal name (currently we
+    /// don't expose the name itself — RPM370 only needs the mode + a
+    /// tristate `is_root_owner` hint, which we can grow into).
     pub user_literal: bool,
+    /// `true` when the group slot was a literal name. See
+    /// [`Self::user_literal`].
     pub group_literal: bool,
 }
 

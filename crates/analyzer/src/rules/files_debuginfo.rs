@@ -15,7 +15,7 @@
 use rpm_spec::ast::{Span, SpecFile};
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
-use crate::files::{FilesClassifier, for_each_files_entry_with_subpkg, resolve_subpkg_name};
+use crate::files::{FilesClassifier, for_each_files_entry_with_subpkg, pkg_name_for};
 use crate::lint::{Lint, LintMetadata};
 use crate::rules::util::package_name;
 use crate::visit::Visit;
@@ -49,9 +49,7 @@ impl<'ast> Visit<'ast> for DebuginfoPathInMainFiles {
         let main = package_name(spec).map(str::to_owned);
 
         for_each_files_entry_with_subpkg(spec, |subpkg, entry| {
-            let pkg = resolve_subpkg_name(main.as_deref(), subpkg)
-                .or_else(|| main.clone())
-                .unwrap_or_default();
+            let pkg = pkg_name_for(main.as_deref(), subpkg);
             if is_debuginfo_package(&pkg) {
                 return;
             }

@@ -19,7 +19,7 @@
 use rpm_spec::ast::{Span, SpecFile};
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
-use crate::files::{FilesClassifier, for_each_files_entry_with_subpkg, resolve_subpkg_name};
+use crate::files::{FilesClassifier, for_each_files_entry_with_subpkg, pkg_name_for};
 use crate::lint::{Lint, LintMetadata};
 use crate::rules::util::package_name;
 use crate::visit::Visit;
@@ -53,9 +53,7 @@ impl<'ast> Visit<'ast> for DevelFileInNonDevelPackage {
         let main = package_name(spec).map(str::to_owned);
 
         for_each_files_entry_with_subpkg(spec, |subpkg, entry| {
-            let pkg = resolve_subpkg_name(main.as_deref(), subpkg)
-                .or_else(|| main.clone())
-                .unwrap_or_default();
+            let pkg = pkg_name_for(main.as_deref(), subpkg);
             if is_devel_like_package(&pkg) {
                 return;
             }
@@ -191,5 +189,20 @@ Summary: dev\n\
     fn flags_cmake_config_in_main() {
         let src = "Name: foo\n%files\n/usr/lib64/cmake/Foo/FooConfig.cmake\n";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_header_nested_in_conditional_inside_files() {
+        // Regression test for `walk_entries` recursion through
+        // `FilesContent::Conditional`. Without descending into the
+        // `%if` branch the header would not be visited and RPM364
+        // would silently miss it.
+        let src = "Name: foo\n%files\n\
+%if 0%{?fedora}\n\
+/usr/include/foo.h\n\
+%endif\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].lint_id, "RPM364");
     }
 }

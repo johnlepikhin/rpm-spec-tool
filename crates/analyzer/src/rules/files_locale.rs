@@ -12,15 +12,15 @@
 //! - `%find_lang foo` in `%install` plus `%files -f foo.lang` — the
 //!   canonical Fedora pattern that auto-generates the list.
 //!
-//! When a `%files` section reads its content from `-f foo.lang` we
+//! When a `%files` section reads its content from `-f <name>.lang` we
 //! cannot statically prove the locales are owned correctly; the
-//! presence of `-f`  silences the rule for that section as a
-//! conservative bail-out.
+//! presence of any `-f` argument silences the rule for that section
+//! as a conservative bail-out.
 
-use rpm_spec::ast::{Section, Span, SpecFile, SpecItem};
+use rpm_spec::ast::{FilesContent, Span, SpecFile};
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
-use crate::files::FilesClassifier;
+use crate::files::{FilesClassifier, for_each_files_section};
 use crate::lint::{Lint, LintMetadata};
 use crate::visit::Visit;
 use rpm_spec_profile::Profile;
@@ -50,59 +50,29 @@ impl LocaleFileNotLang {
 impl<'ast> Visit<'ast> for LocaleFileNotLang {
     fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
         let classifier = FilesClassifier::new(&self.profile);
-
-        for item in &spec.items {
-            walk_top_for_files(item, &classifier, &mut self.diagnostics);
-        }
+        let diagnostics = &mut self.diagnostics;
+        for_each_files_section(spec, |sec| {
+            // `%files -f some.lang` — the lang file is auto-generated;
+            // we can't prove individual entries are or aren't correctly
+            // tagged, so the rule stays quiet for the section. Mirrors
+            // how Fedora packaging guidelines treat the `%find_lang`
+            // flow.
+            if !sec.file_lists.is_empty() {
+                return;
+            }
+            scan_content(&classifier, sec.content, diagnostics);
+        });
     }
 }
 
-fn walk_top_for_files(
-    item: &SpecItem<Span>,
+/// Free function so the recursion doesn't need a `&mut self` borrow
+/// (which would conflict with the `FilesClassifier` already borrowing
+/// `&self.profile` at the call site).
+fn scan_content(
     classifier: &FilesClassifier<'_>,
+    items: &[FilesContent<Span>],
     out: &mut Vec<Diagnostic>,
 ) {
-    match item {
-        SpecItem::Section(boxed) => {
-            if let Section::Files {
-                file_lists,
-                content,
-                ..
-            } = boxed.as_ref()
-            {
-                // `%files -f some.lang` — the lang file is auto-generated;
-                // we cannot prove individual entries are or aren't
-                // correctly tagged, so the rule stays quiet for this
-                // section. Mirrors how Fedora packaging guidelines treat
-                // the `%find_lang` flow.
-                if !file_lists.is_empty() {
-                    return;
-                }
-                walk_content(content, classifier, out);
-            }
-        }
-        SpecItem::Conditional(c) => {
-            for branch in &c.branches {
-                for nested in &branch.body {
-                    walk_top_for_files(nested, classifier, out);
-                }
-            }
-            if let Some(els) = &c.otherwise {
-                for nested in els {
-                    walk_top_for_files(nested, classifier, out);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn walk_content(
-    items: &[rpm_spec::ast::FilesContent<Span>],
-    classifier: &FilesClassifier<'_>,
-    out: &mut Vec<Diagnostic>,
-) {
-    use rpm_spec::ast::FilesContent;
     for item in items {
         match item {
             FilesContent::Entry(e) => {
@@ -119,17 +89,18 @@ fn walk_content(
                     Severity::Warn,
                     format!(
                         "`{path}` is a locale translation without `%lang(...)`; use \
-                         `%find_lang` + `%files -f *.lang`, or annotate per-locale entries"
+                         `%find_lang` + `%files -f <name>.lang`, or annotate per-locale \
+                         entries"
                     ),
                     cls.span(),
                 ));
             }
             FilesContent::Conditional(c) => {
                 for branch in &c.branches {
-                    walk_content(&branch.body, classifier, out);
+                    scan_content(classifier, &branch.body, out);
                 }
                 if let Some(els) = &c.otherwise {
-                    walk_content(els, classifier, out);
+                    scan_content(classifier, els, out);
                 }
             }
             _ => {}

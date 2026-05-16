@@ -66,16 +66,37 @@ impl<'ast> Visit<'ast> for SuspiciousAttrPermissions {
     }
 }
 
+// POSIX mode bits, named like libc's `<sys/stat.h>` constants so a
+// reader cross-referencing the kernel headers finds them instantly.
+/// Set-user-ID on execution.
+const S_ISUID: u32 = 0o4000;
+/// Set-group-ID on execution.
+const S_ISGID: u32 = 0o2000;
+/// Sticky bit (restricted deletion flag).
+const S_ISVTX: u32 = 0o1000;
+/// Other has write permission.
+const S_IWOTH: u32 = 0o002;
+/// Group has write permission.
+const S_IWGRP: u32 = 0o020;
+/// Group has read + write + execute (used to detect "group-writable
+/// *and* group-readable" together).
+const S_IRWXG: u32 = 0o060;
+/// Mask covering rwx-for-owner/group/other (no setuid/setgid/sticky).
+const PERM_MASK: u32 = 0o777;
+
 /// Decide whether a numeric mode warrants a diagnostic. Returns
-/// `(severity, human_reason)` when so, `None` for harmless modes.
+/// `(severity, human_reason)` for the *worst* offence seen — checks
+/// are priority-ordered (highest severity first), so combined cases
+/// like setuid+setgid surface only the higher-severity bit.
+/// Conservative on overlap: a single message keeps the diagnostic
+/// stream readable.
 fn classify_mode(mode: u32) -> Option<(Severity, &'static str)> {
-    // 04xxx setuid, 02xxx setgid, 01xxx sticky.
-    let setuid = mode & 0o4000 != 0;
-    let setgid = mode & 0o2000 != 0;
-    let sticky = mode & 0o1000 != 0;
-    let other_write = mode & 0o002 != 0;
-    let group_write = mode & 0o020 != 0;
-    let all_perm = mode & 0o777;
+    let setuid = mode & S_ISUID != 0;
+    let setgid = mode & S_ISGID != 0;
+    let sticky = mode & S_ISVTX != 0;
+    let other_write = mode & S_IWOTH != 0;
+    let group_write = mode & S_IWGRP != 0;
+    let all_perm = mode & PERM_MASK;
 
     // Sticky bit on world-writable dirs (e.g. `/tmp` → `01777`) is
     // the canonical "shared spool" idiom; treat it as the explicit
@@ -104,7 +125,7 @@ fn classify_mode(mode: u32) -> Option<(Severity, &'static str)> {
     if setgid {
         return Some((Severity::Warn, "setgid bit set — security review required"));
     }
-    if group_write && all_perm & 0o060 == 0o060 && !sticky {
+    if group_write && all_perm & S_IRWXG == S_IRWXG && !sticky {
         // Group-writable + group-readable; not always wrong but worth
         // flagging at the lowest noticeable severity. Sticky-mode dirs
         // (e.g. `1777` for `/tmp`-like spools) are explicitly opting
@@ -183,5 +204,40 @@ mod tests {
     fn silent_for_normal_modes() {
         let src = "Name: x\n%files\n%attr(0755,root,root) /usr/bin/foo\n%attr(0644,root,root) /etc/foo.conf\n";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn classify_mode_setuid_wins_over_setgid_combo() {
+        // `06755` = setuid + setgid + 755. The priority-ordered chain
+        // surfaces setuid first; this test pins that behaviour so any
+        // future re-ordering is a conscious decision.
+        let (sev, reason) = classify_mode(0o6755).expect("combined mode must flag");
+        assert_eq!(sev, Severity::Warn);
+        assert!(reason.contains("setuid"), "reason: {reason}");
+    }
+
+    #[test]
+    fn classify_mode_world_writable_not_777_or_666() {
+        // `0o646` — other-writable but not the high-profile 777/666.
+        // Should still be Deny via the "world-writable without sticky"
+        // branch.
+        let (sev, _reason) = classify_mode(0o646).expect("o+w must flag");
+        assert_eq!(sev, Severity::Deny);
+    }
+
+    #[test]
+    fn classify_mode_group_writable_alone() {
+        // `0o064` — group rw + read, no other-write, no setuid/setgid.
+        // Falls into the lowest-severity group-writable branch.
+        let (sev, reason) = classify_mode(0o064).expect("group rw must flag");
+        assert_eq!(sev, Severity::Warn);
+        assert!(reason.contains("group"), "reason: {reason}");
+    }
+
+    #[test]
+    fn classify_mode_silent_for_plain_owner_only_modes() {
+        assert!(classify_mode(0o700).is_none());
+        assert!(classify_mode(0o644).is_none());
+        assert!(classify_mode(0o755).is_none());
     }
 }

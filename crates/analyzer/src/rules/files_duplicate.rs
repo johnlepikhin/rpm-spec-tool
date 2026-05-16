@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use rpm_spec::ast::{Span, SpecFile};
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
-use crate::files::{FilesClassifier, for_each_files_entry_with_subpkg, resolve_subpkg_name};
+use crate::files::{FilesClassifier, for_each_files_entry_with_subpkg, pkg_name_for};
 use crate::lint::{Lint, LintMetadata};
 use crate::rules::util::package_name;
 use crate::visit::Visit;
@@ -74,9 +74,14 @@ impl<'ast> Visit<'ast> for DuplicateFilesInFilesSections {
                 return;
             }
             let norm = normalize_path(path);
-            let pkg = resolve_subpkg_name(main.as_deref(), subpkg)
-                .or_else(|| main.clone())
-                .unwrap_or_else(|| "<unnamed>".into());
+            // `pkg_name_for` returns an empty string when neither the
+            // subpkg nor the main name resolves; render that as
+            // `<unnamed>` so cross-package collision messages stay
+            // readable.
+            let mut pkg = pkg_name_for(main.as_deref(), subpkg);
+            if pkg.is_empty() {
+                pkg = "<unnamed>".into();
+            }
 
             if let Some(prev) = seen.get(&norm) {
                 let cross = prev.package != pkg;
