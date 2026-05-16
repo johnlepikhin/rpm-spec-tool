@@ -54,16 +54,14 @@ impl<'ast> Visit<'ast> for InstallChownOrOwner {
                         use_.location.section_span(),
                     ));
                 }
-                "install" => {
-                    if tokens_use_owner_or_group_flag(&use_.tokens) {
-                        self.diagnostics.push(Diagnostic::new(
-                            &METADATA,
-                            Severity::Warn,
-                            "`install -o`/`install -g` in `%install` — set ownership in \
-                             `%files` via `%attr(MODE, OWNER, GROUP)`",
-                            use_.location.section_span(),
-                        ));
-                    }
+                "install" if tokens_use_owner_or_group_flag(&use_.tokens) => {
+                    self.diagnostics.push(Diagnostic::new(
+                        &METADATA,
+                        Severity::Warn,
+                        "`install -o`/`install -g` in `%install` — set ownership in \
+                         `%files` via `%attr(MODE, OWNER, GROUP)`",
+                        use_.location.section_span(),
+                    ));
                 }
                 _ => {}
             }

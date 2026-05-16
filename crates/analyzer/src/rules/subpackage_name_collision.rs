@@ -173,13 +173,9 @@ fn expand_name_macro(text: &Text, main_name: Option<&str>) -> Option<String> {
     for seg in &text.segments {
         match seg {
             TextSegment::Literal(s) => out.push_str(s),
-            TextSegment::Macro(m) => {
-                if m.name == "name" {
-                    let n = main_name?;
-                    out.push_str(n);
-                } else {
-                    return None;
-                }
+            TextSegment::Macro(m) if m.name == "name" => {
+                let n = main_name?;
+                out.push_str(n);
             }
             _ => return None,
         }
