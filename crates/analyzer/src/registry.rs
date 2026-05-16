@@ -205,5 +205,11 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::network_in_build::NetworkAccessInBuild::new()),
         Box::new(rules::disabled_check::DisabledCheckSection::new()),
         Box::new(rules::buildsystem_macros::BuildsystemMacroModernization::new()),
+        // Phase 24 — conditional builds / macros.
+        Box::new(rules::bcond_modern::PreferBcondNewSyntax::new()),
+        Box::new(rules::bcond_usage::BcondDefinedButUnused::new()),
+        Box::new(rules::bcond_usage::WithConditionWithoutBcond::new()),
+        Box::new(rules::metadata_shell_macro::MacroShellExpansionInMetadata::new()),
+        Box::new(rules::include_notice::IncludeNotExpanded::new()),
     ]
 }

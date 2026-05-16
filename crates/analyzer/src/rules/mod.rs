@@ -146,4 +146,10 @@ pub mod optflags;
 pub mod parallel_make;
 pub mod werror;
 
+// Phase 24 — conditional builds / macros.
+pub mod bcond_modern;
+pub mod bcond_usage;
+pub mod include_notice;
+pub mod metadata_shell_macro;
+
 mod util;
