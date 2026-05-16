@@ -20,7 +20,15 @@ use crate::output::resolve_color;
 const MAX_SUMMARY_ROWS: usize = 10;
 
 pub fn render(items: &[(Source, Vec<Diagnostic>)], color: ColorChoice) -> Result<()> {
-    let stream = StandardStream::stderr(resolve_color(color, || std::io::stderr().is_terminal()));
+    // Lint findings are the program's primary output and go to STDOUT
+    // so they compose with shell pipelines (`lint x.spec | grep RPM320`,
+    // `lint x.spec > findings.txt`). STDERR is reserved for actual
+    // process errors (parse failures, missing files, profile load
+    // errors) emitted via `eprintln!` in the CLI layer. This matches
+    // the convention used by modern linters (ruff, eslint, shellcheck,
+    // golangci-lint) and lines up with the JSON/SARIF output sinks
+    // which already write to STDOUT.
+    let stream = StandardStream::stdout(resolve_color(color, || std::io::stdout().is_terminal()));
     let mut writer = stream.lock();
     let cfg = Config::default();
 

@@ -85,9 +85,9 @@ fn version_flag_exits_zero() {
 #[test]
 fn lint_default_warn_exits_zero() {
     let spec = write_temp(MISSING_CHANGELOG_SPEC);
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0, "warn-only run must succeed; stderr={stderr}");
-    assert!(stderr.contains("missing-changelog"));
+    assert!(stdout.contains("missing-changelog"));
 }
 
 #[test]
@@ -108,14 +108,14 @@ fn lint_deny_override_exits_one() {
 #[test]
 fn lint_deny_warnings_meta_fails_on_any_warning() {
     let spec = write_temp(MISSING_CHANGELOG_SPEC);
-    let (code, _, stderr) = run(
+    let (code, stdout, _) = run(
         &["lint", "--deny", "warnings", spec.path().to_str().unwrap()],
         None,
     );
     assert_eq!(code, 1, "`-D warnings` must promote warns to exit 1");
     // The warning still appears in output (now as deny-level), per
     // clippy semantics: `-D warnings` *fails*, it doesn't silence.
-    assert!(stderr.contains("missing-changelog"));
+    assert!(stdout.contains("missing-changelog"));
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn lint_deny_warnings_respects_per_lint_allow() {
     // RPM rightly flags — we assert the targeted lint stays out of
     // the output, while the overall run still fails.
     let spec = write_temp(MISSING_CHANGELOG_SPEC);
-    let (code, _, stderr) = run(
+    let (code, stdout, _) = run(
         &[
             "lint",
             "--allow",
@@ -139,7 +139,7 @@ fn lint_deny_warnings_respects_per_lint_allow() {
     );
     assert_eq!(code, 1, "other warnings still promote to deny");
     assert!(
-        !stderr.contains("missing-changelog"),
+        !stdout.contains("missing-changelog"),
         "missing-changelog must be silenced by --allow"
     );
 }
@@ -147,7 +147,7 @@ fn lint_deny_warnings_respects_per_lint_allow() {
 #[test]
 fn lint_allow_override_silences_diagnostic() {
     let spec = write_temp(MISSING_CHANGELOG_SPEC);
-    let (code, _, stderr) = run(
+    let (code, stdout, _) = run(
         &[
             "lint",
             "--allow",
@@ -158,8 +158,8 @@ fn lint_allow_override_silences_diagnostic() {
     );
     assert_eq!(code, 0);
     assert!(
-        !stderr.contains("missing-changelog"),
-        "diagnostic should be suppressed; got: {stderr}"
+        !stdout.contains("missing-changelog"),
+        "diagnostic should be suppressed; got: {stdout}"
     );
 }
 
@@ -179,10 +179,10 @@ fn check_on_clean_spec_exits_zero() {
 
 #[test]
 fn lint_stdin_pipes_through() {
-    let (code, _, stderr) = run(&["lint", "-"], Some(MISSING_CHANGELOG_SPEC));
+    let (code, stdout, _) = run(&["lint", "-"], Some(MISSING_CHANGELOG_SPEC));
     assert_eq!(code, 0);
-    assert!(stderr.contains("<stdin>"));
-    assert!(stderr.contains("missing-changelog"));
+    assert!(stdout.contains("<stdin>"));
+    assert!(stdout.contains("missing-changelog"));
 }
 
 #[test]
@@ -210,9 +210,9 @@ fn missing_name_tag_exits_one() {
         "Version: 1\nRelease: 1\nSummary: x\nLicense: MIT\nURL: https://e.org\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 1, "deny lint must fail: {stderr}");
-    assert!(stderr.contains("missing-name-tag"));
+    assert!(stdout.contains("missing-name-tag"));
 }
 
 #[test]
@@ -229,11 +229,11 @@ URL: https://e.org\nPackager: me <me@e.org>\n\
     assert_eq!(code, 0, "--fix should succeed");
 
     // Second pass: the Packager line is gone.
-    let (code, _, stderr) = run(&["lint", path], None);
+    let (code, stdout, _) = run(&["lint", path], None);
     assert_eq!(code, 0);
     assert!(
-        !stderr.contains("obsolete-tag"),
-        "Packager should be gone after --fix, stderr: {stderr}"
+        !stdout.contains("obsolete-tag"),
+        "Packager should be gone after --fix, stdout: {stdout}"
     );
 }
 
@@ -254,11 +254,11 @@ URL: https://e.org\n\
 
     // After the fix the file must still parse cleanly and have no
     // deprecated-clean-section diagnostic.
-    let (code, _, stderr) = run(&["lint", path], None);
+    let (code, stdout, _) = run(&["lint", path], None);
     assert_eq!(code, 0);
     assert!(
-        !stderr.contains("deprecated-clean-section"),
-        "%clean must be gone after --fix; stderr: {stderr}"
+        !stdout.contains("deprecated-clean-section"),
+        "%clean must be gone after --fix; stdout: {stdout}"
     );
     let after = std::fs::read_to_string(path).expect("read file");
     assert!(
@@ -282,9 +282,9 @@ fn self_obsoletion_exits_one() {
 URL: https://e.org\nObsoletes: hello\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 1, "self-obsoletion is deny");
-    assert!(stderr.contains("self-obsoletion"));
+    assert!(stdout.contains("self-obsoletion"));
 }
 
 #[test]
@@ -299,11 +299,11 @@ Obsoletes: foo\n\
 %description -n foo\nsub\n\
 %changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 1);
     assert!(
-        stderr.contains("self-obsoletion") && stderr.contains("foo"),
-        "expected subpackage self-obsoletion mention; stderr: {stderr}"
+        stdout.contains("self-obsoletion") && stdout.contains("foo"),
+        "expected subpackage self-obsoletion mention; stdout: {stdout}"
     );
 }
 
@@ -324,11 +324,11 @@ URL: https://e.org\nProvides: hello\n\
         "useless Provides line must be removed:\n{after}"
     );
 
-    let (code, _, stderr) = run(&["lint", path], None);
+    let (code, stdout, _) = run(&["lint", path], None);
     assert_eq!(code, 0);
     assert!(
-        !stderr.contains("useless-explicit-provides"),
-        "diagnostic should be gone; stderr: {stderr}"
+        !stdout.contains("useless-explicit-provides"),
+        "diagnostic should be gone; stdout: {stdout}"
     );
 }
 
@@ -346,9 +346,9 @@ fn missing_prep_section_warns() {
 %build\nmake\n%install\nmake install DESTDIR=%{buildroot}\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0, "warn shouldn't fail; stderr={stderr}");
-    assert!(stderr.contains("missing-prep-section"));
+    assert!(stdout.contains("missing-prep-section"));
 }
 
 #[test]
@@ -358,9 +358,9 @@ fn duplicate_buildscript_exits_one() {
 %prep\n%setup -q\n%build\nmake\n%install\nmake install\n%build\nmake more\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 1, "duplicate build is deny");
-    assert!(stderr.contains("duplicate-buildscript-section"));
+    assert!(stdout.contains("duplicate-buildscript-section"));
 }
 
 // =====================================================================
@@ -393,9 +393,9 @@ URL: https://e.org\n\
 %install\nmkdir -p %{buildroot}/usr/lib/foo\n\
 %description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
-    assert!(stderr.contains("hardcoded-paths"));
+    assert!(stdout.contains("hardcoded-paths"));
 }
 
 #[test]
@@ -406,9 +406,9 @@ URL: https://e.org\n\
 %install\nmkdir -p $RPM_BUILD_ROOT/usr/bin\n\
 %description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
-    assert!(stderr.contains("rpm-buildroot-shell-var"));
+    assert!(stdout.contains("rpm-buildroot-shell-var"));
 }
 
 #[test]
@@ -458,9 +458,9 @@ URL: https://e.org\n\
 %prep\n%setup -n foo\n\
 %description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
-    assert!(stderr.contains("setup-without-q-flag"), "stderr:\n{stderr}");
+    assert!(stdout.contains("setup-without-q-flag"), "stdout:\n{stdout}");
 }
 
 #[test]
@@ -472,13 +472,13 @@ Patch1: missing.patch\n\
 %prep\n%setup -q\n\
 %description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("patch-defined-not-applied"),
-        "stderr:\n{stderr}"
+        stdout.contains("patch-defined-not-applied"),
+        "stdout:\n{stdout}"
     );
-    assert!(stderr.contains("Patch1"), "stderr:\n{stderr}");
+    assert!(stdout.contains("Patch1"), "stdout:\n{stdout}");
 }
 
 // =====================================================================
@@ -639,11 +639,11 @@ fn deep_conditional_nesting_warns() {
 %endif\n%endif\n%endif\n%endif\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("deep-conditional-nesting"),
-        "stderr:\n{stderr}"
+        stdout.contains("deep-conditional-nesting"),
+        "stdout:\n{stdout}"
     );
 }
 
@@ -654,9 +654,9 @@ fn constant_condition_warns() {
 %if 0\nBuildArch: noarch\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
-    assert!(stderr.contains("constant-condition"), "stderr:\n{stderr}");
+    assert!(stdout.contains("constant-condition"), "stdout:\n{stdout}");
 }
 
 #[test]
@@ -666,11 +666,11 @@ fn empty_conditional_branch_warns() {
 %if 0\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("empty-conditional-branch"),
-        "stderr:\n{stderr}"
+        stdout.contains("empty-conditional-branch"),
+        "stdout:\n{stdout}"
     );
 }
 
@@ -681,11 +681,11 @@ fn unreachable_elif_warns() {
 %if 0\nBuildArch: noarch\n%elif 0\nBuildArch: x86_64\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("unreachable-elif-branch"),
-        "stderr:\n{stderr}"
+        stdout.contains("unreachable-elif-branch"),
+        "stdout:\n{stdout}"
     );
 }
 
@@ -700,9 +700,9 @@ fn nested_and_collapse_warns() {
 %if 1\n%if 1\nBuildArch: noarch\n%endif\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
-    assert!(stderr.contains("nested-and-collapse"), "stderr:\n{stderr}");
+    assert!(stdout.contains("nested-and-collapse"), "stdout:\n{stdout}");
 }
 
 #[test]
@@ -712,11 +712,11 @@ fn double_negation_warns() {
 %if !!0%{?rhel}\nBuildArch: noarch\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("double-negation-in-expr"),
-        "stderr:\n{stderr}"
+        stdout.contains("double-negation-in-expr"),
+        "stdout:\n{stdout}"
     );
 }
 
@@ -731,11 +731,11 @@ fn inequality_contradiction_warns() {
 %if X >= 10 && X < 5\nBuildArch: noarch\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("inequality-contradiction"),
-        "stderr:\n{stderr}"
+        stdout.contains("inequality-contradiction"),
+        "stdout:\n{stdout}"
     );
 }
 
@@ -747,7 +747,7 @@ fn conditional_buildarch_warns_when_enabled() {
 %if 1\nBuildArch: noarch\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(
+    let (code, stdout, _) = run(
         &[
             "lint",
             "--warn",
@@ -758,8 +758,8 @@ fn conditional_buildarch_warns_when_enabled() {
     );
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("conditional-buildarch"),
-        "stderr:\n{stderr}"
+        stdout.contains("conditional-buildarch"),
+        "stdout:\n{stdout}"
     );
 }
 
@@ -775,11 +775,11 @@ fn unreachable_branch_warns_on_nested_negation() {
 %if !X\n%if X\nBuildArch: noarch\n%endif\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("unreachable-branch-under-parent"),
-        "stderr:\n{stderr}"
+        stdout.contains("unreachable-branch-under-parent"),
+        "stdout:\n{stdout}"
     );
 }
 
@@ -964,11 +964,11 @@ fn always_true_branch_warns_on_implied_inner() {
 %if X && Y\n%if X\nBuildArch: noarch\n%endif\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("always-true-branch-under-parent"),
-        "stderr:\n{stderr}"
+        stdout.contains("always-true-branch-under-parent"),
+        "stdout:\n{stdout}"
     );
 }
 
@@ -981,11 +981,11 @@ fn dead_elif_warns_when_repeating_prior_branch() {
 %if A\nBuildArch: noarch\n%elif A\nBuildArch: x86_64\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("dead-elif-after-parent"),
-        "stderr:\n{stderr}"
+        stdout.contains("dead-elif-after-parent"),
+        "stdout:\n{stdout}"
     );
 }
 
@@ -998,11 +998,11 @@ fn exhaustive_chain_warns_when_else_is_implicit() {
 %if A\nBuildArch: noarch\n%elif !A\nBuildArch: x86_64\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("mutex-branches-spell-out-else"),
-        "stderr:\n{stderr}"
+        stdout.contains("mutex-branches-spell-out-else"),
+        "stdout:\n{stdout}"
     );
 }
 
@@ -1026,11 +1026,11 @@ BuildRequires: beta, gcc-c++\n\
 %endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("hoist-common-suffix-from-branches"),
-        "RPM098 must fire on shared multi-dep atom:\n{stderr}"
+        stdout.contains("hoist-common-suffix-from-branches"),
+        "RPM098 must fire on shared multi-dep atom:\n{stdout}"
     );
 }
 
@@ -1052,11 +1052,11 @@ BuildRequires: gamma, gcc-c++\n\
 %endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("common-leaf-line-hoistable"),
-        "RPM119 must fire on multi-dep atom common to every leaf:\n{stderr}"
+        stdout.contains("common-leaf-line-hoistable"),
+        "RPM119 must fire on multi-dep atom common to every leaf:\n{stdout}"
     );
 }
 
@@ -1075,7 +1075,7 @@ fn macro_makes_if_trivial_warns_when_enabled() {
 %if %{with_python}\nBuildRequires: python3\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(
+    let (code, stdout, _) = run(
         &[
             "lint",
             "--warn",
@@ -1086,8 +1086,8 @@ fn macro_makes_if_trivial_warns_when_enabled() {
     );
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("macro-defined-makes-if-trivial"),
-        "stderr:\n{stderr}"
+        stdout.contains("macro-defined-makes-if-trivial"),
+        "stdout:\n{stdout}"
     );
 }
 
@@ -1099,7 +1099,7 @@ fn unused_global_warns_when_enabled() {
 %global never_used 1\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(
+    let (code, stdout, _) = run(
         &[
             "lint",
             "--warn",
@@ -1110,8 +1110,8 @@ fn unused_global_warns_when_enabled() {
     );
     assert_eq!(code, 0);
     assert!(
-        stderr.contains("unused-conditional-global"),
-        "stderr:\n{stderr}"
+        stdout.contains("unused-conditional-global"),
+        "stdout:\n{stdout}"
     );
 }
 
@@ -1125,7 +1125,7 @@ fn parser_bridge_silenced_by_cli_allow() {
 Provides: %{\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(
+    let (code, stdout, _) = run(
         &[
             "lint",
             "--allow",
@@ -1136,8 +1136,8 @@ Provides: %{\n\
     );
     assert_eq!(code, 0);
     assert!(
-        !stderr.contains("parse-unterminated-macro"),
-        "diagnostic must be silenced by --allow; stderr: {stderr}"
+        !stdout.contains("parse-unterminated-macro"),
+        "diagnostic must be silenced by --allow; stdout: {stdout}"
     );
 }
 
@@ -1151,14 +1151,14 @@ fn parser_bridge_surfaces_warnings() {
 Provides: %{\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(
         code, 0,
         "warn-level parser diag doesn't fail; stderr={stderr}"
     );
     assert!(
-        stderr.contains("parse-unterminated-macro"),
-        "expected parser bridge to surface W0004; got: {stderr}"
+        stdout.contains("parse-unterminated-macro"),
+        "expected parser bridge to surface W0004; got: {stdout}"
     );
 }
 
@@ -1170,9 +1170,9 @@ fn multiple_changelog_sections_exits_one() {
 %changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- A\n\
 %changelog\n* Tue Jan 02 2024 b <b@c> - 1-2\n- B\n",
     );
-    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 1, "duplicate %changelog is deny");
-    assert!(stderr.contains("multiple-changelog-sections"));
+    assert!(stdout.contains("multiple-changelog-sections"));
 }
 
 #[test]
@@ -1186,11 +1186,11 @@ fn shellcheck_fixture_emits_rpm200_or_rpm201() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/fixtures/bad_shellcheck.spec"
     );
-    let (code, _, stderr) = run(&["lint", fixture], None);
+    let (code, stdout, _) = run(&["lint", fixture], None);
     assert_eq!(code, 0, "shellcheck is default-warn, must not fail run");
     assert!(
-        stderr.contains("shellcheck") || stderr.contains("RPM200") || stderr.contains("RPM201"),
-        "expected shellcheck-related diagnostics; got: {stderr}"
+        stdout.contains("shellcheck") || stdout.contains("RPM200") || stdout.contains("RPM201"),
+        "expected shellcheck-related diagnostics; got: {stdout}"
     );
 }
 
