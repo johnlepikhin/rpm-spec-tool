@@ -31,7 +31,7 @@ Current head is Phase 16. New phases are **17–25**.
 | 20 | `ProfilePolicyRegistry` + systemd/tmpfiles/users (P1) | shipped @ f544e78 |
 | 21 | Dependency semantics (P0/P1) | shipped @ 15dffaf |
 | 22 | build-tool ↔ BuildRequires + pkgconfig (P1) | shipped @ 9d79989 |
-| 23 | Build/install policy (P1) | not started |
+| 23 | Build/install policy (P1) | shipped @ e33d9b5 |
 | 24 | Conditional builds / macros (P1) | not started |
 | 25 | Deep analyses (P2, roadmap) | not started |
 
