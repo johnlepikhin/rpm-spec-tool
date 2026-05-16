@@ -49,3 +49,29 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - run: cargo test --workspace --all-targets
+
+  publish-check:
+    name: publish-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-publish-check
+      # Only `rpm-spec-profile` (the leaf crate, no internal deps) can be
+      # fully dry-run-published from CI. For `rpm-spec-analyzer` and
+      # `rpm-spec-tool` the packaging step itself resolves their
+      # workspace-internal path-deps against the crates.io index — and
+      # until the dependency is published there, that lookup fails even
+      # with `--no-verify`. The two failing steps are kept (with
+      # continue-on-error) so that once the deps are on crates.io they
+      # surface metadata issues without ever blocking PRs.
+      - name: Dry-run publish — rpm-spec-profile (must pass)
+        run: cargo publish -p rpm-spec-profile --dry-run --allow-dirty
+      - name: Dry-run publish — rpm-spec-analyzer
+        continue-on-error: true
+        run: cargo publish -p rpm-spec-analyzer --dry-run --allow-dirty --no-verify
+      - name: Dry-run publish — rpm-spec-tool
+        continue-on-error: true
+        run: cargo publish -p rpm-spec-tool --dry-run --allow-dirty --no-verify
