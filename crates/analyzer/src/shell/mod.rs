@@ -26,10 +26,12 @@ pub(crate) mod cmd_index;
 pub(crate) mod tokens;
 pub(crate) mod walk;
 
-// Selectively re-export the types call sites use by name. `CommandUse`,
-// `ScriptKind`, `ShellArg`, and `tokenize_line` are reached through
-// method calls on the surfaced types (or are infrastructure-internal),
-// so re-exporting them at the module root would only add noise.
+// Selectively re-export the types and helpers call sites use by name.
+// `CommandUse`, `ScriptKind`, and `ShellArg` are reached through method
+// calls on the surfaced types, so re-exporting them at the module root
+// would only add noise. `tokenize_line` is re-exported so the line-level
+// scanner in `rules/parallel_make.rs` doesn't have to path-pierce into
+// the private `tokens` submodule.
 pub(crate) use cmd_index::{CommandUseIndex, SectionRef};
-pub(crate) use tokens::ShellToken;
+pub(crate) use tokens::{ShellToken, first_non_flag_arg, strip_trailing_comment, tokenize_line};
 pub(crate) use walk::{for_each_buildscript, for_each_scriptlet};

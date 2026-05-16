@@ -246,6 +246,36 @@ fn flush_literal(literal: &mut String, current: &mut ShellToken) {
     }
 }
 
+/// First token after the command (`tokens[0]`) whose literal text is
+/// not a `-`-prefixed flag. Used by rules that need the sub-command
+/// of a tool like `git clone`, `pip install`, `cmake --build`.
+///
+/// Returns `None` if every following token is either a flag or a
+/// macro-bearing token that can't be flattened to a literal.
+pub(crate) fn first_non_flag_arg(tokens: &[ShellToken]) -> Option<String> {
+    tokens
+        .iter()
+        .skip(1)
+        .filter_map(|tok| tok.literal_str())
+        .find(|lit| !lit.starts_with('-'))
+}
+
+/// Drop a `# …` trailing comment from a shell line and return the
+/// remaining prefix. A `#` is only treated as the start of a comment
+/// when it sits at the line start or is preceded by ASCII whitespace —
+/// shell tokens like `value#anchor` keep the `#`.
+pub(crate) fn strip_trailing_comment(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'#' && (i == 0 || bytes[i - 1].is_ascii_whitespace()) {
+            return &s[..i];
+        }
+        i += 1;
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

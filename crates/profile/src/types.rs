@@ -68,6 +68,21 @@ pub enum Family {
     Generic,
 }
 
+impl Family {
+    /// `true` for families whose canonical builders (Mock, Koji, OBS,
+    /// `hasher`) run the build inside an offline chroot. Used by
+    /// rules that enforce conventions tied to that assumption (no
+    /// network in `%build`, mandatory `BuildRequires:` for build
+    /// tools, etc.).
+    #[must_use]
+    pub fn has_offline_build_chroot(self) -> bool {
+        matches!(
+            self,
+            Self::Fedora | Self::Rhel | Self::Opensuse | Self::Mageia | Self::Alt
+        )
+    }
+}
+
 /// Registry of every macro known to the profile.
 ///
 /// We keep raw bodies verbatim — lints that want to resolve `%{...}`

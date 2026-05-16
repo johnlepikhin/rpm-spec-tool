@@ -138,4 +138,12 @@ pub mod patch_status_comment;
 pub mod pkgconfig_br;
 pub mod scriptlet_deps;
 
+// Phase 23 — build/install policy.
+pub mod buildsystem_macros;
+pub mod disabled_check;
+pub mod network_in_build;
+pub mod optflags;
+pub mod parallel_make;
+pub mod werror;
+
 mod util;

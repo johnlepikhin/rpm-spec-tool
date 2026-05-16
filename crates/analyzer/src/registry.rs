@@ -198,5 +198,12 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::pkgconfig_br::PkgconfigFileWithoutPkgconfigBr::new()),
         Box::new(rules::scriptlet_deps::ScriptletCommandWithoutRequires::new()),
         Box::new(rules::patch_status_comment::PatchStatusCommentMissing::new()),
+        // Phase 23 — build/install policy.
+        Box::new(rules::optflags::OptflagsOverridden::new()),
+        Box::new(rules::werror::WerrorNotDisabled::new()),
+        Box::new(rules::parallel_make::J1WithoutComment::new()),
+        Box::new(rules::network_in_build::NetworkAccessInBuild::new()),
+        Box::new(rules::disabled_check::DisabledCheckSection::new()),
+        Box::new(rules::buildsystem_macros::BuildsystemMacroModernization::new()),
     ]
 }

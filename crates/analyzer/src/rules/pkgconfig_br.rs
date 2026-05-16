@@ -19,7 +19,7 @@ use crate::files::{FilesClassifier, for_each_files_entry};
 use crate::lint::{Lint, LintMetadata};
 use crate::rules::util::collect_top_level_dep_names;
 use crate::visit::Visit;
-use rpm_spec_profile::{Family, Profile};
+use rpm_spec_profile::Profile;
 
 pub static METADATA: LintMetadata = LintMetadata {
     id: "RPM325",
@@ -48,10 +48,10 @@ impl PkgconfigFileWithoutPkgconfigBr {
 /// inside their `pkgconfig` BR. On any other family the rule stays
 /// silent — the convention may not apply.
 fn family_applies(profile: &Profile) -> bool {
-    matches!(
-        profile.identity.family,
-        Some(Family::Fedora | Family::Rhel | Family::Opensuse | Family::Mageia | Family::Alt)
-    )
+    profile
+        .identity
+        .family
+        .is_some_and(rpm_spec_profile::Family::has_offline_build_chroot)
 }
 
 impl<'ast> Visit<'ast> for PkgconfigFileWithoutPkgconfigBr {
