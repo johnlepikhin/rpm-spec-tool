@@ -53,7 +53,11 @@ pub(super) fn render_list(
         let empty = ProfileSection::default();
         for &name in builtins {
             let prefix = if name == active { "*" } else { " " };
-            match rpm_spec_analyzer::profile::resolve_profile(&empty, base_dir, Some(name)) {
+            match rpm_spec_analyzer::profile::resolve_profile(
+                &empty,
+                base_dir,
+                rpm_spec_analyzer::profile::ResolveOptions::with_override(Some(name)),
+            ) {
                 Ok(p) => {
                     writeln!(
                         out,

@@ -28,6 +28,9 @@ pub struct CommonOpts {
     /// any empty user-defined profiles). At least two are required —
     /// intersecting a single profile is rejected.
     pub profiles: Vec<String>,
+
+    #[command(flatten)]
+    pub defines: crate::app::MacroDefinesArg,
 }
 
 /// Comparison mode for `profile common`. `Existence` matches by name
@@ -70,9 +73,9 @@ pub(super) fn dispatch_common(
 ) -> Result<ExitCode> {
     let auto_expanded = opts.profiles.is_empty();
     let resolved: Vec<(String, Profile)> = if auto_expanded {
-        default_intersection_set(config, base_dir)?
+        default_intersection_set(config, base_dir, &opts.defines.raw)?
     } else {
-        resolve_many(config, base_dir, &opts.profiles)?
+        resolve_many(config, base_dir, &opts.profiles, &opts.defines.raw)?
     };
     if resolved.len() < 2 {
         if auto_expanded {
@@ -97,11 +100,19 @@ pub(super) fn dispatch_common(
 /// Drops `generic` (and any empty user profile) so the default
 /// intersection isn't vacuous. Returns the already-resolved profiles
 /// so the caller doesn't pay for a second resolve pass.
-fn default_intersection_set(config: &Config, base_dir: &Path) -> Result<Vec<(String, Profile)>> {
+fn default_intersection_set(
+    config: &Config,
+    base_dir: &Path,
+    defines: &[String],
+) -> Result<Vec<(String, Profile)>> {
     let mut out = Vec::new();
     for name in all_profile_names(config) {
         let p = config
-            .resolve_profile(base_dir, Some(&name))
+            .resolve_profile(
+                base_dir,
+                rpm_spec_analyzer::profile::ResolveOptions::with_override(Some(&name))
+                    .with_defines(defines),
+            )
             .with_context(|| format!("failed to resolve profile `{name}` (default common set)"))?;
         if !p.macros.is_empty() {
             out.push((name, p));
@@ -278,6 +289,7 @@ mod tests {
             mode: CommonMode::Existence,
             filter: None,
             profiles: Vec::new(),
+            defines: crate::app::MacroDefinesArg::default(),
         };
         let mut buf = Vec::new();
         render_common(&mut buf, &opts, &resolved).unwrap();
@@ -299,6 +311,7 @@ mod tests {
             mode: CommonMode::Existence,
             filter: None,
             profiles: Vec::new(),
+            defines: crate::app::MacroDefinesArg::default(),
         };
         let mut buf = Vec::new();
         let err = render_common(&mut buf, &opts, &resolved).unwrap_err();
@@ -310,7 +323,7 @@ mod tests {
         // `generic` is the canonical empty builtin — must be dropped.
         let config = Config::default();
         let base = std::env::temp_dir();
-        let resolved = default_intersection_set(&config, &base).unwrap();
+        let resolved = default_intersection_set(&config, &base, &[]).unwrap();
         assert!(
             resolved.iter().all(|(_, p)| !p.macros.is_empty()),
             "default set should not contain empty profiles"

@@ -93,13 +93,18 @@ impl MacroOverride {
                 opts,
                 multiline,
             } => {
-                let v = if !multiline && !value.contains('%') {
-                    MacroValue::Literal(value)
-                } else {
+                // Multiline bodies must always become `Raw` regardless
+                // of `%` content — the renderer relies on `multiline`
+                // to lay out the value across lines. For single-line
+                // bodies the literal/raw split is identical to the CLI
+                // `--define` path, so we delegate to the shared helper.
+                let v = if multiline {
                     MacroValue::Raw {
                         body: value,
-                        multiline,
+                        multiline: true,
                     }
+                } else {
+                    MacroValue::from_user_body(value)
                 };
                 MacroEntry {
                     value: v,

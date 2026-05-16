@@ -53,6 +53,28 @@ pub struct CommonInput {
     pub config: Option<PathBuf>,
 }
 
+/// Ad-hoc macro definitions, mirroring `rpmbuild --define`. Shared by
+/// every subcommand that resolves a [`rpm_spec_analyzer::profile::Profile`]
+/// (lint, check, every `profile` action). Flattened into each command's
+/// `Args` struct via `#[command(flatten)]`.
+///
+/// The inner field is named `raw` (not `defines`) so call sites read as
+/// `opts.defines.raw` instead of the stutter-y `opts.defines.defines`.
+/// The values are raw argv strings; the resolver parses them via
+/// [`rpm_spec_analyzer::profile::parse_define`].
+#[derive(Debug, Args, Default, Clone)]
+pub struct MacroDefinesArg {
+    /// Define a macro at lint time, mirroring `rpmbuild --define`.
+    /// Form: `--define 'NAME VALUE'` — a single argument with the name
+    /// and value separated by whitespace. Use shell quoting to keep
+    /// the pair as one argv element. Repeatable: `-D 'a 1' -D 'b 2'`.
+    ///
+    /// CLI defines outrank both the bundled distribution profile and
+    /// any `[profiles.*.macros]` overrides in `.rpmspec.toml`.
+    #[arg(long = "define", short = 'D', value_name = "NAME VALUE")]
+    pub raw: Vec<String>,
+}
+
 impl Application {
     pub fn run(self) -> anyhow::Result<ExitCode> {
         let color = self.color;

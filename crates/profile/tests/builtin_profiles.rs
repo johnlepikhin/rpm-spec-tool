@@ -8,7 +8,9 @@
 
 use std::path::{Path, PathBuf};
 
-use rpm_spec_profile::{Family, LayerInfo, ProfileEntry, ProfileSection, builtin, resolve_profile};
+use rpm_spec_profile::{
+    Family, LayerInfo, ProfileEntry, ProfileSection, ResolveOptions, builtin, resolve_profile,
+};
 
 #[test]
 fn every_builtin_loads_cleanly() {
@@ -48,7 +50,7 @@ fn every_builtin_resolves_via_cli_override() {
     let base = Path::new(".");
 
     for &name in builtin::names() {
-        let resolved = resolve_profile(&empty, base, Some(name))
+        let resolved = resolve_profile(&empty, base, ResolveOptions::with_override(Some(name)))
             .unwrap_or_else(|e| panic!("resolve({name}) failed: {e:?}"));
 
         // The resolver fills `identity.name` with the active key when no
@@ -103,7 +105,7 @@ fn user_entry_extends_distribution_builtin_with_identity_pin() {
     section.profile = Some("acmebuild".into());
     section.profiles.insert("acmebuild".into(), entry);
 
-    let p = resolve_profile(&section, Path::new("."), None).unwrap();
+    let p = resolve_profile(&section, Path::new("."), ResolveOptions::default()).unwrap();
 
     // Bundled showrc was applied.
     assert!(p.macros.len() > 100);
@@ -162,7 +164,7 @@ fn user_showrc_layered_over_bundled_showrc_wins_on_collisions() {
     section.profile = Some("layered".into());
     section.profiles.insert("layered".into(), entry);
 
-    let p = resolve_profile(&section, &tmp, None).unwrap();
+    let p = resolve_profile(&section, &tmp, ResolveOptions::default()).unwrap();
 
     // Collision: user-layer wins. The bundled showrc set `_vendor=redhat`.
     let vendor = p.macros.get("_vendor").expect("_vendor present");

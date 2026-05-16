@@ -29,7 +29,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use rpm_spec_analyzer::config::Config;
-use rpm_spec_analyzer::profile::{Profile, builtin};
+use rpm_spec_analyzer::profile::{Profile, ResolveOptions, builtin};
 
 mod common;
 mod fmt;
@@ -92,7 +92,10 @@ impl Cmd {
             Action::Show(opts) => {
                 let cli_override = opts.name.as_deref();
                 let profile = config
-                    .resolve_profile(&base_dir, cli_override)
+                    .resolve_profile(
+                        &base_dir,
+                        ResolveOptions::with_override(cli_override).with_defines(&opts.defines.raw),
+                    )
                     .with_context(|| "failed to resolve profile")?;
                 show::render(&mut out, &profile, opts.full)?;
             }
@@ -100,7 +103,10 @@ impl Cmd {
             Action::Macros(opts) => {
                 let profile_name = opts.profile.as_deref();
                 let profile = config
-                    .resolve_profile(&base_dir, profile_name)
+                    .resolve_profile(
+                        &base_dir,
+                        ResolveOptions::with_override(profile_name).with_defines(&opts.defines.raw),
+                    )
                     .with_context(|| "failed to resolve profile")?;
                 let effective_name = active_profile_name(profile_name, &config);
                 macros::render_macros(&mut out, effective_name, &profile, &opts)?;
@@ -146,16 +152,25 @@ pub(super) fn all_profile_names(config: &Config) -> Vec<String> {
 /// Resolve every name into a `(name, Profile)` pair, surfacing the
 /// first failure with context. Shared by `dispatch_macro` and
 /// `dispatch_common` so the two paths can't drift on error wording.
+///
+/// `defines` is applied to every resolved profile — `profile macro X P1
+/// P2 -D 'foo bar'` injects `foo=bar` across all of P1, P2 so the
+/// comparison table reflects the user's `--define` against each
+/// distribution's baseline.
 pub(super) fn resolve_many(
     config: &Config,
     base_dir: &Path,
     names: &[String],
+    defines: &[String],
 ) -> Result<Vec<(String, Profile)>> {
     names
         .iter()
         .map(|name| {
             let p = config
-                .resolve_profile(base_dir, Some(name))
+                .resolve_profile(
+                    base_dir,
+                    ResolveOptions::with_override(Some(name)).with_defines(defines),
+                )
                 .with_context(|| format!("failed to resolve profile `{name}`"))?;
             Ok((name.clone(), p))
         })

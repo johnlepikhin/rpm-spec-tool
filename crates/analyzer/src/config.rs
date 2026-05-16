@@ -109,16 +109,22 @@ impl Config {
     /// Resolve the active profile against this config.
     ///
     /// `base_dir` is the directory `.rpmspec.toml` lives in (used to
-    /// resolve relative `showrc-file` paths). `cli_override` is the
-    /// optional `--profile <name>` flag from the command line.
+    /// resolve relative `showrc-file` paths). `opts` carries CLI-time
+    /// inputs — `--profile` override and any `--define NAME VALUE`
+    /// arguments. Constructors:
+    /// * `ResolveOptions::default()` — no CLI overrides at all (used
+    ///   by `profile list`, tests).
+    /// * `ResolveOptions::with_override(Some("rhel-9"))` — only
+    ///   `--profile`, no defines.
+    /// * Struct literal — when both `--profile` and `--define` apply.
     pub fn resolve_profile(
         &self,
         base_dir: &std::path::Path,
-        cli_override: Option<&str>,
+        opts: rpm_spec_profile::ResolveOptions<'_>,
     ) -> Result<rpm_spec_profile::Profile, rpm_spec_profile::ResolveError> {
         let section =
             rpm_spec_profile::ProfileSection::new(self.profile.clone(), self.profiles.clone());
-        rpm_spec_profile::resolve_profile(&section, base_dir, cli_override)
+        rpm_spec_profile::resolve_profile(&section, base_dir, opts)
     }
 
     /// Resolve the configured severity for a lint by its kebab-case name,

@@ -521,6 +521,26 @@ profile-gating'а»).
 Test helper `make_test_profile(family, dist_tag, macros, rpmlib)` в
 `rules::util` — для unit-тестов profile-aware rules без bundled-профилей.
 
+## Phase 16 — CLI `--define` injection (✅ implemented)
+
+Добавлен повторяемый CLI-флаг `--define 'NAME VALUE'` (alias `-D`)
+для `lint`, `check` и всех `profile`-subcommand'ов
+(см. [doc/profile-aware-lints.md](profile-aware-lints.md) → секция «CLI
+defines layer»). CLI defines применяются как высший layer профиля
+поверх bundled showrc и TOML overrides; правила, читающие
+`profile.macros`, видят их без изменений в самих правилах.
+
+**Кандидаты на пересмотр default severity** теперь, когда CLI-knob'ы
+видимы линтеру:
+
+| ID     | Текущий default | Возможно поднять до | Условие |
+|--------|-----------------|---------------------|---------|
+| RPM117 | `allow`         | `warn`              | Если в проекте конвенция: `%define FLAG <default>` идёт парой с `rpmbuild --define FLAG <override>` — пользователь сообщает об этом через `--define`, и правило перестаёт быть false positive. |
+| RPM118 | `allow`         | `warn`              | То же — `%global X` как public knob для CLI инъекций. |
+
+Поднятие default — отдельный PR, требует survey'я реальных
+`%define`/`%global` паттернов в bundled-фикстурах.
+
 ## Maintenance rules
 
 - Новые правила получают **следующий свободный ID в своей сотне** (Packaging: 0xx, Correctness: 03x, Sections: 01x/02x/03x на конкретный диапазон, Style: 05x, Modernization: 06x).

@@ -23,6 +23,9 @@ pub struct MacrosOpts {
     /// Accepts `builtin`, `showrc`, `override`.
     #[arg(long, value_name = "SRC")]
     pub source: Option<SourceFilter>,
+
+    #[command(flatten)]
+    pub defines: crate::app::MacroDefinesArg,
 }
 
 /// Provenance-source filter for `profile macros --source`. Mirrors

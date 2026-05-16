@@ -19,6 +19,9 @@ pub struct ShowOpts {
     /// only counts and a small selection are shown.
     #[arg(long)]
     pub full: bool,
+
+    #[command(flatten)]
+    pub defines: crate::app::MacroDefinesArg,
 }
 
 pub(super) fn render(out: &mut impl Write, profile: &Profile, full: bool) -> Result<()> {
@@ -57,6 +60,9 @@ pub(super) fn render(out: &mut impl Write, profile: &Profile, full: bool) -> Res
                 for f in fields {
                     writeln!(out, "      · {f}")?;
                 }
+            }
+            LayerInfo::CliDefine { names } => {
+                writeln!(out, "  - cli defines: {}", names.join(", "))?;
             }
             // LayerInfo is #[non_exhaustive]; render unknown variants
             // generically so an upgrade that adds a new layer doesn't

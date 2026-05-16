@@ -1559,3 +1559,434 @@ b
     assert_ne!(rhel, alt, "rhel and alt must produce different RPM12x sets");
     assert_ne!(alt, suse, "alt and sles must produce different RPM12x sets");
 }
+
+// =====================================================================
+// CLI --define / -D coverage (rpmbuild-style ad-hoc macro injection)
+// =====================================================================
+
+/// `profile macro NAME PROFILE -D 'NAME BODY'` must surface the
+/// user-supplied value as if it were always defined in the profile,
+/// with `[override]` provenance. End-to-end sanity that the flag wires
+/// argv → ResolveOptions → Profile::macros → CLI lookup output.
+#[test]
+fn define_visible_via_profile_macro_lookup() {
+    // `generic` profile is empty, so `make_build` is genuinely
+    // undefined there; the CLI define must be the only source.
+    let (code, stdout, stderr) = run(
+        &[
+            "profile",
+            "macro",
+            "-D",
+            "make_build my-make-call",
+            "make_build",
+            "generic",
+        ],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stdout.contains("make_build = my-make-call"),
+        "stdout missing injected value: {stdout}"
+    );
+    assert!(
+        stdout.contains("[override]"),
+        "stdout missing override provenance: {stdout}"
+    );
+}
+
+/// `--define` (long form) and `-D` (short form) must be interchangeable
+/// — pins the rpmbuild-compatible alias so a future clap reorganisation
+/// can't silently drop one.
+#[test]
+fn define_short_and_long_forms_equivalent() {
+    let long = run(
+        &["profile", "macro", "--define", "x 42", "x", "generic"],
+        None,
+    );
+    let short = run(&["profile", "macro", "-D", "x 42", "x", "generic"], None);
+    assert_eq!(long.0, 0, "long form exited non-zero, stderr={}", long.2);
+    assert_eq!(short.0, 0, "short form exited non-zero, stderr={}", short.2);
+    assert_eq!(
+        long.1, short.1,
+        "long and short forms produced different stdout"
+    );
+}
+
+/// Multiple `-D` flags must all apply and be recorded as a single
+/// `cli defines:` layer in `profile show`, preserving CLI order.
+#[test]
+fn define_multiple_accumulate_into_one_layer() {
+    let (code, stdout, stderr) = run(
+        &[
+            "profile", "show", "generic", "-D", "first 1", "-D", "second 2", "-D", "third 3",
+        ],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    // The layer line must list every name in CLI order.
+    assert!(
+        stdout.contains("cli defines: first, second, third"),
+        "layer line missing or out of order in:\n{stdout}"
+    );
+    // And the macros must be in the registry.
+    assert!(
+        stdout.contains("macros:   3"),
+        "macro count wrong: {stdout}"
+    );
+}
+
+/// CLI `--define` is the last-applied layer; it must beat any
+/// `[profiles.X.macros]` value supplied via `.rpmspec.toml`.
+#[test]
+fn define_overrides_config_macro() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cfg_path = tmp.path().join(".rpmspec.toml");
+    std::fs::write(
+        &cfg_path,
+        r#"
+profile = "X"
+
+[profiles.X]
+extends = "generic"
+
+[profiles.X.macros]
+flavour = "config-value"
+"#,
+    )
+    .expect("write config");
+
+    let cfg_arg = cfg_path.to_str().unwrap();
+
+    // Sanity: without --define, the config value wins.
+    let baseline = run(
+        &["profile", "--config", cfg_arg, "macro", "flavour", "X"],
+        None,
+    );
+    assert_eq!(baseline.0, 0, "baseline stderr={}", baseline.2);
+    assert!(
+        baseline.1.contains("flavour = config-value"),
+        "baseline missing config value: {}",
+        baseline.1
+    );
+
+    // With --define, CLI wins.
+    let overridden = run(
+        &[
+            "profile",
+            "--config",
+            cfg_arg,
+            "macro",
+            "-D",
+            "flavour cli-value",
+            "flavour",
+            "X",
+        ],
+        None,
+    );
+    assert_eq!(overridden.0, 0, "overridden stderr={}", overridden.2);
+    assert!(
+        overridden.1.contains("flavour = cli-value"),
+        "CLI define did not override config: {}",
+        overridden.1
+    );
+}
+
+/// Malformed `--define` arguments must fail-fast with a non-zero exit
+/// code and a stderr message that identifies the offending arg. We
+/// cover the three documented failure modes (empty arg, missing
+/// value, invalid name) and assert on the exit code + that stderr
+/// names what went wrong.
+#[test]
+fn define_malformed_exits_with_clear_error() {
+    let spec = write_temp(CLEAN_SPEC);
+    let path = spec.path().to_str().unwrap();
+
+    // Empty arg.
+    let (code, _, stderr) = run(&["lint", "-D", "", path], None);
+    assert_ne!(code, 0, "empty --define should fail; stderr={stderr}");
+    assert!(
+        stderr.to_lowercase().contains("empty"),
+        "stderr should mention `empty`: {stderr}"
+    );
+
+    // No separator → no value.
+    let (code, _, stderr) = run(&["lint", "-D", "loneword", path], None);
+    assert_ne!(code, 0, "name-only --define should fail; stderr={stderr}");
+    assert!(
+        stderr.contains("loneword"),
+        "stderr should name the offending arg: {stderr}"
+    );
+    assert!(
+        stderr.to_lowercase().contains("missing value"),
+        "stderr should mention `missing value`: {stderr}"
+    );
+
+    // Name contains `%` — invalid.
+    let (code, _, stderr) = run(&["lint", "-D", "%bad value", path], None);
+    assert_ne!(code, 0, "%-prefixed name should fail; stderr={stderr}");
+    assert!(
+        stderr.contains("%bad"),
+        "stderr should name the offending name: {stderr}"
+    );
+    assert!(
+        stderr.to_lowercase().contains("invalid"),
+        "stderr should mention `invalid`: {stderr}"
+    );
+}
+
+/// End-to-end demo that `--define` actually flows into the lint pass
+/// and changes diagnostic output. Uses RPM050 hardcoded-paths whose
+/// `set_profile` rebuilds its path-prefix table from `profile.macros`
+/// via `MacroRegistry::expand_to_literal` — so defining `_libdir`
+/// inserts a new `<literal-path> → %{_libdir}` row that hadn't been
+/// in the fallback table.
+///
+/// Baseline (no `--define`): the bespoke `/opt/myorg/lib` path isn't
+/// in `FALLBACK_PATH_TABLE`, RPM050 doesn't flag it.
+/// With `-D '_libdir /opt/myorg/lib'`: same path is now mapped, RPM050
+/// flags it and suggests `%{_libdir}`.
+#[test]
+fn define_extends_hardcoded_paths_table_at_lint_time() {
+    // Reference the bespoke path from a place RPM050 actually scans —
+    // %install body. Path appears at the start of a token so the
+    // boundary check matches.
+    let spec_src = "\
+Name:           x
+Version:        1
+Release:        1
+License:        MIT
+Summary:        s
+URL:            https://e.org
+
+%description
+b
+
+%install
+mkdir -p %{buildroot}/opt/myorg/lib
+cp libfoo.so /opt/myorg/lib/
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1-1
+- init
+";
+    let spec = write_temp(spec_src);
+    let path = spec.path().to_str().unwrap();
+
+    let ids_for = |extra: &[&str]| -> std::collections::BTreeSet<String> {
+        let mut args = vec!["lint", "--format", "json", "--profile", "generic"];
+        args.extend_from_slice(extra);
+        args.push(path);
+        let (_code, stdout, stderr) = run(&args, None);
+        let v: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout={stdout}\nstderr={stderr}"));
+        let mut ids = std::collections::BTreeSet::new();
+        for file in v["files"].as_array().into_iter().flatten() {
+            for diag in file["diagnostics"].as_array().into_iter().flatten() {
+                if let Some(id) = diag["lint_id"].as_str() {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+        ids
+    };
+
+    let baseline = ids_for(&[]);
+    let with_def = ids_for(&["-D", "_libdir /opt/myorg/lib"]);
+
+    // RPM050 must NOT appear in the baseline — the bespoke path isn't
+    // in the fallback table.
+    assert!(
+        !baseline.contains("RPM050"),
+        "baseline should not flag /opt/myorg/lib without a matching macro; got {baseline:?}"
+    );
+    // …but MUST appear once the define teaches the rule about the path.
+    assert!(
+        with_def.contains("RPM050"),
+        "--define '_libdir /opt/myorg/lib' should make RPM050 flag the path; got {with_def:?}"
+    );
+}
+
+/// Compose `--define` with the existing family-gating mechanism — pins
+/// that injecting a CLI macro doesn't perturb the per-distro diagnostic
+/// sets that `cross_profile_lint_counts_differ_by_family` already
+/// covers. Concretely: adding `-D 'dist .fc40'` to rhel/alt/sles must
+/// preserve each profile's RPM127/128/129 polarity (CLI macros do NOT
+/// override `profile.identity.dist_tag` — that's a deliberate
+/// contract, since RPM127's Fedora-40 gate reads identity, not macros).
+#[test]
+fn define_composes_with_family_gating() {
+    let spec_src = "\
+Name:           compose-test
+Version:        1
+Release:        1
+License:        GPLv2+
+Summary:        s
+URL:            https://e.org
+
+%bcond_with python3
+
+%description
+b
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1-1
+- init
+";
+    let spec = write_temp(spec_src);
+    let path = spec.path().to_str().unwrap();
+
+    let ids_for = |profile: &str, extra: &[&str]| -> std::collections::BTreeSet<String> {
+        let mut args = vec!["lint", "--format", "json", "--profile", profile];
+        args.extend_from_slice(extra);
+        args.push(path);
+        let (_code, stdout, stderr) = run(&args, None);
+        let v: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout={stdout}\nstderr={stderr}"));
+        let mut ids = std::collections::BTreeSet::new();
+        for file in v["files"].as_array().into_iter().flatten() {
+            for diag in file["diagnostics"].as_array().into_iter().flatten() {
+                if let Some(id) = diag["lint_id"].as_str() {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+        ids
+    };
+
+    // Baselines from the original cross-profile test.
+    let rhel_base = ids_for("rhel-9-x86_64", &[]);
+    let alt_base = ids_for("altlinux-10-x86_64", &[]);
+    let suse_base = ids_for("sles-15-x86_64", &[]);
+
+    // Adding an arbitrary CLI define must leave the polarity intact.
+    let rhel_def = ids_for("rhel-9-x86_64", &["-D", "dist .fc40"]);
+    let alt_def = ids_for("altlinux-10-x86_64", &["-D", "dist .fc40"]);
+    let suse_def = ids_for("sles-15-x86_64", &["-D", "dist .fc40"]);
+
+    // RPM127/128/129 polarity unchanged across the trio.
+    for id in ["RPM127", "RPM128", "RPM129"] {
+        assert_eq!(
+            rhel_base.contains(id),
+            rhel_def.contains(id),
+            "rhel: {id} polarity should be unaffected by --define"
+        );
+        assert_eq!(
+            alt_base.contains(id),
+            alt_def.contains(id),
+            "alt: {id} polarity should be unaffected by --define"
+        );
+        assert_eq!(
+            suse_base.contains(id),
+            suse_def.contains(id),
+            "sles: {id} polarity should be unaffected by --define"
+        );
+    }
+}
+
+/// `profile macro NAME P -D 'NAME new'` must render two lines: the
+/// winning value and a `  shadows: ...` line showing what the define
+/// overwrote. Lets users debug "what did my define just replace?"
+/// without re-running `profile macro` twice (with and without `-D`).
+#[test]
+fn define_shows_shadowed_value_in_profile_macro_output() {
+    // `_vendor` is well-defined in `rhel-9-x86_64`'s bundled showrc
+    // (literal "redhat"). Overriding it via -D produces a visible
+    // shadow line referencing the original.
+    let (code, stdout, stderr) = run(
+        &[
+            "profile",
+            "macro",
+            "-D",
+            "_vendor acme-corp",
+            "_vendor",
+            "rhel-9-x86_64",
+        ],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    // Winning value first, with override provenance.
+    assert!(
+        stdout.contains("_vendor = acme-corp  [override]"),
+        "missing winning line: {stdout}"
+    );
+    // Shadow line: original showrc value with its showrc provenance.
+    assert!(
+        stdout.contains("  shadows: _vendor = redhat"),
+        "missing shadow line: {stdout}"
+    );
+    assert!(
+        stdout.contains("[showrc:"),
+        "shadow line should carry original showrc provenance: {stdout}"
+    );
+}
+
+/// When the user's `-D` value matches the baseline byte-for-byte (a
+/// no-op override) the shadow line must be suppressed — printing
+/// `shadows: NAME = same-value` would just be noise.
+#[test]
+fn define_with_identical_value_suppresses_shadow_line() {
+    let (code, stdout, stderr) = run(
+        &[
+            "profile",
+            "macro",
+            "-D",
+            "_vendor redhat",
+            "_vendor",
+            "rhel-9-x86_64",
+        ],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(stdout.contains("_vendor = redhat"), "stdout={stdout}");
+    assert!(
+        !stdout.contains("shadows:"),
+        "identity override should NOT print a shadow line: {stdout}"
+    );
+}
+
+/// `-D` adding a brand-new macro (one the profile didn't define at
+/// all) must NOT print a shadow line — there's nothing to shadow.
+#[test]
+fn define_adding_new_macro_has_no_shadow() {
+    let (code, stdout, stderr) = run(
+        &[
+            "profile",
+            "macro",
+            "-D",
+            "brand_new_macro hello",
+            "brand_new_macro",
+            "rhel-9-x86_64",
+        ],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stdout.contains("brand_new_macro = hello"),
+        "stdout={stdout}"
+    );
+    assert!(
+        !stdout.contains("shadows:"),
+        "macro that didn't exist before -D should have no shadow: {stdout}"
+    );
+}
+
+/// `profile show -D 'NAME VALUE'` must (a) include `cli defines: NAME`
+/// in the layer trail, and (b) bump the macros count by one — both are
+/// visible to users debugging "what does my define actually do?".
+#[test]
+fn define_visible_in_profile_show_layer_trail() {
+    let (code, stdout, stderr) = run(
+        &["profile", "show", "generic", "-D", "_topdir /opt/work"],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stdout.contains("cli defines: _topdir"),
+        "layer line missing in:\n{stdout}"
+    );
+    // Generic ships with 0 macros; the CLI define adds exactly one.
+    assert!(
+        stdout.contains("macros:   1"),
+        "macro count should be 1: {stdout}"
+    );
+}

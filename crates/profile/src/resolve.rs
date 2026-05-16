@@ -24,8 +24,9 @@ use crate::autodetect;
 use crate::builtin::{self, BuiltinSnapshot, DEFAULT_BUILTIN};
 use crate::config_layer::{ProfileEntry, ProfileIdentityOverride, ProfileSection};
 use crate::merge::{IdentityPatch, ProfilePatch};
+use crate::overrides::{self, DefineParseError};
 use crate::showrc;
-use crate::types::Profile;
+use crate::types::{LayerInfo, Profile};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
@@ -47,25 +48,95 @@ pub enum ResolveError {
         #[source]
         source: std::io::Error,
     },
+    /// A `--define` argument failed to parse. Carries the offending
+    /// argument and the precise parse failure. Distinct prefix in the
+    /// `Display` impl so CLI users immediately see it's about argv,
+    /// not a `.rpmspec.toml` or showrc problem.
+    #[error("invalid --define argument: {0}")]
+    BadDefine(#[from] DefineParseError),
+}
+
+/// Caller-supplied knobs for [`resolve`]. Carries CLI-time inputs that
+/// don't belong in [`ProfileSection`] (which models the on-disk
+/// `.rpmspec.toml`).
+///
+/// Construction is **builder-only** from outside the crate: fields are
+/// `pub(crate)` so a future extension (e.g. `--undefine`) can land
+/// without forcing external callers to update struct literals. Use the
+/// associated constructors:
+///
+/// * [`Self::default()`] — no CLI inputs.
+/// * [`Self::with_override`] — set `--profile`.
+/// * [`Self::with_defines`] — set raw `--define` args (chainable).
+#[derive(Debug, Default)]
+#[non_exhaustive]
+pub struct ResolveOptions<'a> {
+    /// Value of `--profile <name>` from the command line; wins over the
+    /// config's `profile = …` key. `None` means "use config (or
+    /// `generic` fallback)".
+    pub(crate) cli_override: Option<&'a str>,
+    /// Raw `--define NAME VALUE` arguments in CLI order. Parsed by
+    /// [`crate::overrides::parse_define`] and applied as the final
+    /// layer — wins over the showrc dump and over
+    /// `[profiles.X.macros]`. A parse failure aborts resolution
+    /// entirely; a partially-applied profile never escapes.
+    pub(crate) cli_defines: &'a [String],
+}
+
+impl<'a> ResolveOptions<'a> {
+    /// Convenience constructor for the common "only `--profile`"
+    /// shape. Lets call sites that don't care about defines avoid the
+    /// struct literal: `ResolveOptions::with_override(Some("rhel-9"))`.
+    ///
+    /// Returns a fresh `Self` rather than `&mut Self` so callers can
+    /// chain [`Self::with_defines`] without naming the intermediate
+    /// binding. `#[non_exhaustive]` on the struct makes a builder
+    /// pattern necessary for external crates — `crates/cli` is one
+    /// such crate.
+    pub fn with_override(cli_override: Option<&'a str>) -> Self {
+        Self {
+            cli_override,
+            ..Self::default()
+        }
+    }
+
+    /// Chain a slice of raw `--define` arguments onto the options.
+    /// The slice borrow lives for the same `'a` lifetime as the rest
+    /// of the options so callers can keep their argv-owned vectors
+    /// on the stack.
+    pub fn with_defines(mut self, defines: &'a [String]) -> Self {
+        self.cli_defines = defines;
+        self
+    }
 }
 
 /// Resolve the active profile.
 ///
-/// `cli_override` is the value of `--profile <name>` if the user passed
-/// one; it wins over the config's `profile` key. `base_dir` is the
-/// directory of `.rpmspec.toml` — `showrc-file` paths are resolved
-/// relative to it.
+/// `opts` carries CLI-time inputs: `--profile <name>` override and any
+/// `--define NAME VALUE` arguments (see [`ResolveOptions`]). `base_dir`
+/// is the directory of `.rpmspec.toml` — `showrc-file` paths are
+/// resolved relative to it.
+///
+/// CLI defines are parsed up-front: if any raw argument is malformed
+/// the whole resolve aborts with [`ResolveError::BadDefine`] before any
+/// distribution layers are even loaded, so a partially-built profile
+/// can't escape.
 pub fn resolve(
     section: &ProfileSection,
     base_dir: &Path,
-    cli_override: Option<&str>,
+    opts: ResolveOptions<'_>,
 ) -> Result<Profile, ResolveError> {
-    let active = active_name(section, cli_override);
+    // Parse `--define` first — failing here doesn't waste a showrc
+    // parse, and the error carries the offending raw arg verbatim.
+    let cli_defines = overrides::parse_all(opts.cli_defines)?;
+
+    let active = active_name(section, opts.cli_override);
     let _span = tracing::info_span!(
         "resolve_profile",
         active,
         base_dir = %base_dir.display(),
-        cli_override
+        cli_override = opts.cli_override,
+        cli_defines = cli_defines.len(),
     )
     .entered();
     let mut profile = Profile::default();
@@ -78,7 +149,7 @@ pub fn resolve(
         // Only fail with UnknownProfile when the user actively asked for
         // something that doesn't exist. A *missing* `profile = …` key
         // resolves to `generic`, which is always present.
-        if cli_override.is_some() || section.profile.is_some() {
+        if opts.cli_override.is_some() || section.profile.is_some() {
             return Err(ResolveError::UnknownProfile {
                 name: active.to_string(),
             });
@@ -87,10 +158,29 @@ pub fn resolve(
     }
 
     // The human-readable name defaults to the active key unless an
-    // earlier layer already filled it in.
+    // earlier layer already filled it in. Done *before* CLI defines so
+    // a packager can override `_vendor` (etc.) without touching the
+    // profile name.
     if profile.identity.name.is_empty() {
         profile.identity.name = active.to_string();
     }
+
+    // Layer 5 — CLI defines. Applied last so they outrank both the
+    // showrc dump and `[profiles.X.macros]`.
+    if !cli_defines.is_empty() {
+        let names: Vec<String> = cli_defines.iter().map(|d| d.name.clone()).collect();
+        let macros: Vec<(String, _)> = cli_defines.into_iter().map(|d| (d.name, d.entry)).collect();
+        tracing::info!(
+            count = macros.len(),
+            "applying CLI --define layer (overrides showrc and TOML overrides)"
+        );
+        profile.apply(ProfilePatch {
+            macros,
+            layer: Some(LayerInfo::CliDefine { names }),
+            ..Default::default()
+        });
+    }
+
     Ok(profile)
 }
 
@@ -276,7 +366,7 @@ mod tests {
 
     #[test]
     fn no_config_resolves_to_generic() {
-        let p = resolve(&empty_section(), Path::new("."), None).unwrap();
+        let p = resolve(&empty_section(), Path::new("."), ResolveOptions::default()).unwrap();
         // Builtin `generic` sets family = Generic explicitly.
         assert_eq!(p.identity.family, Some(Family::Generic));
         assert_eq!(p.identity.name, "generic");
@@ -304,14 +394,24 @@ mod tests {
                 ..Default::default()
             },
         );
-        let p = resolve(&section, Path::new("."), Some("Y")).unwrap();
+        let p = resolve(
+            &section,
+            Path::new("."),
+            ResolveOptions::with_override(Some("Y")),
+        )
+        .unwrap();
         assert_eq!(p.identity.name, "Y");
     }
 
     #[test]
     fn cli_override_unknown_errors() {
         let section = empty_section();
-        let err = resolve(&section, Path::new("."), Some("does-not-exist")).unwrap_err();
+        let err = resolve(
+            &section,
+            Path::new("."),
+            ResolveOptions::with_override(Some("does-not-exist")),
+        )
+        .unwrap_err();
         assert!(matches!(err, ResolveError::UnknownProfile { .. }));
     }
 
@@ -327,7 +427,7 @@ mod tests {
             },
         );
         let base = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let p = resolve(&section, base, None).unwrap();
+        let p = resolve(&section, base, ResolveOptions::default()).unwrap();
         // Fixture is rhel7 — detects rhel family, redhat vendor, .el7 tag.
         assert_eq!(p.identity.family, Some(Family::Rhel));
         assert_eq!(p.identity.vendor.as_deref(), Some("redhat"));
@@ -350,7 +450,7 @@ mod tests {
         section.profiles.insert("X".into(), entry);
 
         let base = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let p = resolve(&section, base, None).unwrap();
+        let p = resolve(&section, base, ResolveOptions::default()).unwrap();
         assert_eq!(p.identity.family, Some(Family::Fedora)); // user wins
         assert_eq!(p.identity.vendor.as_deref(), Some("acme"));
         // dist_tag wasn't overridden → still auto-detected.
@@ -370,7 +470,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let err = resolve(&section, Path::new("."), None).unwrap_err();
+        let err = resolve(&section, Path::new("."), ResolveOptions::default()).unwrap_err();
         match err {
             ResolveError::ShowrcIo { path, .. } => {
                 assert!(path.ends_with("does-not-exist.txt"));
@@ -390,7 +490,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let err = resolve(&section, Path::new("."), None).unwrap_err();
+        let err = resolve(&section, Path::new("."), ResolveOptions::default()).unwrap_err();
         // `apply_entry` wraps the bare `UnknownBuiltin` into a contextual
         // error that names both the offending entry and its `extends` target.
         match err {
@@ -416,12 +516,125 @@ mod tests {
         section.profile = Some("X".into());
         section.profiles.insert("X".into(), entry);
 
-        let p = resolve(&section, Path::new("."), None).unwrap();
+        let p = resolve(&section, Path::new("."), ResolveOptions::default()).unwrap();
         assert_eq!(p.identity.family, Some(Family::Alt));
         assert_eq!(p.identity.vendor.as_deref(), Some("acme"));
         // No showrc → macros stay empty (apart from anything the
         // builtin contributed, which is nothing for `generic`).
         assert!(p.macros.is_empty());
+    }
+
+    #[test]
+    fn cli_defines_become_last_layer_with_cli_define_variant() {
+        // Pure CLI-define case: one --define, no profile-side macros.
+        // Asserts that (a) the macro lands in the registry with
+        // `Provenance::Override`, (b) a `LayerInfo::CliDefine` is
+        // recorded as the *final* layer (so `profile show` can label
+        // it distinctly), and (c) the layer names match CLI order.
+        let defines = vec!["with_python 1".to_string(), "_vendor acme".to_string()];
+        let opts = ResolveOptions {
+            cli_defines: &defines,
+            ..Default::default()
+        };
+        let p = resolve(&empty_section(), Path::new("."), opts).unwrap();
+        let py = p.macros.get("with_python").expect("with_python defined");
+        assert_eq!(py.as_literal(), Some("1"));
+        assert!(matches!(py.provenance, crate::types::Provenance::Override));
+        let v = p.macros.get("_vendor").expect("_vendor defined");
+        assert_eq!(v.as_literal(), Some("acme"));
+
+        match p.layers.last().expect("at least one layer") {
+            LayerInfo::CliDefine { names } => {
+                assert_eq!(
+                    names,
+                    &vec!["with_python".to_string(), "_vendor".to_string()],
+                    "names must mirror CLI order"
+                );
+            }
+            other => panic!("expected CliDefine as last layer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_defines_win_over_config_macros() {
+        // Same key set in `[profiles.X.macros]` and via `--define`.
+        // CLI must win because it's applied as a later layer.
+        let mut section = empty_section();
+        let mut entry = ProfileEntry::default();
+        entry.macros.insert(
+            "_libdir".into(),
+            crate::config_layer::MacroOverride::Literal("/usr/lib64".into()),
+        );
+        section.profile = Some("X".into());
+        section.profiles.insert("X".into(), entry);
+
+        let defines = vec!["_libdir /opt/local/lib".to_string()];
+        let opts = ResolveOptions {
+            cli_defines: &defines,
+            ..Default::default()
+        };
+        let p = resolve(&section, Path::new("."), opts).unwrap();
+        let v = p.macros.get("_libdir").unwrap();
+        assert_eq!(v.as_literal(), Some("/opt/local/lib"));
+    }
+
+    #[test]
+    fn cli_defines_override_showrc_dist() {
+        // Real-world case: rhel7 fixture defines `dist = .el7`.
+        // `--define 'dist .fc40'` must overwrite that value so
+        // downstream lints (e.g. RPM127 Fedora-40 gate) see the
+        // user-supplied tag.
+        let mut section = empty_section();
+        section.profile = Some("rhel-7".into());
+        section.profiles.insert(
+            "rhel-7".into(),
+            ProfileEntry {
+                showrc_file: Some(PathBuf::from("tests/fixtures/rhel7-showrc.txt")),
+                ..Default::default()
+            },
+        );
+        let base = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let defines = vec!["dist .fc40".to_string()];
+        let opts = ResolveOptions {
+            cli_defines: &defines,
+            ..Default::default()
+        };
+        let p = resolve(&section, base, opts).unwrap();
+        let dist = p.macros.get("dist").unwrap();
+        assert_eq!(dist.as_literal(), Some(".fc40"));
+        assert!(matches!(
+            dist.provenance,
+            crate::types::Provenance::Override
+        ));
+    }
+
+    #[test]
+    fn cli_define_parse_error_aborts_resolve() {
+        // Malformed `--define` must surface as `BadDefine` *before*
+        // any layer is applied — the returned error type is the
+        // contract for the CLI to print a useful message.
+        let defines = vec!["%bad value".to_string()];
+        let opts = ResolveOptions {
+            cli_defines: &defines,
+            ..Default::default()
+        };
+        let err = resolve(&empty_section(), Path::new("."), opts).unwrap_err();
+        assert!(matches!(err, ResolveError::BadDefine(_)));
+    }
+
+    #[test]
+    fn empty_cli_defines_record_no_layer() {
+        // Sanity: when the CLI passes an empty defines slice, no
+        // `CliDefine` layer is appended (avoids a confusing empty
+        // entry in `profile show` output).
+        let opts = ResolveOptions::default();
+        let p = resolve(&empty_section(), Path::new("."), opts).unwrap();
+        for layer in &p.layers {
+            assert!(
+                !matches!(layer, LayerInfo::CliDefine { .. }),
+                "no CliDefine layer when no defines passed; got {layer:?}"
+            );
+        }
     }
 
     #[test]
@@ -439,7 +652,7 @@ mod tests {
         section.profiles.insert("X".into(), entry);
 
         let base = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let p = resolve(&section, base, None).unwrap();
+        let p = resolve(&section, base, ResolveOptions::default()).unwrap();
         let v = p.macros.get("_vendor").unwrap();
         assert_eq!(v.as_literal(), Some("acme"));
         assert!(matches!(v.provenance, crate::types::Provenance::Override));

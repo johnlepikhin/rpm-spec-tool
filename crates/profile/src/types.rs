@@ -293,6 +293,31 @@ pub enum MacroValue {
     Builtin,
 }
 
+impl MacroValue {
+    /// Build a [`MacroValue`] from a user-supplied body (CLI `--define`
+    /// or `[profiles.X.macros]` short form). A body containing `%` is
+    /// treated as [`MacroValue::Raw`] (deferred expansion); otherwise
+    /// it becomes [`MacroValue::Literal`]. `multiline` is always
+    /// `false` for CLI-sourced bodies — argv can't carry newlines —
+    /// and config callers that need it should construct `Raw` directly.
+    ///
+    /// Centralised here (rather than duplicated in `overrides.rs` and
+    /// `config_layer.rs`) so the literal/raw heuristic stays in one
+    /// place. A future tightening (e.g. recognise `%%` as a literal
+    /// percent) only needs to touch this function.
+    pub fn from_user_body(body: impl Into<String>) -> Self {
+        let body = body.into();
+        if body.contains('%') {
+            MacroValue::Raw {
+                body,
+                multiline: false,
+            }
+        } else {
+            MacroValue::Literal(body)
+        }
+    }
+}
+
 /// Body-level equality. The `multiline` flag on `Raw` is bookkeeping
 /// for the renderer (it tells `profile show --full` whether to print
 /// `<multiline N chars>` vs the body inline) and is intentionally not
@@ -423,6 +448,18 @@ pub enum LayerInfo {
     Override {
         fields: Vec<String>,
     },
+    /// `--define NAME VALUE` from the CLI (or any future caller using
+    /// [`crate::resolve::ResolveOptions::cli_defines`]). Distinct from
+    /// [`LayerInfo::Override`] so `profile show` can label the layer
+    /// "cli defines: NAMES" — the macros all share `Provenance::Override`
+    /// but their *origin* is the command line, not a `.rpmspec.toml`
+    /// entry the user can `grep` for.
+    CliDefine {
+        /// Names of the macros injected on this layer, in CLI order.
+        /// Stored at layer granularity rather than per-macro because all
+        /// defines from one resolve form a single conceptual "CLI batch".
+        names: Vec<String>,
+    },
 }
 
 #[cfg(test)]
@@ -533,6 +570,47 @@ mod tests {
         };
         assert_ne!(lit, raw);
         assert_ne!(MacroValue::Builtin, lit);
+    }
+
+    #[test]
+    fn from_user_body_plain_string_becomes_literal() {
+        assert_eq!(
+            MacroValue::from_user_body("/usr/lib64"),
+            MacroValue::Literal("/usr/lib64".into())
+        );
+    }
+
+    #[test]
+    fn from_user_body_with_percent_ref_becomes_raw() {
+        let v = MacroValue::from_user_body("%{_prefix}/lib");
+        match v {
+            MacroValue::Raw { body, multiline } => {
+                assert_eq!(body, "%{_prefix}/lib");
+                assert!(!multiline, "CLI/argv bodies are always single-line");
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_user_body_empty_string_becomes_literal() {
+        // Empty body is technically valid (rpmbuild accepts `-D 'foo '`).
+        // The linter rejects it at parse time, but the helper itself
+        // doesn't enforce that — it stays a pure value-classifier.
+        assert_eq!(
+            MacroValue::from_user_body(""),
+            MacroValue::Literal(String::new())
+        );
+    }
+
+    #[test]
+    fn from_user_body_percent_anywhere_triggers_raw() {
+        // Any `%` — not just `%{` — flips to Raw, because rpm macros can
+        // use the bare `%name` form. Cheaper than parsing for refs, and
+        // pessimistic-correct: a body without refs that happens to
+        // contain `%` (e.g. `100%`) just goes through the Raw renderer.
+        let v = MacroValue::from_user_body("100% pure");
+        assert!(matches!(v, MacroValue::Raw { .. }));
     }
 
     #[test]

@@ -193,3 +193,141 @@ pub fn make_test_profile(
 
 Заменяет ручную мутацию `Profile::default()` и keeps тесты hermetic
 (никаких bundled-профилей в unit-тестах).
+
+## Phase 16 — Breaking change для embed-консьюмеров
+
+`Config::resolve_profile(base_dir, cli_override)` сменила сигнатуру:
+
+```diff
+- pub fn resolve_profile(&self, base_dir: &Path, cli_override: Option<&str>) -> ...
++ pub fn resolve_profile(&self, base_dir: &Path, opts: ResolveOptions<'_>) -> ...
+```
+
+То же для функции `rpm_spec_profile::resolve_profile`. Миграция:
+
+```diff
+- config.resolve_profile(&base_dir, Some("rhel-9-x86_64"))
++ config.resolve_profile(&base_dir, ResolveOptions::with_override(Some("rhel-9-x86_64")))
+
+- config.resolve_profile(&base_dir, None)
++ config.resolve_profile(&base_dir, ResolveOptions::default())
+```
+
+Для inject'а CLI defines добавляется `.with_defines(&raw_args)`:
+
+```rust
+config.resolve_profile(
+    &base_dir,
+    ResolveOptions::with_override(self.profile.as_deref())
+        .with_defines(&self.defines.raw),
+)
+```
+
+`ResolveOptions` помечена `#[non_exhaustive]`, поля `pub(crate)` —
+конструировать только через builder-методы. Это оставляет место под
+будущие `--undefine` / `--force-distro` без дальнейших breaking changes.
+
+## CLI defines layer (`--define` / `-D`)
+
+Phase 16 добавляет повторяемый CLI-флаг `--define 'NAME VALUE'` (alias
+`-D`), зеркалящий `rpmbuild --define`. Цель — закрыть пробел, когда
+спеки полагаются на макросы, инжектируемые на этапе билда (`dist`,
+`with_X` / `without_X` для bcond-toggle'ов, `_topdir`, etc.). До Phase 16
+такие макросы были невидимы линтеру → правила, гейтящиеся на
+`profile.macros.contains_key()` (RPM120-122) или читающие
+`expand_to_literal` (RPM050), давали ложные срабатывания в CI-пайплайнах
+с `--define`.
+
+### Layer precedence (low → high)
+
+| Layer | Source | Provenance | LayerInfo |
+|---|---|---|---|
+| 1 | Bundled built-in TOML (`data/<name>.toml`) | `Builtin { profile }` | `LayerInfo::Builtin` |
+| 2 | Bundled showrc dump (`data/<name>.showrc`) | `Showrc { level }` | `LayerInfo::BuiltinShowrc` |
+| 3 | User `showrc-file = "..."` из `.rpmspec.toml` | `Showrc { level, path }` | `LayerInfo::Showrc` |
+| 4 | `[profiles.X.macros]` overrides | `Override` | `LayerInfo::Override { fields }` |
+| **5** | **CLI `--define`** | **`Override`** | **`LayerInfo::CliDefine { names }`** |
+
+CLI defines всегда выигрывают у предыдущих слоёв — это даёт packager'у
+последний шанс ad-hoc переопределить макрос без правки конфига.
+
+Provenance остаётся `Override` (тот же вариант, что у TOML overrides),
+а *источник* — CLI vs config — кодируется на уровне layer info. Это
+позволяет `profile show` отображать слой `cli defines: NAMES`
+отдельной строкой, при этом `profile macro NAME` и filter
+`profile macros --source override` продолжают работать без знания о
+новом источнике.
+
+### Syntax (rpmbuild-compatible)
+
+* `--define 'NAME VALUE'` или `-D 'NAME VALUE'` — единичный shell-arg
+  с именем и телом, разделёнными whitespace'ом.
+* Повторяемый: `-D 'a 1' -D 'b 2'`.
+* Trailing whitespace в значении сохраняется вербатим (rpmbuild делает
+  так же).
+* Тело с `%` парсится как `MacroValue::Raw` (deferred expansion), без
+  `%` — как `MacroValue::Literal`. Auto-detection в
+  `MacroValue::from_user_body` (`crates/profile/src/types.rs`) — единая
+  точка истины для CLI и TOML overrides.
+
+### Strict-валидация
+
+В отличие от rpmbuild (который молча принимает мусор), линтер
+fail-fast'ит на типовых CI-опечатках:
+
+* `--define ''` → `DefineParseError::EmptyArgument`
+* `--define 'foo'` (без value) → `DefineParseError::MissingValue`
+* `--define '%foo bar'`, `--define '{foo bar'` → `DefineParseError::InvalidName`
+
+Resolve-уровень wrap'ает эти ошибки в `ResolveError::BadDefine` и
+аборт'ит резолв до применения любого слоя — partial profile наружу
+не утекает.
+
+### Доступность в subcommands
+
+| Subcommand | `--define` |
+|---|---|
+| `lint` | ✅ inject macros + lint |
+| `check` | ✅ |
+| `profile show` | ✅ preview merged profile |
+| `profile macros` | ✅ preview registry |
+| `profile macro` | ✅ preview single macro across N profiles |
+| `profile common` | ✅ intersect after applying defines |
+| `profile list` | ❌ list is bundled-builtin only, --define irrelevant |
+| `format`, `pretty`, `ast` | ❌ printer/AST не зависят от macros |
+
+`ResolveOptions::with_override(...).with_defines(...)` — chain-builder,
+который flatten'ный clap-struct `MacroDefinesArg` пропускает через
+shared resolution path. `#[non_exhaustive]` оставляет место под
+будущие `--undefine`, `--force-distro`, etc.
+
+### Дебажные подсказки в `profile macro`
+
+`profile macro NAME PROFILE -D 'NAME new'` рендерит две строки: выигравшее
+значение и `  shadows: NAME = old  [showrc:-13]` (либо иной provenance)
+для затёртого. Implementation резолвит профиль дважды (с CLI defines и
+без) и сравнивает entries через `MacroEntry::is_equivalent` (opts + body,
+ignoring provenance). Если тела совпадают — shadow-строка подавляется
+(избегает тавтологии `shadows: NAME = same-value` для no-op override).
+Если макроса до `-D` не было — shadow тоже не печатается.
+
+Пример:
+
+```
+$ rpm-spec-tool profile macro _vendor rhel-9-x86_64 -D '_vendor acme-corp'
+_vendor = acme-corp  [override]
+  shadows: _vendor = redhat  [showrc:-13]
+```
+
+Полезно для debug'а CI-pipeline'ов, где `--define`-инъекции
+автоматизированы и не всегда очевидно, что именно они перетирают.
+
+### Что НЕ делает `--define`
+
+* Не меняет `profile.identity.*` (family / vendor / dist_tag).
+  Макрос `dist` будет injected (и используется expand'ом), но
+  `identity.dist_tag` — отдельное поле, заполняемое autodetect'ом.
+* Не поддерживает параметризованные макросы (`--define 'name(opts) body'`).
+  Use-case крайне редкий, реализация добавит сложности парсера.
+* Не поддерживает multi-line bodies (argv не несёт newlines). Для
+  таких случаев — `[profiles.X.macros]` с `multiline = true`.

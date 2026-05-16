@@ -25,10 +25,20 @@ pub struct Cmd {
     /// `profile = …` key in `.rpmspec.toml`.
     #[arg(long = "profile", value_name = "NAME")]
     pub profile: Option<String>,
+
+    #[command(flatten)]
+    pub defines: crate::app::MacroDefinesArg,
 }
 
 impl Cmd {
     pub fn run(self, color: ColorChoice) -> Result<ExitCode> {
+        // Same fail-fast contract as `lint`: bad `--define` shouldn't
+        // print one error per spec in a batch.
+        if let Err(e) = validate_cli_defines(&self.defines.raw) {
+            eprintln!("error: {e}");
+            return Ok(ExitCode::from(2));
+        }
+
         let sources = io::read_sources(&self.input.paths)?;
         let mut config_cache = cli_config::ConfigCache::new(self.input.config.clone());
 
@@ -51,18 +61,23 @@ impl Cmd {
             let profile = match profile_cache.get(&base_dir) {
                 Some(p) => Arc::clone(p),
                 None => {
-                    let resolved =
-                        match analyzer_cfg.resolve_profile(&base_dir, self.profile.as_deref()) {
-                            Ok(p) => Arc::new(p),
-                            Err(e) => {
-                                eprintln!(
-                                    "error: failed to resolve profile (base_dir={}): {e:#}",
-                                    base_dir.display()
-                                );
-                                any_io_error = true;
-                                continue;
-                            }
-                        };
+                    let resolved = match analyzer_cfg.resolve_profile(
+                        &base_dir,
+                        rpm_spec_analyzer::profile::ResolveOptions::with_override(
+                            self.profile.as_deref(),
+                        )
+                        .with_defines(&self.defines.raw),
+                    ) {
+                        Ok(p) => Arc::new(p),
+                        Err(e) => {
+                            eprintln!(
+                                "error: failed to resolve profile (base_dir={}): {e:#}",
+                                base_dir.display()
+                            );
+                            any_io_error = true;
+                            continue;
+                        }
+                    };
                     profile_cache.insert(base_dir.clone(), Arc::clone(&resolved));
                     resolved
                 }
@@ -94,4 +109,17 @@ impl Cmd {
             ExitCode::SUCCESS
         })
     }
+}
+
+/// Walk every raw `--define` argument through the parser, returning
+/// the first failure. See [`crate::commands::lint`] for the rationale —
+/// both subcommands fail-fast on bad CLI defines instead of repeating
+/// the same error N times across a batch.
+fn validate_cli_defines(
+    raws: &[String],
+) -> Result<(), rpm_spec_analyzer::profile::DefineParseError> {
+    for raw in raws {
+        rpm_spec_analyzer::profile::parse_define(raw)?;
+    }
+    Ok(())
 }
