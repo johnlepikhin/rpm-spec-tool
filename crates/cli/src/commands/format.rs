@@ -1,9 +1,11 @@
 //! `format` subcommand — pretty-print spec files using `rpm_spec::printer`.
 
+use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::{Args, value_parser};
+use codespan_reporting::term::termcolor::{Color, ColorSpec, StandardStream, WriteColor};
 use rpm_spec::printer::print_with;
 use rpm_spec_analyzer::parse;
 
@@ -11,6 +13,7 @@ use crate::app::ColorChoice;
 use crate::commands::{MAX_INDENT_LEVEL, printer_config};
 use crate::config as cli_config;
 use crate::io;
+use crate::output::resolve_color;
 
 /// Source of an active non-zero indent. Used to pick the right phrase
 /// in the cosmetic-only warning.
@@ -53,7 +56,7 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub fn run(self, _color: ColorChoice) -> Result<ExitCode> {
+    pub fn run(self, color: ColorChoice) -> Result<ExitCode> {
         let sources = io::read_sources(&self.input.paths)?;
         let mut config_cache = cli_config::ConfigCache::new(self.input.config.clone());
 
@@ -103,7 +106,7 @@ impl Cmd {
                     any_io_error = true;
                 }
             } else if self.diff {
-                emit_diff(&source.display_name(), &source.contents, &formatted);
+                emit_diff(&source.display_name(), &source.contents, &formatted, color)?;
             } else {
                 print!("{formatted}");
             }
@@ -127,17 +130,39 @@ fn emit_indent_warning(source: IndentSource) {
     eprintln!("warning: {label} {INDENT_COSMETIC_WARNING}");
 }
 
-fn emit_diff(name: &str, before: &str, after: &str) {
+fn emit_diff(name: &str, before: &str, after: &str, color: ColorChoice) -> std::io::Result<()> {
     use similar::{ChangeTag, TextDiff};
+
+    let stream = StandardStream::stdout(resolve_color(color, || std::io::stdout().is_terminal()));
+    let mut w = stream.lock();
+
+    let mut hdr = ColorSpec::new();
+    hdr.set_bold(true);
+    let mut minus = ColorSpec::new();
+    minus.set_fg(Some(Color::Red));
+    let mut plus = ColorSpec::new();
+    plus.set_fg(Some(Color::Green));
+
+    w.set_color(&hdr)?;
+    writeln!(w, "--- {name} (original)")?;
+    writeln!(w, "+++ {name} (formatted)")?;
+    w.reset()?;
+
     let diff = TextDiff::from_lines(before, after);
-    println!("--- {name} (original)");
-    println!("+++ {name} (formatted)");
     for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            ChangeTag::Equal => " ",
-            ChangeTag::Delete => "-",
-            ChangeTag::Insert => "+",
-        };
-        print!("{sign}{change}");
+        match change.tag() {
+            ChangeTag::Equal => write!(w, " {change}")?,
+            ChangeTag::Delete => {
+                w.set_color(&minus)?;
+                write!(w, "-{change}")?;
+                w.reset()?;
+            }
+            ChangeTag::Insert => {
+                w.set_color(&plus)?;
+                write!(w, "+{change}")?;
+                w.reset()?;
+            }
+        }
     }
+    Ok(())
 }
