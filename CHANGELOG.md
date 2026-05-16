@@ -13,6 +13,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [0.1.1] - 2026-05-16
+
+### Changed
+
+- Removed the `publish-crates` job from the release workflow. Releases
+  to crates.io are now done manually from a local checkout; the
+  GitHub Release with binary artifacts continues to ship on every
+  `vX.Y.Z` tag.
+
+### Fixed
+
+- Multiple `clippy::collapsible-if`, `clippy::collapsible-match`, and
+  `clippy::unnecessary-sort-by` errors flagged by rust-1.95's stricter
+  clippy across the analyzer rules and the profile auto-detect path.
+  Pure mechanical refactors (`if let` pairs collapsed to let-chains
+  via the 2024-edition syntax; `sort_by` replaced with
+  `sort_by_key(|e| Reverse(e.len()))`; nested `if`-in-match-arm
+  folded into guards). No semantic change; the full test suite
+  (1230 tests) is unaffected.
+- Replaced the manual `impl Default for ValidationMode` with a derive
+  + `#[default]` variant, satisfying `clippy::derivable-impls`.
+
 ## [0.1.0] - 2026-05-16
 
 ### Added
@@ -55,5 +77,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.tar.gz`, `.deb`, and `.rpm` artifacts (plus `SHA256SUMS`) for Linux
   `x86_64` and `aarch64` on each `vX.Y.Z` tag.
 
-[Unreleased]: https://github.com/johnlepikhin/rpm-spec-tool/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/johnlepikhin/rpm-spec-tool/compare/v0.1.1...HEAD
+[0.1.1]:      https://github.com/johnlepikhin/rpm-spec-tool/compare/v0.1.0...v0.1.1
 [0.1.0]:      https://github.com/johnlepikhin/rpm-spec-tool/releases/tag/v0.1.0

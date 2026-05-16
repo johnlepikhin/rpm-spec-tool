@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "rpm-spec-analyzer"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rpm-spec",
  "rpm-spec-profile",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "rpm-spec-profile"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror",
@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "rpm-spec-tool"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
