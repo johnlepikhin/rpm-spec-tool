@@ -3,6 +3,7 @@ pub mod check;
 pub mod completions;
 pub mod format;
 pub mod lint;
+pub mod lints;
 pub mod pretty;
 pub mod printer_config;
 pub mod profile;

@@ -3,8 +3,24 @@
 //! New rules: implement [`crate::Lint`] in `rules/<name>.rs`, expose a
 //! `new()` constructor, and add a line to [`builtin_lints`].
 
-use crate::lint::Lint;
+use crate::lint::{Lint, LintMetadata};
 use crate::rules;
+
+/// Collect the [`LintMetadata`] of every built-in lint without keeping
+/// the rule instances alive.
+///
+/// CLI commands like `lints` (which prints the rule reference) only need
+/// `id`/`name`/`description`/`default_severity`/`category` — they don't
+/// run the visitor. Returning `&'static LintMetadata` lets the caller
+/// freely group/filter/sort without owning the heavy `Box<dyn Lint>`
+/// trait objects.
+///
+/// Order follows [`builtin_lints`] (i.e. registration order). Callers
+/// that want stable, category-grouped output should sort the result
+/// themselves.
+pub fn builtin_lint_metadata() -> Vec<&'static LintMetadata> {
+    builtin_lints().iter().map(|l| l.metadata()).collect()
+}
 
 /// Construct fresh instances of every built-in rule. Each call returns a new
 /// `Vec` of independent `Box<dyn Lint>` objects; callers may then filter or

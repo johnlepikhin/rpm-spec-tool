@@ -2038,3 +2038,95 @@ fn define_visible_in_profile_show_layer_trail() {
         "macro count should be 1: {stdout}"
     );
 }
+
+// =====================================================================
+// `lints` subcommand
+// =====================================================================
+
+#[test]
+fn lints_text_lists_known_rule_with_description() {
+    let (code, stdout, stderr) = run(&["lints", "--color", "never"], None);
+    assert_eq!(code, 0, "stderr={stderr}");
+    // Category heading is present.
+    assert!(stdout.contains("Correctness ("), "stdout:\n{stdout}");
+    // A well-known rule shows up with its name and description.
+    assert!(
+        stdout.contains("RPM034"),
+        "expected RPM034 row in output:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("obsolete-without-provides"),
+        "expected rule name in output:\n{stdout}"
+    );
+}
+
+#[test]
+fn lints_markdown_renders_table_header_and_rows() {
+    let (code, stdout, stderr) = run(&["lints", "--format", "markdown"], None);
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(stdout.contains("# Lint rules reference"));
+    assert!(stdout.contains("## Correctness"));
+    assert!(stdout.contains("| ID | Name | Severity | Description |"));
+    // Each rule's name is wrapped in backticks in the Name column.
+    assert!(
+        stdout.contains("| `obsolete-without-provides` |"),
+        "expected RPM034 row in markdown:\n{stdout}"
+    );
+}
+
+#[test]
+fn lints_filter_by_severity_returns_only_deny_rules() {
+    let (code, stdout, stderr) = run(&["lints", "--severity", "deny", "--color", "never"], None);
+    assert_eq!(code, 0, "stderr={stderr}");
+    // Every emitted rule line must end with the `deny` severity label
+    // (followed by two spaces and the description).
+    let row_lines: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.trim_start().starts_with("RPM") || l.trim_start().starts_with("parse/"))
+        .collect();
+    assert!(!row_lines.is_empty(), "no rows in output:\n{stdout}");
+    for line in &row_lines {
+        assert!(
+            line.contains("deny"),
+            "expected deny severity on every row, got: {line}"
+        );
+        assert!(
+            !line.contains("warn") && !line.contains("allow"),
+            "row should not mention other severities: {line}"
+        );
+    }
+}
+
+#[test]
+fn lints_filter_by_category_packaging_only() {
+    let (code, stdout, stderr) = run(
+        &["lints", "--category", "packaging", "--color", "never"],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(stdout.contains("Packaging ("), "stdout:\n{stdout}");
+    // Other category headings must not appear.
+    assert!(!stdout.contains("Correctness ("), "stdout:\n{stdout}");
+    assert!(!stdout.contains("Style ("), "stdout:\n{stdout}");
+}
+
+#[test]
+fn lints_invalid_severity_value_exits_nonzero_with_clap_diag() {
+    // Pin the clap-validated rejection of unknown severity values.
+    // Replaces an earlier test that hedged on "empty filter combo"
+    // and would self-disable as soon as the registry grew rules into
+    // the chosen category × severity bucket.
+    let (code, _stdout, stderr) = run(
+        &[
+            "lints",
+            "--severity",
+            "fatal", // not in {allow, warn, deny}
+        ],
+        None,
+    );
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("invalid value 'fatal'") || stderr.contains("possible values"),
+        "expected clap rejection in stderr, got:\n{stderr}"
+    );
+}

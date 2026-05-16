@@ -40,6 +40,8 @@ pub enum Command {
     Check(commands::check::Cmd),
     /// Inspect the resolved distribution profile.
     Profile(commands::profile::Cmd),
+    /// List every built-in lint rule with a short description.
+    Lints(commands::lints::Cmd),
     /// Emit a shell completion script for the given shell on stdout.
     Completions(commands::completions::Cmd),
 }
@@ -87,6 +89,7 @@ impl Application {
             Command::Ast(cmd) => cmd.run(),
             Command::Check(cmd) => cmd.run(color),
             Command::Profile(cmd) => cmd.run(color),
+            Command::Lints(cmd) => cmd.run(color),
             Command::Completions(cmd) => cmd.run(),
         }
     }

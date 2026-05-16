@@ -20,6 +20,32 @@ pub struct LintMetadata {
     pub category: LintCategory,
 }
 
+impl LintMetadata {
+    /// Build a [`LintMetadata`] from its five fields.
+    ///
+    /// `#[non_exhaustive]` on the struct prevents downstream crates
+    /// from constructing one with literal syntax (`LintMetadata { … }`);
+    /// this `const fn` is the public escape hatch. Built-in rules
+    /// still use the struct-literal form because they live in this
+    /// crate, but external callers (CLI tests, custom rule plugins)
+    /// must go through `new`.
+    pub const fn new(
+        id: &'static str,
+        name: &'static str,
+        description: &'static str,
+        default_severity: Severity,
+        category: LintCategory,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            description,
+            default_severity,
+            category,
+        }
+    }
+}
+
 /// A lint rule.
 ///
 /// Implementors provide visitor methods that record findings into internal
