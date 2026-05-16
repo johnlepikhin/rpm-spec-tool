@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-latest
+            arch_deb: amd64
+            arch_rpm: x86_64
+          - name: linux-aarch64
+            runner: ubuntu-24.04-arm
+            arch_deb: arm64
+            arch_rpm: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.name }}
+
+      - name: Install packaging tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb,cargo-generate-rpm
+
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION="$(cargo metadata --no-deps --format-version=1 \
+            | jq -r '.packages[] | select(.name=="rpm-spec-tool") | .version')"
+          echo "tag=$TAG_VERSION cargo=$CARGO_VERSION"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $CARGO_VERSION" >&2
+            exit 1
+          fi
+          echo "TAG_VERSION=$TAG_VERSION" >> "$GITHUB_ENV"
+
+      - name: Build release binary
+        run: cargo build --release -p rpm-spec-tool
+
+      - name: Smoke-test binary
+        run: |
+          ./target/release/rpm-spec-tool --version
+          ./target/release/rpm-spec-tool --help >/dev/null
+
+      - name: Pack tar.gz
+        run: |
+          set -euo pipefail
+          STAGE="$(mktemp -d)"
+          PKG="rpm-spec-tool-${TAG_VERSION}-${{ matrix.name }}"
+          mkdir -p "$STAGE/$PKG"
+          cp target/release/rpm-spec-tool "$STAGE/$PKG/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$STAGE/$PKG/"
+          mkdir -p dist
+          tar -C "$STAGE" -czf "dist/${PKG}.tar.gz" "$PKG"
+
+      - name: Build .deb
+        run: |
+          cargo deb -p rpm-spec-tool --no-build
+          mkdir -p dist
+          mv target/debian/*.deb dist/
+
+      - name: Build .rpm
+        run: |
+          cargo generate-rpm -p crates/cli
+          mkdir -p dist
+          mv target/generate-rpm/*.rpm dist/
+
+      - name: Show artifacts
+        run: ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -la dist/
+
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          # Sort for reproducible ordering; exclude the sums file itself if rerun.
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
+            | LC_ALL=C sort \
+            | xargs -r sha256sum \
+            > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: rpm-spec-tool ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/SHA256SUMS
