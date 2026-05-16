@@ -10,6 +10,7 @@ use rpm_spec_analyzer::profile::{MacroEntry, Profile, Provenance};
 use super::fmt::{
     MAX_MACRO_LABEL_WIDTH, format_macro_value_inline, format_opts, format_provenance,
 };
+use super::style::Style;
 
 #[derive(Debug, Args)]
 pub struct MacrosOpts {
@@ -58,6 +59,7 @@ pub(super) fn render_macros(
     profile_name: &str,
     profile: &Profile,
     opts: &MacrosOpts,
+    style: &Style,
 ) -> Result<()> {
     let total = profile.macros.entries.len();
     let filter_lc = opts.filter.as_deref().map(str::to_ascii_lowercase);
@@ -84,11 +86,17 @@ pub(super) fn render_macros(
         (None, Some(_)) => format!("{total} total, {} matching --source", matched.len()),
         (None, None) => format!("{total} total"),
     };
-    writeln!(out, "# Macros in {profile_name} ({header})")?;
+    writeln!(
+        out,
+        "{} {} {}",
+        style.bold("# Macros in"),
+        style.bold_cyan(profile_name),
+        style.bold(&format!("({header})")),
+    )?;
 
     if matched.is_empty() {
         writeln!(out)?;
-        writeln!(out, "  (no macros)")?;
+        writeln!(out, "  {}", style.dim("(no macros)"))?;
         return Ok(());
     }
 
@@ -107,9 +115,9 @@ pub(super) fn render_macros(
         let label = format!("{name}{opts_str}");
         writeln!(
             out,
-            "  {label:<name_width$} = {}  [{}]",
+            "  {label:<name_width$} = {}  {}",
             format_macro_value_inline(&entry.value),
-            format_provenance(&entry.provenance),
+            style.dim(&format!("[{}]", format_provenance(&entry.provenance))),
         )?;
     }
     Ok(())

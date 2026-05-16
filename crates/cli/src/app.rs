@@ -84,7 +84,7 @@ impl Application {
             Command::Pretty(cmd) => cmd.run(color),
             Command::Ast(cmd) => cmd.run(),
             Command::Check(cmd) => cmd.run(color),
-            Command::Profile(cmd) => cmd.run(),
+            Command::Profile(cmd) => cmd.run(color),
         }
     }
 }

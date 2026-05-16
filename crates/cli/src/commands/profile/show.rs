@@ -8,6 +8,7 @@ use clap::Args;
 use rpm_spec_analyzer::profile::{LayerInfo, Profile};
 
 use super::fmt::{format_macro_value_inline, format_opts, format_provenance};
+use super::style::Style;
 
 #[derive(Debug, Args)]
 pub struct ShowOpts {
@@ -24,37 +25,61 @@ pub struct ShowOpts {
     pub defines: crate::app::MacroDefinesArg,
 }
 
-pub(super) fn render(out: &mut impl Write, profile: &Profile, full: bool) -> Result<()> {
-    writeln!(out, "# Profile")?;
-    writeln!(out, "name:     {}", profile.identity.name)?;
+pub(super) fn render(
+    out: &mut impl Write,
+    profile: &Profile,
+    full: bool,
+    style: &Style,
+) -> Result<()> {
+    writeln!(out, "{}", style.bold("# Profile"))?;
+    writeln!(out, "name:     {}", style.bold_cyan(&profile.identity.name))?;
     let family = profile
         .identity
         .family
         .map(|f| format!("{f:?}"))
-        .unwrap_or_else(|| "(undetected)".to_string());
+        .unwrap_or_else(|| style.dim("(undetected)"));
     writeln!(out, "family:   {family}")?;
     writeln!(
         out,
         "vendor:   {}",
-        profile.identity.vendor.as_deref().unwrap_or("(unset)")
+        profile
+            .identity
+            .vendor
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| style.dim("(unset)"))
     )?;
     writeln!(
         out,
         "dist-tag: {}",
-        profile.identity.dist_tag.as_deref().unwrap_or("(unset)")
+        profile
+            .identity
+            .dist_tag
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| style.dim("(unset)"))
     )?;
     writeln!(out)?;
 
-    writeln!(out, "# Layers ({})", profile.layers.len())?;
+    writeln!(
+        out,
+        "{}",
+        style.bold(&format!("# Layers ({})", profile.layers.len()))
+    )?;
     for layer in &profile.layers {
         match layer {
             LayerInfo::Builtin { name } => writeln!(out, "  - builtin: {name}")?,
-            LayerInfo::BuiltinShowrc { name, macros } => {
-                writeln!(out, "  - builtin-showrc: {name} ({macros} macros)")?
-            }
-            LayerInfo::Showrc { path, macros } => {
-                writeln!(out, "  - showrc:  {} ({macros} macros)", path.display())?
-            }
+            LayerInfo::BuiltinShowrc { name, macros } => writeln!(
+                out,
+                "  - builtin-showrc: {name} {}",
+                style.dim(&format!("({macros} macros)"))
+            )?,
+            LayerInfo::Showrc { path, macros } => writeln!(
+                out,
+                "  - showrc:  {} {}",
+                path.display(),
+                style.dim(&format!("({macros} macros)"))
+            )?,
             LayerInfo::Override { fields } => {
                 writeln!(out, "  - override: {} field(s)", fields.len())?;
                 for f in fields {
@@ -67,25 +92,25 @@ pub(super) fn render(out: &mut impl Write, profile: &Profile, full: bool) -> Res
             // LayerInfo is #[non_exhaustive]; render unknown variants
             // generically so an upgrade that adds a new layer doesn't
             // crash the CLI.
-            _ => writeln!(out, "  - <unknown layer>")?,
+            _ => writeln!(out, "  - {}", style.dim("<unknown layer>"))?,
         }
     }
     writeln!(out)?;
 
-    writeln!(out, "# Counts")?;
+    writeln!(out, "{}", style.bold("# Counts"))?;
     writeln!(out, "macros:   {}", profile.macros.len())?;
     writeln!(out, "rpmlib:   {}", profile.rpmlib.features.len())?;
     writeln!(
         out,
-        "licenses: {} (mode = {:?})",
+        "licenses: {} {}",
         profile.licenses.allowed.len(),
-        profile.licenses.mode
+        style.dim(&format!("(mode = {:?})", profile.licenses.mode))
     )?;
     writeln!(
         out,
-        "groups:   {} (mode = {:?})",
+        "groups:   {} {}",
         profile.groups.allowed.len(),
-        profile.groups.mode
+        style.dim(&format!("(mode = {:?})", profile.groups.mode))
     )?;
     if let Some(arch) = &profile.arch.build_arch {
         writeln!(out, "arch:     {arch}")?;
@@ -96,14 +121,14 @@ pub(super) fn render(out: &mut impl Write, profile: &Profile, full: bool) -> Res
 
     if full {
         writeln!(out)?;
-        writeln!(out, "# Macros")?;
+        writeln!(out, "{}", style.bold("# Macros"))?;
         for (name, entry) in &profile.macros.entries {
             writeln!(
                 out,
-                "{name}{} = {}  [{}]",
+                "{name}{} = {}  {}",
                 format_opts(entry.opts.as_deref()),
                 format_macro_value_inline(&entry.value),
-                format_provenance(&entry.provenance),
+                style.dim(&format!("[{}]", format_provenance(&entry.provenance))),
             )?;
         }
     }

@@ -10,6 +10,7 @@ use rpm_spec_analyzer::config::Config;
 use rpm_spec_analyzer::profile::{ProfileEntry, ProfileSection, builtin};
 
 use super::fmt::family_label;
+use super::style::Style;
 use super::{DEFAULT_PROFILE, active_profile_name};
 
 #[derive(Debug, Args)]
@@ -34,25 +35,40 @@ pub(super) fn render_list(
     config: &Config,
     base_dir: &Path,
     opts: ListOpts,
+    style: &Style,
 ) -> Result<ExitCode> {
     let active = active_profile_name(None, config);
     let mut had_error = false;
 
     if !opts.user_only {
         let builtins = builtin::names();
-        writeln!(out, "# Built-in profiles ({})", builtins.len())?;
-        writeln!(out)?;
         writeln!(
             out,
-            "  {:<28} {:<9} {:<12} {:<11} {:>6}  ARCH",
-            "NAME", "FAMILY", "VENDOR", "DIST-TAG", "MACROS"
+            "{}",
+            style.bold(&format!("# Built-in profiles ({})", builtins.len()))
+        )?;
+        writeln!(out)?;
+        // Pad-then-style so :<W$ width tracks visible characters only.
+        writeln!(
+            out,
+            "  {} {} {} {} {}  {}",
+            style.bold(&format!("{:<28}", "NAME")),
+            style.bold(&format!("{:<9}", "FAMILY")),
+            style.bold(&format!("{:<12}", "VENDOR")),
+            style.bold(&format!("{:<11}", "DIST-TAG")),
+            style.bold(&format!("{:>6}", "MACROS")),
+            style.bold("ARCH"),
         )?;
         // Resolve each builtin against an *empty* config section so the
         // pure built-in identity is shown regardless of any user entry
         // that may shadow the name.
         let empty = ProfileSection::default();
         for &name in builtins {
-            let prefix = if name == active { "*" } else { " " };
+            let prefix = if name == active {
+                style.bold_green("*")
+            } else {
+                " ".to_string()
+            };
             match rpm_spec_analyzer::profile::resolve_profile(
                 &empty,
                 base_dir,
@@ -70,7 +86,11 @@ pub(super) fn render_list(
                     )?;
                 }
                 Err(e) => {
-                    writeln!(out, "{prefix} {name:<28} (failed to resolve: {e})")?;
+                    writeln!(
+                        out,
+                        "{prefix} {name:<28} {}",
+                        style.dim_red(&format!("(failed to resolve: {e})"))
+                    )?;
                     eprintln!("error: failed to resolve built-in `{name}`: {e}");
                     had_error = true;
                 }
@@ -81,11 +101,16 @@ pub(super) fn render_list(
 
     if !opts.builtin_only {
         let entries: Vec<(&String, &ProfileEntry)> = config.profiles.iter().collect();
-        writeln!(out, "# User-defined profiles ({})", entries.len())?;
+        writeln!(
+            out,
+            "{}",
+            style.bold(&format!("# User-defined profiles ({})", entries.len()))
+        )?;
         if entries.is_empty() {
             writeln!(
                 out,
-                "  (none — define profiles in [profiles.<name>] in .rpmspec.toml)"
+                "  {}",
+                style.dim("(none — define profiles in [profiles.<name>] in .rpmspec.toml)")
             )?;
             return Ok(if had_error {
                 ExitCode::from(2)
@@ -94,9 +119,19 @@ pub(super) fn render_list(
             });
         }
         writeln!(out)?;
-        writeln!(out, "  {:<24} {:<22} DETAILS", "NAME", "EXTENDS")?;
+        writeln!(
+            out,
+            "  {} {} {}",
+            style.bold(&format!("{:<24}", "NAME")),
+            style.bold(&format!("{:<22}", "EXTENDS")),
+            style.bold("DETAILS"),
+        )?;
         for (name, entry) in entries {
-            let prefix = if name == active { "*" } else { " " };
+            let prefix = if name == active {
+                style.bold_green("*")
+            } else {
+                " ".to_string()
+            };
             let extends = entry.extends.as_deref().unwrap_or(DEFAULT_PROFILE);
             let details = user_entry_details(entry);
             writeln!(out, "{prefix} {name:<24} {extends:<22} {details}")?;

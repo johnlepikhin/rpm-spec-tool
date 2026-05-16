@@ -37,6 +37,7 @@ mod list;
 mod macro_lookup;
 mod macros;
 mod show;
+mod style;
 
 // Re-export Opts so `Action` variants resolve them without paths and
 // so external consumers (`commands/mod.rs`, integration tests) keep a
@@ -84,8 +85,9 @@ pub enum Action {
 }
 
 impl Cmd {
-    pub fn run(self) -> Result<ExitCode> {
+    pub fn run(self, color: crate::app::ColorChoice) -> Result<ExitCode> {
         let (config, base_dir) = load_config(self.config.as_deref())?;
+        let style = style::Style::new(color);
         let stdout = std::io::stdout();
         let mut out = stdout.lock();
         match self.action {
@@ -97,9 +99,11 @@ impl Cmd {
                         ResolveOptions::with_override(cli_override).with_defines(&opts.defines.raw),
                     )
                     .with_context(|| "failed to resolve profile")?;
-                show::render(&mut out, &profile, opts.full)?;
+                show::render(&mut out, &profile, opts.full, &style)?;
             }
-            Action::List(opts) => return list::render_list(&mut out, &config, &base_dir, opts),
+            Action::List(opts) => {
+                return list::render_list(&mut out, &config, &base_dir, opts, &style);
+            }
             Action::Macros(opts) => {
                 let profile_name = opts.profile.as_deref();
                 let profile = config
@@ -109,13 +113,13 @@ impl Cmd {
                     )
                     .with_context(|| "failed to resolve profile")?;
                 let effective_name = active_profile_name(profile_name, &config);
-                macros::render_macros(&mut out, effective_name, &profile, &opts)?;
+                macros::render_macros(&mut out, effective_name, &profile, &opts, &style)?;
             }
             Action::Macro(opts) => {
-                return macro_lookup::dispatch_macro(&mut out, &config, &base_dir, opts);
+                return macro_lookup::dispatch_macro(&mut out, &config, &base_dir, opts, &style);
             }
             Action::Common(opts) => {
-                return common::dispatch_common(&mut out, &config, &base_dir, opts);
+                return common::dispatch_common(&mut out, &config, &base_dir, opts, &style);
             }
         }
         Ok(ExitCode::SUCCESS)

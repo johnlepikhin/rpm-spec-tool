@@ -11,6 +11,7 @@ use rpm_spec_analyzer::config::Config;
 use rpm_spec_analyzer::profile::{MacroEntry, Profile};
 
 use super::fmt::{MAX_MACRO_LABEL_WIDTH, compact_value, format_opts};
+use super::style::Style;
 use super::{all_profile_names, resolve_many};
 
 #[derive(Debug, Args)]
@@ -70,6 +71,7 @@ pub(super) fn dispatch_common(
     config: &Config,
     base_dir: &Path,
     opts: CommonOpts,
+    style: &Style,
 ) -> Result<ExitCode> {
     let auto_expanded = opts.profiles.is_empty();
     let resolved: Vec<(String, Profile)> = if auto_expanded {
@@ -91,7 +93,7 @@ pub(super) fn dispatch_common(
         }
         return Ok(ExitCode::from(2));
     }
-    render_common(out, &opts, &resolved)?;
+    render_common(out, &opts, &resolved, style)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -130,6 +132,7 @@ fn render_common(
     out: &mut impl Write,
     opts: &CommonOpts,
     resolved: &[(String, Profile)],
+    style: &Style,
 ) -> Result<()> {
     let (_first_name, first) = resolved
         .first()
@@ -173,13 +176,16 @@ fn render_common(
     };
     writeln!(
         out,
-        "# {mode_label} across {} profile(s): {header_suffix}",
-        resolved.len()
+        "{}",
+        style.bold(&format!(
+            "# {mode_label} across {} profile(s): {header_suffix}",
+            resolved.len()
+        ))
     )?;
     writeln!(out)?;
 
     if common.is_empty() {
-        writeln!(out, "  (no common macros)")?;
+        writeln!(out, "  {}", style.dim("(no common macros)"))?;
         return Ok(());
     }
 
@@ -292,7 +298,8 @@ mod tests {
             defines: crate::app::MacroDefinesArg::default(),
         };
         let mut buf = Vec::new();
-        render_common(&mut buf, &opts, &resolved).unwrap();
+        let style = Style::plain();
+        render_common(&mut buf, &opts, &resolved, &style).unwrap();
         let out = String::from_utf8(buf).unwrap();
         assert!(out.contains("(no common macros)"), "stdout={out}");
         assert!(
@@ -314,7 +321,8 @@ mod tests {
             defines: crate::app::MacroDefinesArg::default(),
         };
         let mut buf = Vec::new();
-        let err = render_common(&mut buf, &opts, &resolved).unwrap_err();
+        let style = Style::plain();
+        let err = render_common(&mut buf, &opts, &resolved, &style).unwrap_err();
         assert!(err.to_string().contains("at least 2"), "err={err}");
     }
 

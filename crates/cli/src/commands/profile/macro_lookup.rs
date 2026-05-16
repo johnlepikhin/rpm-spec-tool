@@ -14,6 +14,7 @@ use rpm_spec_analyzer::config::Config;
 use rpm_spec_analyzer::profile::{MacroEntry, MacroValue, Profile};
 
 use super::fmt::{MAX_PROFILE_NAME_WIDTH, compact_value, format_opts, format_provenance};
+use super::style::Style;
 use super::{all_profile_names, resolve_many};
 
 #[derive(Debug, Args)]
@@ -54,6 +55,7 @@ pub(super) fn dispatch_macro(
     config: &Config,
     base_dir: &Path,
     opts: MacroOpts,
+    style: &Style,
 ) -> Result<ExitCode> {
     let names: Vec<String> = if opts.profiles.is_empty() {
         all_profile_names(config)
@@ -123,13 +125,13 @@ pub(super) fn dispatch_macro(
             }
         };
 
-        match render_macro(out, single, &profile, &opts.name, shadowed.as_ref())? {
+        match render_macro(out, single, &profile, &opts.name, shadowed.as_ref(), style)? {
             MacroLookup::Found => Ok(ExitCode::SUCCESS),
             MacroLookup::Undefined => Ok(ExitCode::from(2)),
         }
     } else {
         let resolved = resolve_many(config, base_dir, &names, &opts.defines.raw)?;
-        render_macro_table(out, &opts.name, &resolved)?;
+        render_macro_table(out, &opts.name, &resolved, style)?;
         Ok(ExitCode::SUCCESS)
     }
 }
@@ -149,19 +151,20 @@ fn render_macro(
     profile: &Profile,
     macro_name: &str,
     shadowed: Option<&MacroEntry>,
+    style: &Style,
 ) -> Result<MacroLookup> {
     let Some(entry) = profile.macros.get(macro_name) else {
         eprintln!("error: macro `{macro_name}` is not defined in profile `{profile_name}`");
         return Ok(MacroLookup::Undefined);
     };
 
-    write_macro_line(out, macro_name, entry, "")?;
+    write_macro_line(out, macro_name, entry, "", style)?;
     // When the winning entry shadows a baseline value, render it
     // beneath the main line with a "shadows:" prefix and one level of
     // indent. Same value-formatting machinery as the main line so a
     // multi-line `Raw` body stays readable.
     if let Some(prev) = shadowed {
-        write_macro_line(out, macro_name, prev, "  shadows: ")?;
+        write_macro_line(out, macro_name, prev, "  shadows: ", style)?;
     }
     Ok(MacroLookup::Found)
 }
@@ -175,22 +178,24 @@ fn write_macro_line(
     macro_name: &str,
     entry: &MacroEntry,
     prefix: &str,
+    style: &Style,
 ) -> Result<()> {
     let opts_str = format_opts(entry.opts.as_deref());
-    let prov = format_provenance(&entry.provenance);
+    let prov = style.dim(&format!("[{}]", format_provenance(&entry.provenance)));
+    let name = style.bold_cyan(&format!("{macro_name}{opts_str}"));
     match &entry.value {
-        MacroValue::Literal(s) => writeln!(out, "{prefix}{macro_name}{opts_str} = {s}  [{prov}]")?,
+        MacroValue::Literal(s) => writeln!(out, "{prefix}{name} = {s}  {prov}")?,
         MacroValue::Builtin => {
-            writeln!(out, "{prefix}{macro_name}{opts_str} = <builtin>  [{prov}]")?
+            writeln!(out, "{prefix}{name} = {}  {prov}", style.dim("<builtin>"))?
         }
         MacroValue::Raw { body, multiline } => {
             if *multiline {
-                writeln!(out, "{prefix}{macro_name}{opts_str} =  [{prov}]")?;
+                writeln!(out, "{prefix}{name} =  {prov}")?;
                 for line in body.lines() {
                     writeln!(out, "    {line}")?;
                 }
             } else {
-                writeln!(out, "{prefix}{macro_name}{opts_str} = {body}  [{prov}]")?;
+                writeln!(out, "{prefix}{name} = {body}  {prov}")?;
             }
         }
     }
@@ -207,12 +212,14 @@ fn render_macro_table(
     out: &mut impl Write,
     macro_name: &str,
     resolved: &[(String, Profile)],
+    style: &Style,
 ) -> Result<()> {
     writeln!(
         out,
-        "# Macro `{}` across {} profile(s)",
-        macro_name,
-        resolved.len()
+        "{} {} {}",
+        style.bold("# Macro"),
+        style.bold_cyan(&format!("`{macro_name}`")),
+        style.bold(&format!("across {} profile(s)", resolved.len())),
     )?;
     writeln!(out)?;
 
@@ -224,14 +231,19 @@ fn render_macro_table(
         .min(MAX_PROFILE_NAME_WIDTH);
 
     for (profile_name, profile) in resolved {
+        // Pad first, colour after — ANSI escapes have zero render width
+        // but non-zero len(), so :<W$ on a coloured string corrupts
+        // table alignment.
+        let padded_name = format!("{profile_name:<name_width$}");
+        let name_styled = style.bold(&padded_name);
         match profile.macros.get(macro_name) {
             Some(entry) => {
                 let val = compact_value(&entry.value);
-                let prov = format_provenance(&entry.provenance);
-                writeln!(out, "  {profile_name:<name_width$} = {val}  [{prov}]")?;
+                let prov = style.dim(&format!("[{}]", format_provenance(&entry.provenance)));
+                writeln!(out, "  {name_styled} = {val}  {prov}")?;
             }
             None => {
-                writeln!(out, "  {profile_name:<name_width$} = (undefined)")?;
+                writeln!(out, "  {name_styled} = {}", style.dim_red("(undefined)"))?;
             }
         }
     }
@@ -247,7 +259,9 @@ mod tests {
     fn render_macro_returns_undefined_for_unknown() {
         let profile = Profile::default();
         let mut buf = Vec::new();
-        let result = render_macro(&mut buf, "generic", &profile, "no-such-macro", None).unwrap();
+        let style = Style::plain();
+        let result =
+            render_macro(&mut buf, "generic", &profile, "no-such-macro", None, &style).unwrap();
         assert_eq!(result, MacroLookup::Undefined);
         // stdout buffer untouched on the "not found" path — error goes to stderr.
         assert!(buf.is_empty());
@@ -267,7 +281,9 @@ mod tests {
             ),
         );
         let mut buf = Vec::new();
-        let result = render_macro(&mut buf, "rhel-9-x86_64", &profile, "dist", None).unwrap();
+        let style = Style::plain();
+        let result =
+            render_macro(&mut buf, "rhel-9-x86_64", &profile, "dist", None, &style).unwrap();
         assert_eq!(result, MacroLookup::Found);
         let out = String::from_utf8(buf).unwrap();
         assert!(out.starts_with("dist = .el9"));
@@ -291,8 +307,16 @@ mod tests {
             },
         );
         let mut buf = Vec::new();
-        let result =
-            render_macro(&mut buf, "rhel-9-x86_64", &profile, "dist", Some(&shadowed)).unwrap();
+        let style = Style::plain();
+        let result = render_macro(
+            &mut buf,
+            "rhel-9-x86_64",
+            &profile,
+            "dist",
+            Some(&shadowed),
+            &style,
+        )
+        .unwrap();
         assert_eq!(result, MacroLookup::Found);
         let out = String::from_utf8(buf).unwrap();
         // Winning line first.
