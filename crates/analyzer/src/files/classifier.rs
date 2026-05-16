@@ -180,14 +180,13 @@ impl<'a> FilesClassifier<'a> {
         // Broad glob: literal "<macro_dir>/*" with no further path
         // component. We match against the resolved prefix and then a
         // literal `/*`.
-        if let Some(rest) = trimmed.strip_suffix("/*") {
-            if let Some((_prefix, label)) = self
+        if let Some(rest) = trimmed.strip_suffix("/*")
+            && let Some((_prefix, label)) = self
                 .dir_table
                 .iter()
                 .find(|(prefix, _)| rest == prefix.trim_end_matches('/'))
-            {
-                hints.broad_glob_for = Some(*label);
-            }
+        {
+            hints.broad_glob_for = Some(*label);
         }
 
         hints
@@ -342,7 +341,7 @@ fn build_dir_table(profile: &Profile) -> Vec<(String, &'static str)> {
         })
         .collect();
     // Longest first so longest-prefix matching is deterministic.
-    out.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    out.sort_by_key(|entry| std::cmp::Reverse(entry.0.len()));
     out
 }
 

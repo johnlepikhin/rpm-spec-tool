@@ -94,14 +94,12 @@ fn line_has_j1(line: &rpm_spec::ast::Text) -> bool {
         if lit == "-j1" {
             return true;
         }
-        if lit == "-j" {
-            if let Some(next) = iter.peek() {
-                if let Some(nlit) = next.literal_str()
-                    && nlit == "1"
-                {
-                    return true;
-                }
-            }
+        if lit == "-j"
+            && let Some(next) = iter.peek()
+            && let Some(nlit) = next.literal_str()
+            && nlit == "1"
+        {
+            return true;
         }
     }
     false

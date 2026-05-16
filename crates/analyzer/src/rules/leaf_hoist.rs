@@ -222,12 +222,12 @@ fn lines_in_path<B: BodyNode>(body: &[B], source: &str) -> BTreeSet<String> {
             out.extend(lines_in_all_paths::<B>(inner, source));
             continue;
         }
-        if let Some(span) = item.body_span() {
-            if let Some(slice) = source.get(span.start_byte..span.end_byte) {
-                let canon = canonicalise_line(slice);
-                if !canon.is_empty() {
-                    out.insert(canon);
-                }
+        if let Some(span) = item.body_span()
+            && let Some(slice) = source.get(span.start_byte..span.end_byte)
+        {
+            let canon = canonicalise_line(slice);
+            if !canon.is_empty() {
+                out.insert(canon);
             }
         }
     }

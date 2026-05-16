@@ -786,10 +786,10 @@ mod tests {
     fn parse_if_expr(src: &str) -> ExprAst<Span> {
         let outcome = parse(&format!("Name: x\n%if {src}\nLicense: MIT\n%endif\n"));
         for item in &outcome.spec.items {
-            if let SpecItem::Conditional(c) = item {
-                if let CondExpr::Parsed(ast) = &c.branches[0].expr {
-                    return *ast.clone();
-                }
+            if let SpecItem::Conditional(c) = item
+                && let CondExpr::Parsed(ast) = &c.branches[0].expr
+            {
+                return *ast.clone();
             }
         }
         panic!("no parsed conditional for {src:?}")

@@ -228,7 +228,7 @@ impl Lint for HardcodedPaths {
         }
         // Longest prefix first, so `/usr/lib64` is checked before
         // `/usr/lib` and `/var/log` before `/var/lib`.
-        table.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        table.sort_by_key(|entry| std::cmp::Reverse(entry.0.len()));
         self.path_table = table;
     }
 }

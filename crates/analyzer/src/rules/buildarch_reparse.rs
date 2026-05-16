@@ -120,10 +120,8 @@ fn find_buildarch_in_conditional(cond: &Conditional<Span, SpecItem<Span>>) -> Op
 fn collect_side_effect_macros<'a>(items: &'a [SpecItem<Span>], out: &mut Vec<&'a MacroDef<Span>>) {
     for item in items {
         match item {
-            SpecItem::MacroDef(m) => {
-                if macro_body_has_side_effects(m) {
-                    out.push(m);
-                }
+            SpecItem::MacroDef(m) if macro_body_has_side_effects(m) => {
+                out.push(m);
             }
             SpecItem::Conditional(c) => {
                 for branch in &c.branches {

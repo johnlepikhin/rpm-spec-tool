@@ -1332,10 +1332,9 @@ fn has_absorption<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
                     rhs: r2,
                     ..
                 } = rhs_inner
+                    && (exprs_equiv(lhs, l2) || exprs_equiv(lhs, r2))
                 {
-                    if exprs_equiv(lhs, l2) || exprs_equiv(lhs, r2) {
-                        return true;
-                    }
+                    return true;
                 }
                 if let ExprAst::Binary {
                     kind: BinOp::LogAnd,
@@ -1343,10 +1342,9 @@ fn has_absorption<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
                     rhs: r2,
                     ..
                 } = lhs_inner
+                    && (exprs_equiv(rhs, l2) || exprs_equiv(rhs, r2))
                 {
-                    if exprs_equiv(rhs, l2) || exprs_equiv(rhs, r2) {
-                        return true;
-                    }
+                    return true;
                 }
             }
             BinOp::LogAnd => {
@@ -1357,10 +1355,9 @@ fn has_absorption<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
                     rhs: r2,
                     ..
                 } = rhs_inner
+                    && (exprs_equiv(lhs, l2) || exprs_equiv(lhs, r2))
                 {
-                    if exprs_equiv(lhs, l2) || exprs_equiv(lhs, r2) {
-                        return true;
-                    }
+                    return true;
                 }
                 if let ExprAst::Binary {
                     kind: BinOp::LogOr,
@@ -1368,10 +1365,9 @@ fn has_absorption<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
                     rhs: r2,
                     ..
                 } = lhs_inner
+                    && (exprs_equiv(rhs, l2) || exprs_equiv(rhs, r2))
                 {
-                    if exprs_equiv(rhs, l2) || exprs_equiv(rhs, r2) {
-                        return true;
-                    }
+                    return true;
                 }
             }
             _ => {}
