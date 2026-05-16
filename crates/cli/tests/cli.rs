@@ -661,9 +661,12 @@ fn constant_condition_warns() {
 
 #[test]
 fn empty_conditional_branch_warns() {
+    // The lint fires when the branch has only blank/comment filler —
+    // a truly zero-item body is treated as parser drop-out (see
+    // `is_empty_top_body` doc) and stays silent.
     let spec = write_temp(
         "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
-%if 0\n%endif\n\
+%if 0\n\n%endif\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
     let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);

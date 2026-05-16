@@ -6,21 +6,27 @@
 //! Subpackage-aware: each `%package` block is checked against its own
 //! Obsoletes and Provides sets. Skips:
 //! - obsoletes whose name contains a macro (can't compare literally),
-//! - obsoletes that look like file paths (`Obsoletes: /usr/bin/...`).
+//! - obsoletes that look like file paths (`Obsoletes: /usr/bin/...`),
+//! - obsoletes carrying a version constraint (`< X.Y` etc.) — that's
+//!   the "we are deleting these old versions" idiom, not a rename.
+//!
+//! The version-range escape hatch removes the bulk of false positives
+//! from real distros, where `Obsoletes: <old> < X.Y` is the canonical
+//! "we are dropping these old versions" pattern.
 
 use std::collections::HashSet;
 
-use rpm_spec::ast::{Span, SpecFile, Tag};
+use rpm_spec::ast::{DepExpr, Span, SpecFile, Tag, TagValue};
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
 use crate::lint::{Lint, LintMetadata};
-use crate::rules::util::{collect_dep_atoms_in_items, iter_packages};
+use crate::rules::util::iter_packages;
 use crate::visit::Visit;
 
 pub static METADATA: LintMetadata = LintMetadata {
     id: "RPM034",
     name: "obsolete-without-provides",
-    description: "Each Obsoletes entry should be matched by a Provides of the same name to keep upgrades smooth.",
+    description: "Each unconstrained Obsoletes entry should be matched by a Provides of the same name to keep upgrades smooth.",
     default_severity: Severity::Warn,
     category: LintCategory::Correctness,
 };
@@ -39,36 +45,119 @@ impl ObsoleteWithoutProvides {
 impl<'ast> Visit<'ast> for ObsoleteWithoutProvides {
     fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
         for pkg in iter_packages(spec) {
-            let obsoletes =
-                collect_dep_atoms_in_items(pkg.items(), |t| matches!(t, Tag::Obsoletes));
-            if obsoletes.is_empty() {
-                continue;
+            // Pre-collect provides names once per package scope.
+            let mut provides_names: HashSet<&str> = HashSet::new();
+            for item in pkg.items() {
+                if !matches!(item.tag, Tag::Provides) {
+                    continue;
+                }
+                if let TagValue::Dep(expr) = &item.value {
+                    walk_collect_names(expr, &mut provides_names);
+                }
             }
-            let provides_names: HashSet<&str> =
-                collect_dep_atoms_in_items(pkg.items(), |t| matches!(t, Tag::Provides))
-                    .iter()
-                    .filter_map(|a| a.name.literal_str())
-                    .collect();
 
-            for atom in obsoletes {
-                let Some(obs_name) = atom.name.literal_str() else {
-                    continue; // macroized name, can't compare
-                };
-                if obs_name.starts_with('/') {
-                    continue; // file-path obsoletes are uncommon and legitimate
+            // Walk Obsoletes items keeping per-item span so the
+            // diagnostic points at the offending line.
+            for item in pkg.items() {
+                if !matches!(item.tag, Tag::Obsoletes) {
+                    continue;
                 }
-                if !provides_names.contains(obs_name) {
-                    self.diagnostics.push(Diagnostic::new(
-                        &METADATA,
-                        Severity::Warn,
-                        format!(
-                            "`Obsoletes: {obs_name}` has no matching `Provides:` — \
-                             upgraders of {obs_name} may lose the functionality"
-                        ),
-                        pkg.header_span(),
-                    ));
+                let TagValue::Dep(expr) = &item.value else {
+                    continue;
+                };
+                for atom in collect_atoms(expr) {
+                    if atom.constraint.is_some() {
+                        // `Obsoletes: foo < 1.2` — explicitly bounded,
+                        // means "delete these old versions", not a
+                        // rename. Distros routinely keep this without
+                        // a matching Provides.
+                        continue;
+                    }
+                    let Some(obs_name) = atom.name.literal_str() else {
+                        continue; // macroized name, can't compare
+                    };
+                    if obs_name.starts_with('/') {
+                        continue; // file-path obsoletes are uncommon and legitimate
+                    }
+                    if !provides_names.contains(obs_name) {
+                        self.diagnostics.push(Diagnostic::new(
+                            &METADATA,
+                            Severity::Warn,
+                            format!(
+                                "`Obsoletes: {obs_name}` has no matching `Provides:` and no \
+                                 version range — upgraders of {obs_name} may lose the \
+                                 functionality. Add `Provides: {obs_name}` if this is a \
+                                 rename, or `Obsoletes: {obs_name} < X.Y` if it is a removal."
+                            ),
+                            item.data,
+                        ));
+                    }
                 }
             }
+        }
+    }
+}
+
+fn collect_atoms(expr: &DepExpr) -> Vec<&rpm_spec::ast::DepAtom> {
+    let mut out = Vec::new();
+    walk_atoms(expr, &mut out);
+    out
+}
+
+fn walk_atoms<'a>(expr: &'a DepExpr, out: &mut Vec<&'a rpm_spec::ast::DepAtom>) {
+    use rpm_spec::ast::BoolDep;
+    // Both `DepExpr` and `BoolDep` are `#[non_exhaustive]` and live in
+    // another crate (`rpm-spec`), so the compiler forces a trailing
+    // wildcard. We still name every variant we know about explicitly so
+    // that, when the project is updated to a newer rpm-spec, a reviewer
+    // running `cargo expand` / `git blame` sees exactly which variants
+    // were considered. Future variants land in the `_` arm — `cargo
+    // semver-checks` / `cargo update` review must re-audit this match.
+    // Same discipline as `bcond_on_non_fedora.rs:107-127`.
+    match expr {
+        DepExpr::Atom(a) => out.push(a),
+        DepExpr::Rich(b) => match b.as_ref() {
+            BoolDep::And(xs) | BoolDep::Or(xs) | BoolDep::With(xs) => {
+                for x in xs {
+                    walk_atoms(x, out);
+                }
+            }
+            BoolDep::If {
+                cond,
+                then,
+                otherwise,
+            }
+            | BoolDep::Unless {
+                cond,
+                then,
+                otherwise,
+            } => {
+                walk_atoms(cond, out);
+                walk_atoms(then, out);
+                if let Some(o) = otherwise {
+                    walk_atoms(o, out);
+                }
+            }
+            BoolDep::Without { left, right } => {
+                walk_atoms(left, out);
+                walk_atoms(right, out);
+            }
+            // Forced by `#[non_exhaustive]` on a foreign-crate enum;
+            // see comment above. Re-audit on every `rpm-spec` bump.
+            #[allow(unreachable_patterns)]
+            _ => {}
+        },
+        // Forced by `#[non_exhaustive]` on a foreign-crate enum;
+        // see comment above. Re-audit on every `rpm-spec` bump.
+        #[allow(unreachable_patterns)]
+        _ => {}
+    }
+}
+
+fn walk_collect_names<'a>(expr: &'a DepExpr, out: &mut HashSet<&'a str>) {
+    for a in collect_atoms(expr) {
+        if let Some(name) = a.name.literal_str() {
+            out.insert(name);
         }
     }
 }
@@ -112,6 +201,14 @@ mod tests {
         // file-path obsoletes are rare and legitimate; we conservatively
         // don't flag them
         assert!(run("Name: hello\nObsoletes: /usr/bin/old\n").is_empty());
+    }
+
+    #[test]
+    fn skips_version_constrained_obsoletes() {
+        // `Obsoletes: foo < 1.2` is the canonical "drop these old
+        // versions" idiom — no Provides needed, no diagnostic expected.
+        assert!(run("Name: hello\nObsoletes: old-hello < 1.2\n").is_empty());
+        assert!(run("Name: hello\nObsoletes: old-hello <= 1.2\n").is_empty());
     }
 
     #[test]

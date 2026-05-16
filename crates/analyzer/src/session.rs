@@ -398,17 +398,83 @@ impl LintSession {
     /// want sorted, deduplicated output should use [`analyze`] (which
     /// runs [`sort_and_dedup`]) instead of post-processing themselves.
     pub fn run(&mut self, spec: &SpecFile<Span>, source: &str) -> Vec<Diagnostic> {
+        let line_table = build_line_table(source);
         let mut out = Vec::new();
         for ActiveLint { lint, severity } in &mut self.lints {
             lint.set_source(source);
             lint.visit_spec(spec);
             for mut diag in lint.take_diagnostics() {
                 diag.severity = *severity;
+                resolve_diagnostic_lines(&mut diag, source, &line_table);
                 out.push(diag);
             }
         }
         out
     }
+}
+
+/// Pre-compute the starting byte offset of every line in `source`.
+///
+/// The result is indexed by 0-based line number: `line_table[0] == 0`,
+/// `line_table[i]` is the byte just after the `i-th` `\n`. Used by
+/// [`resolve_diagnostic_lines`] to fill in line/column for spans whose
+/// originator forgot to populate them (typically `Span::from_bytes`).
+fn build_line_table(source: &str) -> Vec<usize> {
+    let mut table = Vec::with_capacity(source.bytes().filter(|&b| b == b'\n').count() + 1);
+    table.push(0);
+    for (i, b) in source.bytes().enumerate() {
+        if b == b'\n' {
+            table.push(i + 1);
+        }
+    }
+    table
+}
+
+/// Resolve missing line/column information on a diagnostic's spans.
+///
+/// Spans built via `Span::from_bytes` carry `start_line == 0`. Without
+/// real line numbers the JSON/SARIF output is unusable: editors and CI
+/// pipelines navigate by `file:line`, not by byte offset. We fix this
+/// once, centrally, instead of forcing every lint to remember the
+/// source-aware constructor.
+fn resolve_diagnostic_lines(diag: &mut Diagnostic, source: &str, line_table: &[usize]) {
+    resolve_span(&mut diag.primary_span, source, line_table);
+    for label in &mut diag.labels {
+        resolve_span(&mut label.span, source, line_table);
+    }
+    for suggestion in &mut diag.suggestions {
+        for edit in &mut suggestion.edits {
+            resolve_span(&mut edit.span, source, line_table);
+        }
+    }
+}
+
+fn resolve_span(span: &mut Span, source: &str, line_table: &[usize]) {
+    if span.start_line == 0 {
+        let (line, col) = byte_to_line_col(span.start_byte, source, line_table);
+        span.start_line = line;
+        span.start_column = col;
+    }
+    if span.end_line == 0 {
+        let (line, col) = byte_to_line_col(span.end_byte, source, line_table);
+        span.end_line = line;
+        span.end_column = col;
+    }
+}
+
+/// Convert a byte offset into a 1-based `(line, column)` pair using a
+/// pre-computed line table. Column is the byte distance from the start
+/// of the line, also 1-based to match `nom_locate` conventions used by
+/// the parser.
+fn byte_to_line_col(byte: usize, source: &str, line_table: &[usize]) -> (u32, u32) {
+    let clamped = byte.min(source.len());
+    // `line_table` is sorted; binary-search for the line whose start is
+    // <= clamped. `partition_point` returns the count of starts that are
+    // <= clamped, which is the 1-based line number.
+    let line = line_table.partition_point(|&start| start <= clamped);
+    let line_start = line_table.get(line.saturating_sub(1)).copied().unwrap_or(0);
+    let col = clamped - line_start + 1;
+    (line as u32, col as u32)
 }
 
 #[cfg(test)]
@@ -762,5 +828,155 @@ mod tests {
             assert_eq!(diags[0].lint_id, entry.metadata.id);
             assert_eq!(diags[0].lint_name, entry.metadata.name);
         }
+    }
+
+    // -----------------------------------------------------------------
+    // build_line_table / byte_to_line_col / resolve_span /
+    // resolve_diagnostic_lines — line-resolution hot path
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn build_line_table_basic() {
+        // Empty source still yields a single line starting at byte 0,
+        // so `byte_to_line_col` can answer (1, 1) for byte 0.
+        assert_eq!(build_line_table(""), vec![0]);
+        // Trailing newline → an extra entry past EOF; that entry
+        // represents the empty "line N+1" the parser would land on if
+        // it read one more byte.
+        assert_eq!(build_line_table("a\nb\nc\n"), vec![0, 2, 4, 6]);
+        // No trailing newline → no phantom entry.
+        assert_eq!(build_line_table("a\nb\nc"), vec![0, 2, 4]);
+    }
+
+    #[test]
+    fn byte_to_line_col_ascii() {
+        let src = "abc\ndef\nghi";
+        let tbl = build_line_table(src);
+        // Byte 0 is the first byte of line 1.
+        assert_eq!(byte_to_line_col(0, src, &tbl), (1, 1));
+        // Byte 4 is 'd', the first byte after the first '\n'.
+        assert_eq!(byte_to_line_col(4, src, &tbl), (2, 1));
+        // Byte past end clamps to source length and resolves to the
+        // last line (column = distance from last line start + 1).
+        let past = byte_to_line_col(999, src, &tbl);
+        assert_eq!(past.0, 3, "byte past EOF should land on last line");
+    }
+
+    #[test]
+    fn byte_to_line_col_clrf() {
+        // The line table splits on '\n' alone; the '\r' byte therefore
+        // belongs to the line *before* the newline. We assert this so a
+        // future "smart" CRLF handler doesn't silently shift columns
+        // for Windows-authored specs.
+        let src = "a\r\nb\r\n";
+        let tbl = build_line_table(src);
+        assert_eq!(byte_to_line_col(0, src, &tbl), (1, 1));
+        // Byte 3 is 'b' — first byte on line 2.
+        assert_eq!(byte_to_line_col(3, src, &tbl), (2, 1));
+        // Byte 1 is '\r' — still on line 1, column 2.
+        assert_eq!(byte_to_line_col(1, src, &tbl), (1, 2));
+    }
+
+    #[test]
+    fn byte_to_line_col_utf8() {
+        // "αβγ" is 6 bytes (3 × 2-byte codepoints), then '\n' at byte 6,
+        // then "foo" starting at byte 7.
+        let src = "αβγ\nfoo";
+        let tbl = build_line_table(src);
+        // 'f' must resolve to line 2 col 1.
+        assert_eq!(byte_to_line_col(7, src, &tbl), (2, 1));
+        // Mid-codepoint byte must not panic. Documented behaviour:
+        // column is byte distance (nom_locate convention), so byte 1
+        // inside α gives column 2 on line 1.
+        assert_eq!(byte_to_line_col(1, src, &tbl), (1, 2));
+    }
+
+    #[test]
+    fn byte_to_line_col_offset_at_eof() {
+        // byte == source.len() must not panic; column is byte-distance
+        // from the line start, +1 for 1-based indexing.
+        let src = "abc";
+        let tbl = build_line_table(src);
+        assert_eq!(byte_to_line_col(3, src, &tbl), (1, 4));
+    }
+
+    #[test]
+    fn resolve_span_fills_unresolved() {
+        let src = "hello\nworld\n";
+        let tbl = build_line_table(src);
+        let mut span = Span::from_bytes(2, 5);
+        resolve_span(&mut span, src, &tbl);
+        assert_eq!(span.start_line, 1);
+        assert_eq!(span.start_column, 3);
+        assert_eq!(span.end_line, 1);
+        assert_eq!(span.end_column, 6);
+        // Byte fields must be left untouched.
+        assert_eq!(span.start_byte, 2);
+        assert_eq!(span.end_byte, 5);
+    }
+
+    #[test]
+    fn resolve_span_keeps_resolved() {
+        // Pre-populated line/column must not be overwritten — the
+        // parser-produced spans are authoritative and may carry visual
+        // columns that don't match a naive byte recalculation.
+        let src = "hello\nworld\n";
+        let tbl = build_line_table(src);
+        let mut span = Span::new(2, 5, 7, 8, 9, 10);
+        resolve_span(&mut span, src, &tbl);
+        assert_eq!(span.start_line, 7);
+        assert_eq!(span.start_column, 8);
+        assert_eq!(span.end_line, 9);
+        assert_eq!(span.end_column, 10);
+    }
+
+    #[test]
+    fn resolve_diagnostic_lines_walks_labels_and_suggestions() {
+        use crate::diagnostic::{Applicability, Edit, Label, LintCategory, Suggestion};
+        use crate::lint::LintMetadata;
+
+        static META: LintMetadata = LintMetadata {
+            id: "RPM_TEST_RESOLVE",
+            name: "test-resolve",
+            description: "",
+            default_severity: Severity::Warn,
+            category: LintCategory::Correctness,
+        };
+        let src = "hello\nworld\n";
+        let tbl = build_line_table(src);
+        let mut diag = Diagnostic::new(
+            &META,
+            Severity::Warn,
+            "test".to_owned(),
+            Span::from_bytes(0, 5),
+        );
+        diag.labels.push(Label {
+            span: Span::from_bytes(6, 11),
+            message: "lbl".into(),
+        });
+        diag.suggestions.push(Suggestion::new(
+            "fix".to_owned(),
+            vec![Edit::new(Span::from_bytes(2, 5), "X".to_owned())],
+            Applicability::MachineApplicable,
+        ));
+
+        resolve_diagnostic_lines(&mut diag, src, &tbl);
+
+        // primary_span: bytes 0..5 → line 1, col 1..6
+        assert_eq!(diag.primary_span.start_line, 1);
+        assert_eq!(diag.primary_span.start_column, 1);
+        assert_eq!(diag.primary_span.end_line, 1);
+        assert_eq!(diag.primary_span.end_column, 6);
+        // label span: bytes 6..11 → line 2, col 1..6
+        assert_eq!(diag.labels[0].span.start_line, 2);
+        assert_eq!(diag.labels[0].span.start_column, 1);
+        assert_eq!(diag.labels[0].span.end_line, 2);
+        assert_eq!(diag.labels[0].span.end_column, 6);
+        // suggestion edit span: bytes 2..5 → line 1, col 3..6
+        let edit_span = diag.suggestions[0].edits[0].span;
+        assert_eq!(edit_span.start_line, 1);
+        assert_eq!(edit_span.start_column, 3);
+        assert_eq!(edit_span.end_line, 1);
+        assert_eq!(edit_span.end_column, 6);
     }
 }

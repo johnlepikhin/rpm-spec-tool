@@ -6,6 +6,9 @@
 //!   require every `SourceN:` to be a URL where the tarball can be
 //!   downloaded. A `Source0: gcc-%{version}.tar.xz` style entry
 //!   carries the **filename** but loses the provenance.
+//!   **Family-gated**: only fires for Fedora/RHEL profiles. ALT,
+//!   openSUSE, Mageia and downstream-internal pipelines routinely
+//!   ship plain filenames next to the spec — flagging them is noise.
 //! - **RPM126 `description-leads-with-this-package`** — opt-in
 //!   style nit. Fedora style guide discourages descriptions that
 //!   open with `This package contains …` / `The X package is …` —
@@ -17,6 +20,7 @@
 //! about what the macro expands to).
 
 use rpm_spec::ast::{PreambleItem, Section, Span, Tag, TagValue, TextBody, TextSegment};
+use rpm_spec_profile::Profile;
 
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
 use crate::lint::{Lint, LintMetadata};
@@ -78,6 +82,10 @@ impl Lint for SourceWithoutUrl {
     }
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
+    }
+
+    fn applies_to_profile(&self, profile: &Profile) -> bool {
+        crate::rules::util::is_fedora_or_rhel(profile)
     }
 }
 
@@ -233,11 +241,23 @@ fn leads_with_this_or_the_package(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::session::parse;
+    use rpm_spec_profile::{Family, Profile};
 
     fn run<L: Lint>(src: &str, mut lint: L) -> Vec<Diagnostic> {
         let outcome = parse(src);
         lint.visit_spec(&outcome.spec);
         lint.take_diagnostics()
+    }
+
+    /// Run RPM125 only if `applies_to_profile` allows it under
+    /// `profile`. Mirrors the gating performed by the orchestration
+    /// layer so unit tests exercise the profile predicate too.
+    fn run_with_profile(src: &str, profile: &Profile) -> Vec<Diagnostic> {
+        let lint = SourceWithoutUrl::new();
+        if !lint.applies_to_profile(profile) {
+            return Vec::new();
+        }
+        run(src, lint)
     }
 
     // ---- RPM125 ----
@@ -290,6 +310,32 @@ mod tests {
         let src = "Name: x\nSource17: extra-setup.in\n";
         let diags = run(src, SourceWithoutUrl::new());
         assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn rpm125_fires_on_fedora_profile() {
+        let mut p = Profile::default();
+        p.identity.family = Some(Family::Fedora);
+        let src = "Name: x\nSource0: hello.tar.gz\n";
+        let diags = run_with_profile(src, &p);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].lint_id, "RPM125");
+    }
+
+    #[test]
+    fn rpm125_silent_on_alt_profile() {
+        let mut p = Profile::default();
+        p.identity.family = Some(Family::Alt);
+        let src = "Name: x\nSource0: hello.tar.gz\n";
+        assert!(run_with_profile(src, &p).is_empty());
+    }
+
+    #[test]
+    fn rpm125_silent_on_generic_profile() {
+        let mut p = Profile::default();
+        p.identity.family = Some(Family::Generic);
+        let src = "Name: x\nSource0: hello.tar.gz\n";
+        assert!(run_with_profile(src, &p).is_empty());
     }
 
     // ---- RPM126 ----

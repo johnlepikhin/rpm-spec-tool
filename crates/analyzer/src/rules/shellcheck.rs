@@ -62,7 +62,9 @@ const ALLOWED_SHELLS: &[&str] = &["sh", "bash", "dash", "ksh"];
 const SC1090: u32 = 1090;
 const SC1091: u32 = 1091;
 const SC2050: u32 = 2050;
+const SC2086: u32 = 2086;
 const SC2164: u32 = 2164;
+const SC2317: u32 = 2317;
 const SC3044: u32 = 3044;
 
 /// SC codes silenced by default because they are well-known noise in
@@ -85,7 +87,18 @@ const SC3044: u32 = 3044;
 ///   like `[ "________" = "sdm" ]` — two literals — and shellcheck
 ///   flags every such comparison. Since this is purely an artefact of
 ///   masking, we silence it globally.
-const DEFAULT_DISABLED: &[u32] = &[SC2164, SC3044, SC1090, SC1091, SC2050];
+/// - **SC2086**: `Double quote to prevent globbing and word-splitting`.
+///   ~800 occurrences on the real-spec corpus. Spec scripts mostly
+///   feed controlled-shape paths (`%{buildroot}`, `$RPM_BUILD_ROOT`)
+///   into commands that don't care about word-splitting — and rpm's
+///   `set -e -x` wrapper makes accidental splits loud immediately.
+///   Re-enable via `[shellcheck].enable = ["SC2086"]` if you care.
+/// - **SC2317**: `Command appears to be unreachable`. Heavy false
+///   positive on functions reached via `trap`, aliases, or `eval`,
+///   all common in spec scriptlets.
+const DEFAULT_DISABLED: &[u32] = &[
+    SC2164, SC3044, SC1090, SC1091, SC2050, SC2086, SC2317,
+];
 
 /// RPM200 — every shellcheck finding is funnelled through this metadata.
 pub static SHELLCHECK_METADATA: LintMetadata = LintMetadata {
@@ -1030,6 +1043,20 @@ mod tests {
     }
 
     #[test]
+    fn default_disabled_baseline_locked() {
+        // This is a regression lock for the deliberate shellcheck noise-suppression
+        // policy. See the per-code doc-comment block above DEFAULT_DISABLED for
+        // rationale. If you remove a code from this list, also remove its
+        // assertion here AND update the doc block.
+        for code in &[SC2164, SC3044, SC1090, SC1091, SC2050, SC2086, SC2317] {
+            assert!(
+                DEFAULT_DISABLED.contains(code),
+                "expected SC{code} in DEFAULT_DISABLED",
+            );
+        }
+    }
+
+    #[test]
     fn set_config_normalizes_disable() {
         let mut lint = ShellcheckLint::new();
         let mut cfg = Config::default();
@@ -1140,7 +1167,9 @@ mod tests {
             eprintln!("shellcheck not installed; skipping integration test");
             return;
         }
-        let src = "%install\nFOO=$1\necho $FOO\n";
+        // SC2068 (`echo $@` unquoted array). Picked because SC2086 is
+        // in `DEFAULT_DISABLED` and would otherwise hide the test.
+        let src = "%install\nfunc() { echo $@; }\nfunc a b\n";
         let mut lint = ShellcheckLint::new();
         lint.set_config(&Config::default());
         lint.set_source(src);
@@ -1165,7 +1194,7 @@ mod tests {
             eprintln!("shellcheck not installed; skipping integration test");
             return;
         }
-        let src = "%install\nFOO=$1\necho $FOO\n";
+        let src = "%install\nfunc() { echo $@; }\nfunc a b\n";
         let span = Span::new(0, src.len(), 1, 1, 3, 11);
 
         // Baseline: at least one finding.

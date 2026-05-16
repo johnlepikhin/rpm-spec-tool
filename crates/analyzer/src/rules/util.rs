@@ -4,8 +4,38 @@ use rpm_spec::ast::{
     BoolDep, CondExpr, DepAtom, DepExpr, FilesContent, PackageName, PreambleContent, PreambleItem,
     Section, Span, SpecFile, SpecItem, Tag, TagValue, Text,
 };
+use rpm_spec_profile::{Family, Profile};
 
 use crate::diagnostic::Edit;
+
+/// `true` when the profile identifies the spec as Fedora or RHEL.
+///
+/// Used as a positive gate for Fedora/RHEL-specific style rules
+/// (RPM125 `source-without-url`, etc). The mirror predicate lives on
+/// `rules::bcond_on_non_fedora` and returns `true` for the *complement*
+/// (ALT/openSUSE/Mageia/Generic).
+///
+/// `Family` is `#[non_exhaustive]`, so we deliberately spell out every
+/// arm rather than use a wildcard `_`. The compile-time audit is
+/// worth the verbosity: when a new variant (`Family::Almalinux`,
+/// `Family::Eulerlinux`, …) lands upstream, the missing arm forces a
+/// deliberate "is this a RHEL clone? a SUSE clone? something new?"
+/// review here instead of silently defaulting one way. Splitting the
+/// fallback into `None` and `Some(_)` keeps both intents visible in
+/// `cargo expand` / `git blame`.
+pub(crate) fn is_fedora_or_rhel(profile: &Profile) -> bool {
+    match profile.identity.family {
+        Some(Family::Fedora | Family::Rhel) => true,
+        // Downstream/internal pipelines: not Fedora/RHEL.
+        Some(Family::Alt | Family::Opensuse | Family::Mageia | Family::Generic) => false,
+        // No family detected — pre-profile pipelines / `generic` profile.
+        None => false,
+        // `Family` is `#[non_exhaustive]`; future variants default to
+        // `false` (not Fedora/RHEL) until someone makes a deliberate
+        // call. Audit this arm whenever a new variant lands upstream.
+        Some(_) => false,
+    }
+}
 
 /// Collect top-level preamble items into a `Vec`.
 ///
@@ -355,19 +385,33 @@ pub(crate) fn contains_macro_ast<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
 
 /// `true` when every item in the conditional body is "filler"
 /// (blank line or comment) — i.e. the branch has no real content.
+///
+/// A *completely empty* `body` returns `false`: the AST being empty
+/// usually means the parser couldn't decode some macro inside the
+/// branch (e.g. a project-private `%gendep_*` macro) rather than the
+/// source really being empty between `%if` and `%endif`. RPM073 would
+/// otherwise fire on every such block. Genuine `%if … %endif` with
+/// nothing in source still gets `Blank` items emitted by the parser,
+/// so this stays accurate for the actual lint target.
 pub(crate) fn is_empty_top_body(body: &[SpecItem<Span>]) -> bool {
-    body.iter()
-        .all(|i| matches!(i, SpecItem::Blank | SpecItem::Comment(_)))
+    !body.is_empty()
+        && body
+            .iter()
+            .all(|i| matches!(i, SpecItem::Blank | SpecItem::Comment(_)))
 }
 
 pub(crate) fn is_empty_preamble_body(body: &[PreambleContent<Span>]) -> bool {
-    body.iter()
-        .all(|i| matches!(i, PreambleContent::Blank | PreambleContent::Comment(_)))
+    !body.is_empty()
+        && body
+            .iter()
+            .all(|i| matches!(i, PreambleContent::Blank | PreambleContent::Comment(_)))
 }
 
 pub(crate) fn is_empty_files_body(body: &[FilesContent<Span>]) -> bool {
-    body.iter()
-        .all(|i| matches!(i, FilesContent::Blank | FilesContent::Comment(_)))
+    !body.is_empty()
+        && body
+            .iter()
+            .all(|i| matches!(i, FilesContent::Blank | FilesContent::Comment(_)))
 }
 
 /// Return the resolved literal name of the main package, or `None`
@@ -1015,5 +1059,46 @@ Summary: standalone\n\
         for tok in ["MIT", "GPL", "ORIGINAL", "ANDX", "WITHOUT", "", "or-"] {
             assert!(!is_spdx_operator(tok), "{tok} should not match");
         }
+    }
+
+    // ---- empty-body helpers ----
+
+    /// Zero-item slices must report `false` — an empty AST body usually
+    /// signals "the parser couldn't decode something" rather than a
+    /// genuine empty source between `%if` and `%endif`. RPM073 (and its
+    /// preamble/files cousins) would otherwise fire on every such block.
+    #[test]
+    fn is_empty_top_body_returns_false_on_empty_slice() {
+        assert!(!is_empty_top_body(&[]));
+    }
+
+    #[test]
+    fn is_empty_preamble_body_returns_false_on_empty_slice() {
+        assert!(!is_empty_preamble_body(&[]));
+    }
+
+    #[test]
+    fn is_empty_files_body_returns_false_on_empty_slice() {
+        assert!(!is_empty_files_body(&[]));
+    }
+
+    /// A single Blank item is the "genuine empty" shape the parser
+    /// emits for `%if\n%endif`. All three helpers must return `true`.
+    #[test]
+    fn is_empty_top_body_true_on_single_blank() {
+        let body: Vec<SpecItem<Span>> = vec![SpecItem::Blank];
+        assert!(is_empty_top_body(&body));
+    }
+
+    #[test]
+    fn is_empty_preamble_body_true_on_single_blank() {
+        let body: Vec<PreambleContent<Span>> = vec![PreambleContent::Blank];
+        assert!(is_empty_preamble_body(&body));
+    }
+
+    #[test]
+    fn is_empty_files_body_true_on_single_blank() {
+        let body: Vec<FilesContent<Span>> = vec![FilesContent::Blank];
+        assert!(is_empty_files_body(&body));
     }
 }

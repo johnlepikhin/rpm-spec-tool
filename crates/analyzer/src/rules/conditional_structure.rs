@@ -778,11 +778,16 @@ mod tests {
     // ---- RPM073 empty-conditional-branch ----
 
     #[test]
-    fn rpm073_flags_empty_block() {
+    fn rpm073_silent_for_zero_item_block() {
+        // Zero-item body means the parser dropped its contents (e.g.
+        // an unknown project macro). Don't fire RPM073 — that would
+        // be a false positive on the bulk of real specs that use
+        // private macros like `%gendep_perl_libs` inside `%if`.
+        // Genuine empty-with-blank-line cases are covered by
+        // `rpm073_flags_empty_branches_with_blanks`.
         let src = "Name: x\n%if 0\n%endif\n";
         let diags = run(src, EmptyConditionalBranch::new());
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].lint_id, "RPM073");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
