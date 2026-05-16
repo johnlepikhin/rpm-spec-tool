@@ -1,13 +1,27 @@
 # rpm-spec-tool
 
 [![CI](https://github.com/johnlepikhin/rpm-spec-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/johnlepikhin/rpm-spec-tool/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+[![Crates.io](https://img.shields.io/crates/v/rpm-spec-tool.svg)](https://crates.io/crates/rpm-spec-tool)
+[![docs.rs](https://img.shields.io/docsrs/rpm-spec-tool)](https://docs.rs/rpm-spec-tool)
+[![MSRV](https://img.shields.io/crates/msrv/rpm-spec-tool.svg?label=msrv)](https://www.rust-lang.org/)
+[![dependency status](https://deps.rs/repo/github/johnlepikhin/rpm-spec-tool/status.svg)](https://deps.rs/repo/github/johnlepikhin/rpm-spec-tool)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 Pretty-printer and static analyzer CLI for RPM `.spec` files.
 
 Built on top of the [`rpm-spec`](https://crates.io/crates/rpm-spec) parser and a
 visitor-based analyzer that ships with 24 built-in distribution profiles
 (generic, RHEL 8/9/10, Fedora-derived families, SUSE, ALT Linux variants).
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/johnlepikhin/rpm-spec-tool/main/doc/images/linter.png">
+    <img src="https://raw.githubusercontent.com/johnlepikhin/rpm-spec-tool/main/doc/images/linter.png"
+         alt="rpm-spec-tool lint sample output — codespan-style diagnostics with cross-references and suggestions"
+         width="820">
+  </a>
+  <br>
+  <sub><i>Sample <code>rpm-spec-tool lint</code> output: boolean and conditional simplifications, <code>bcond</code> hygiene, metadata consistency &mdash; with cross-referenced spans and machine-applicable fixes.</i></sub>
+</p>
 
 ## Features
 
@@ -33,6 +47,39 @@ visitor-based analyzer that ships with 24 built-in distribution profiles
   via `[shellcheck]` in `.rpmspec.toml`.
 - **AST dump** — `ast` emits the parsed AST as JSON or YAML for downstream
   tooling.
+
+<table align="center">
+  <tr>
+    <td align="center">
+      <a href="https://raw.githubusercontent.com/johnlepikhin/rpm-spec-tool/main/doc/images/pretty.png">
+        <img src="https://raw.githubusercontent.com/johnlepikhin/rpm-spec-tool/main/doc/images/pretty.png"
+             alt="rpm-spec-tool pretty sample output — indented and syntax-highlighted .spec rendering"
+             width="380">
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://raw.githubusercontent.com/johnlepikhin/rpm-spec-tool/main/doc/images/format-diff.png">
+        <img src="https://raw.githubusercontent.com/johnlepikhin/rpm-spec-tool/main/doc/images/format-diff.png"
+             alt="rpm-spec-tool format --diff sample output — coloured unified diff against the canonical form"
+             width="380">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><sub><i><code>pretty</code> &mdash; indented, syntax-highlighted view for reading.</i></sub></td>
+    <td align="center"><sub><i><code>format --diff</code> &mdash; unified diff for CI / pre-commit gating.</i></sub></td>
+  </tr>
+</table>
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/johnlepikhin/rpm-spec-tool/main/doc/images/profile-macro.png">
+    <img src="https://raw.githubusercontent.com/johnlepikhin/rpm-spec-tool/main/doc/images/profile-macro.png"
+         alt="rpm-spec-tool profile macro sample output — comparison of a single macro across distribution profiles"
+         width="640">
+  </a>
+  <br>
+  <sub><i><code>profile macro</code> compares a single macro across distributions &mdash; the same logical path resolves to three different idioms.</i></sub>
+</p>
 
 ## Quick start
 
@@ -156,6 +203,27 @@ cargo install --git https://github.com/johnlepikhin/rpm-spec-tool rpm-spec-tool
 # From a local clone:
 cargo install --path crates/cli
 ```
+
+### Shell completions
+
+After installation, generate a completion script for your shell with the
+`completions` subcommand:
+
+```sh
+# Bash (system-wide):
+rpm-spec-tool completions bash | sudo tee /etc/bash_completion.d/rpm-spec-tool >/dev/null
+
+# Zsh (per-user; ensure the target dir is on $fpath):
+rpm-spec-tool completions zsh  > ~/.zsh/completions/_rpm-spec-tool
+
+# Fish (per-user):
+rpm-spec-tool completions fish > ~/.config/fish/completions/rpm-spec-tool.fish
+
+# PowerShell:
+rpm-spec-tool completions powershell >> $PROFILE
+```
+
+Supported shells: `bash`, `zsh`, `fish`, `powershell`, `elvish`.
 
 ## License
 
