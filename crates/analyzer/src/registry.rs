@@ -193,5 +193,10 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::dep_health::RuntimeRequiresLooksLikeBuildRequires::new()),
         Box::new(rules::dep_features::UnsupportedDependencyFeature::new()),
         Box::new(rules::dep_features::ContradictoryDependencyQualifiers::new()),
+        // Phase 22 — cross-section dep policy.
+        Box::new(rules::build_tool_brs::BuildToolUsedWithoutBuildRequires::new()),
+        Box::new(rules::pkgconfig_br::PkgconfigFileWithoutPkgconfigBr::new()),
+        Box::new(rules::scriptlet_deps::ScriptletCommandWithoutRequires::new()),
+        Box::new(rules::patch_status_comment::PatchStatusCommentMissing::new()),
     ]
 }

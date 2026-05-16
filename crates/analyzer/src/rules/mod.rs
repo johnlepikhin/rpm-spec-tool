@@ -132,4 +132,10 @@ pub mod users_groups;
 pub mod dep_features;
 pub mod dep_health;
 
+// Phase 22 — cross-section dep policy (CommandUseIndex × FilesClassifier × PolicyRegistry).
+pub mod build_tool_brs;
+pub mod patch_status_comment;
+pub mod pkgconfig_br;
+pub mod scriptlet_deps;
+
 mod util;

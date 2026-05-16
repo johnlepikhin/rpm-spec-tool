@@ -31,6 +31,19 @@ pub(crate) struct PolicyRegistry {
     /// Dist-tag substrings that flag a hardcoded tag (`.fc40`,
     /// `.el9`, …) — caller compares verbatim, no globbing.
     pub hardcoded_dist_substrings: &'static [&'static str],
+    /// `(command, BuildRequires entry)` mappings used by RPM324.
+    /// "Command appears in a build-script section → spec should
+    /// declare the corresponding BR." Today the same table is used
+    /// across Fedora/openSUSE/ALT — overlap is real but coincidental.
+    /// Distributions where the BR name diverges (e.g. ALT's
+    /// `cmake-rpm-macros`) will need a per-family override; when that
+    /// lands, split out family-specific slices and pick here.
+    pub build_tool_to_buildrequires: &'static [(&'static str, &'static str)],
+    /// `(command, Requires-atom)` mappings used by RPM328.
+    /// "Scriptlet runs this command → spec should declare `Requires:
+    /// <atom>` (any qualifier)." Empty by default; only families that
+    /// ship the relevant helpers surface the policy.
+    pub scriptlet_required_deps: &'static [(&'static str, &'static str)],
 }
 
 /// Whether the active family enforces `%{?dist}` in `Release:`.
@@ -59,24 +72,32 @@ impl PolicyRegistry {
                 tmpfiles_create_macros: FEDORA_TMPFILES_MACROS,
                 disttag: DistTagPolicy::Required,
                 hardcoded_dist_substrings: FEDORA_HARDCODED_DIST,
+                build_tool_to_buildrequires: DEFAULT_BUILD_TOOL_BRS,
+                scriptlet_required_deps: DEFAULT_SCRIPTLET_DEPS,
             },
             Some(Family::Opensuse) => Self {
                 systemd_macros: OPENSUSE_SYSTEMD_MACROS,
                 tmpfiles_create_macros: OPENSUSE_TMPFILES_MACROS,
                 disttag: DistTagPolicy::NotApplicable,
                 hardcoded_dist_substrings: &[],
+                build_tool_to_buildrequires: DEFAULT_BUILD_TOOL_BRS,
+                scriptlet_required_deps: DEFAULT_SCRIPTLET_DEPS,
             },
             Some(Family::Mageia) => Self {
                 systemd_macros: MAGEIA_SYSTEMD_MACROS,
                 tmpfiles_create_macros: FEDORA_TMPFILES_MACROS,
                 disttag: DistTagPolicy::NotApplicable,
                 hardcoded_dist_substrings: &[".mga"],
+                build_tool_to_buildrequires: DEFAULT_BUILD_TOOL_BRS,
+                scriptlet_required_deps: DEFAULT_SCRIPTLET_DEPS,
             },
             Some(Family::Alt) => Self {
                 systemd_macros: ALT_SYSTEMD_MACROS,
                 tmpfiles_create_macros: ALT_TMPFILES_MACROS,
                 disttag: DistTagPolicy::NotApplicable,
                 hardcoded_dist_substrings: &[],
+                build_tool_to_buildrequires: DEFAULT_BUILD_TOOL_BRS,
+                scriptlet_required_deps: DEFAULT_SCRIPTLET_DEPS,
             },
             Some(Family::Generic) | None => Self::generic(),
             // `Family` is `#[non_exhaustive]`; any future variant
@@ -103,6 +124,8 @@ impl PolicyRegistry {
             tmpfiles_create_macros: &[],
             disttag: DistTagPolicy::NotApplicable,
             hardcoded_dist_substrings: &[],
+            build_tool_to_buildrequires: &[],
+            scriptlet_required_deps: &[],
         }
     }
 }
@@ -181,6 +204,61 @@ const ALT_SYSTEMD_MACROS: &[&str] = &[
 ];
 
 const ALT_TMPFILES_MACROS: &[&str] = &["systemd_tmpfiles_create", "tmpfiles_create"];
+
+// ---------------------------------------------------------------------
+// Build-tool ↔ BuildRequires policy (RPM324)
+// ---------------------------------------------------------------------
+
+/// `(command, BuildRequires-atom)` defaults shared across Fedora-,
+/// openSUSE-, and ALT-style packages. Entries cover the canonical
+/// build-system bootstrappers — pkgconfig and friends — where every
+/// distro ships a virtual provide so the literal matches work.
+///
+/// Deliberately omitted: `python3` → no single BR is correct
+/// (Fedora wants `python3-devel`, openSUSE `python-rpm-macros`, etc.).
+/// A future per-family override slot can land it.
+///
+/// Listed in lookup order (most-specific first when there's overlap)
+/// so the rule can stop at the first match.
+const DEFAULT_BUILD_TOOL_BRS: &[(&str, &str)] = &[
+    ("cmake", "cmake"),
+    ("meson", "meson"),
+    ("ninja", "ninja-build"),
+    ("autoreconf", "autoconf"),
+    ("automake", "automake"),
+    ("libtoolize", "libtool"),
+    ("pkg-config", "pkgconfig"),
+    ("pkgconf", "pkgconfig"),
+    ("desktop-file-install", "desktop-file-utils"),
+    ("desktop-file-validate", "desktop-file-utils"),
+    ("appstreamcli", "appstream"),
+    ("update-mime-database", "shared-mime-info"),
+    ("gtk-update-icon-cache", "gtk-update-icon-cache"),
+    ("glib-compile-schemas", "glib2"),
+];
+
+// ---------------------------------------------------------------------
+// Scriptlet command ↔ Requires policy (RPM328)
+// ---------------------------------------------------------------------
+
+/// `(command, Requires-atom)` defaults consulted by RPM328 when a
+/// scriptlet invokes the command directly. Kept intentionally short —
+/// distro macros (`%systemd_post`, …) handle the lifecycle properly
+/// and are flagged by RPM342 instead; this table catches only the
+/// bare-command pattern.
+const DEFAULT_SCRIPTLET_DEPS: &[(&str, &str)] = &[
+    ("systemctl", "systemd"),
+    ("useradd", "shadow-utils"),
+    ("groupadd", "shadow-utils"),
+    ("usermod", "shadow-utils"),
+    ("groupmod", "shadow-utils"),
+    ("getent", "glibc-common"),
+    ("update-alternatives", "alternatives"),
+    ("install-info", "info"),
+    ("glib-compile-schemas", "glib2"),
+    ("gtk-update-icon-cache", "gtk-update-icon-cache"),
+    ("update-mime-database", "shared-mime-info"),
+];
 
 #[cfg(test)]
 mod tests {

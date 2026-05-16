@@ -550,6 +550,28 @@ fn collect_atoms_bool<'a>(b: &'a BoolDep, out: &mut Vec<&'a DepAtom>) {
     }
 }
 
+/// Top-level convenience over [`collect_dep_atoms_in_items`]: collect
+/// the resolved literal names of every dependency atom on a tag
+/// matching `tag_matcher`. Atoms whose name is a macro (can't be
+/// resolved literally) are silently skipped; whitespace around the
+/// literal is trimmed.
+///
+/// Used by RPM324/RPM325/RPM328 — every "did the spec declare a BR/
+/// Requires for this command?" rule lands here.
+pub(crate) fn collect_top_level_dep_names<F>(
+    spec: &SpecFile<Span>,
+    tag_matcher: F,
+) -> std::collections::BTreeSet<String>
+where
+    F: Fn(&Tag) -> bool,
+{
+    let items = collect_top_level_preamble(spec);
+    collect_dep_atoms_in_items(&items, tag_matcher)
+        .into_iter()
+        .filter_map(|a| a.name.literal_str().map(|s| s.trim().to_owned()))
+        .collect()
+}
+
 /// Generate a "missing required tag" lint.
 ///
 /// Phase 1 introduced six near-identical lints (`missing-name-tag`,
