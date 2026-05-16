@@ -14,9 +14,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
-use codespan_reporting::term::termcolor::{
-    Color, ColorSpec, StandardStream, WriteColor,
-};
+use codespan_reporting::term::termcolor::{Color, ColorSpec, StandardStream, WriteColor};
 use rpm_spec_analyzer::registry::builtin_lint_metadata;
 use rpm_spec_analyzer::{LintCategory, LintMetadata, Severity};
 
@@ -148,7 +146,9 @@ fn filter<'a>(
         .iter()
         .copied()
         .filter(|m| categories.is_empty() || categories.iter().any(|c| c.matches(m.category)))
-        .filter(|m| severities.is_empty() || severities.iter().any(|s| s.matches(m.default_severity)))
+        .filter(|m| {
+            severities.is_empty() || severities.iter().any(|s| s.matches(m.default_severity))
+        })
         .collect()
 }
 
@@ -233,11 +233,7 @@ fn render_text(
     Ok(())
 }
 
-fn write_heading(
-    out: &mut StandardStream,
-    cat: LintCategory,
-    count: usize,
-) -> io::Result<()> {
+fn write_heading(out: &mut StandardStream, cat: LintCategory, count: usize) -> io::Result<()> {
     apply_spec(out, |s| s.set_bold(true))?;
     write!(out, "{}", category_label(cat))?;
     out.reset()?;

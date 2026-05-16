@@ -96,9 +96,7 @@ const SC3044: u32 = 3044;
 /// - **SC2317**: `Command appears to be unreachable`. Heavy false
 ///   positive on functions reached via `trap`, aliases, or `eval`,
 ///   all common in spec scriptlets.
-const DEFAULT_DISABLED: &[u32] = &[
-    SC2164, SC3044, SC1090, SC1091, SC2050, SC2086, SC2317,
-];
+const DEFAULT_DISABLED: &[u32] = &[SC2164, SC3044, SC1090, SC1091, SC2050, SC2086, SC2317];
 
 /// RPM200 — every shellcheck finding is funnelled through this metadata.
 pub static SHELLCHECK_METADATA: LintMetadata = LintMetadata {
