@@ -186,5 +186,12 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::ldconfig_style::LdconfigScriptletStyle::new()),
         Box::new(rules::tmpfiles_create::TmpfilesWithoutCreate::new()),
         Box::new(rules::users_groups::UnsafeUseraddGroupadd::new()),
+        // Phase 21 — dependency semantics.
+        Box::new(rules::dep_health::DuplicateDependencyAtom::new()),
+        Box::new(rules::dep_health::WeakDepDuplicatesStrongDep::new()),
+        Box::new(rules::dep_health::SelfWeakDependency::new()),
+        Box::new(rules::dep_health::RuntimeRequiresLooksLikeBuildRequires::new()),
+        Box::new(rules::dep_features::UnsupportedDependencyFeature::new()),
+        Box::new(rules::dep_features::ContradictoryDependencyQualifiers::new()),
     ]
 }

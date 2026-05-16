@@ -128,4 +128,8 @@ pub mod systemd_units;
 pub mod tmpfiles_create;
 pub mod users_groups;
 
+// Phase 21 — dependency semantics.
+pub mod dep_features;
+pub mod dep_health;
+
 mod util;
