@@ -1459,3 +1459,103 @@ family = "rhel"
     // Clean spec → no diagnostics → exit 0 even with profile flag.
     assert_eq!(code, 0, "stderr={stderr}");
 }
+
+/// End-to-end coverage for the family-gated rules (RPM127/128/129).
+/// Runs the same spec through profiles representing three distinct
+/// distro families and asserts that the diagnostic-id sets differ
+/// according to each rule's documented gating. Catches accidental
+/// registry-entry removal, gate inversions, and profile-resolution
+/// regressions that pure unit tests can't see.
+#[test]
+fn cross_profile_lint_counts_differ_by_family() {
+    // Spec exercises all 3 family-gated triggers:
+    //   - `License: GPLv2+`   → RPM127 on Fedora ≥ 40 only.
+    //   - missing `Group:`     → RPM128 on openSUSE only.
+    //   - `%bcond_with python3` → RPM129 on non-Fedora/non-RHEL only.
+    let spec_src = "\
+Name:           cross-profile-test
+Version:        1
+Release:        1
+License:        GPLv2+
+Summary:        s
+URL:            https://e.org
+
+%bcond_with python3
+
+%description
+b
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1-1
+- init
+";
+    let spec = write_temp(spec_src);
+    let path = spec.path().to_str().unwrap();
+
+    // Use JSON output for a stable, machine-readable diagnostic stream
+    // — stderr text format is human-targeted and may change column
+    // padding / ANSI codes / grouping without notice.
+    let ids_for = |profile: &str| -> std::collections::BTreeSet<String> {
+        let (_code, stdout, stderr) = run(
+            &["lint", "--format", "json", "--profile", profile, path],
+            None,
+        );
+        let v: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!("invalid JSON from `--format json`: {e}\nstdout={stdout}\nstderr={stderr}")
+        });
+        let mut ids = std::collections::BTreeSet::new();
+        for file in v["files"].as_array().into_iter().flatten() {
+            for diag in file["diagnostics"].as_array().into_iter().flatten() {
+                if let Some(id) = diag["lint_id"].as_str() {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+        ids
+    };
+
+    // No bundled `fedora-N` profile yet, but `rhel-9-x86_64` (Family::Rhel)
+    // is enough to assert the polarity flips: RPM127 needs Fedora ≥ 40,
+    // RPM128 needs Opensuse, RPM129 needs NOT (Fedora|Rhel).
+    let rhel = ids_for("rhel-9-x86_64");
+    let alt = ids_for("altlinux-10-x86_64");
+    let suse = ids_for("sles-15-x86_64");
+
+    // RHEL — none of the three should fire.
+    assert!(
+        !rhel.contains("RPM127") && !rhel.contains("RPM128") && !rhel.contains("RPM129"),
+        "rhel-9 should silence all three family-gated rules; got {rhel:?}"
+    );
+
+    // ALT — RPM129 fires (non-Fedora/RHEL with %bcond), others silent.
+    assert!(
+        alt.contains("RPM129"),
+        "alt should flag RPM129; got {alt:?}"
+    );
+    assert!(
+        !alt.contains("RPM127"),
+        "alt should NOT flag RPM127; got {alt:?}"
+    );
+    assert!(
+        !alt.contains("RPM128"),
+        "alt should NOT flag RPM128; got {alt:?}"
+    );
+
+    // SLES (Opensuse family) — RPM128 (missing Group) + RPM129 (%bcond).
+    assert!(
+        suse.contains("RPM128"),
+        "sles should flag RPM128; got {suse:?}"
+    );
+    assert!(
+        suse.contains("RPM129"),
+        "sles should flag RPM129; got {suse:?}"
+    );
+    assert!(
+        !suse.contains("RPM127"),
+        "sles should NOT flag RPM127; got {suse:?}"
+    );
+
+    // Cross-profile delta: the three sets must not all coincide.
+    assert_ne!(rhel, alt, "rhel and alt must produce different RPM12x sets");
+    assert_ne!(alt, suse, "alt and sles must produce different RPM12x sets");
+}

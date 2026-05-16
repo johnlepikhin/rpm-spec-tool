@@ -477,6 +477,50 @@ gcc.spec impact: **3 RPM125** (Source0/1/2 filename-only),
 - buildroot-tag-declared — could add if seen, but rare in modern
   specs.
 
+## Phase 14 — Profile-aware lints (✅ implemented)
+
+| ID     | Name                          | Default | Profile fields used      | Notes |
+|--------|-------------------------------|---------|--------------------------|-------|
+| RPM024 | invalid-license               | warn    | `licenses` (mode + allow) | ✅ Phase 14a; silent when `mode == Off`; splits SPDX `OR`/`AND`/`WITH` and checks each atom; case-insensitive typo hint |
+| RPM025 | non-standard-group            | warn    | `groups` (mode + allow)   | ✅ Phase 14a; silent when `mode == Off`; suggests nearest group sharing root segment (`System/...`) |
+| RPM050 | hardcoded-paths *(enhanced)*  | warn    | `macros`                  | ✅ Phase 14a enhancement: rebuilds path-prefix table from `profile.macros` via recursive `%{...}` expansion (`util::expand_macro_to_literal`); falls back to FHS defaults for unresolvable macros |
+| RPM021 | deprecated-clean-section *(family-gated)* | warn | `identity.family` | ✅ Phase 14b: autofix `MachineApplicable` only when family ∈ {Fedora, Rhel} or unknown; degraded to `Manual` hint on SUSE/Alt/Mageia/Generic (some specs still rely on `%clean`) |
+| RPM120 | make-without-make-build *(macro-gated)* | warn | `macros["make_build"]` | ✅ Phase 14b: silent when `make_build` macro absent in profile (e.g. distros without Fedora-style build macros) |
+| RPM121 | make-install-without-make-install *(macro-gated)* | warn | `macros["make_install"]` | ✅ Phase 14b: same as RPM120 for `make_install` |
+| RPM122 | configure-without-configure-macro *(macro-gated)* | warn | `macros["configure"]` | ✅ Phase 14b: same for `configure` |
+
+Полный roadmap по profile-aware refactor'у lint'ов — в
+[doc/profile-aware-lints.md](profile-aware-lints.md). Закрывает все три
+уровня правил, выявленных survey'ем:
+
+- **Уровень 1** (RPM024/025) — новые правила, work только с profile data.
+- **Уровень 2** (RPM050) — заменён хардкод-table на профильное чтение.
+- **Уровень 3** (RPM021, RPM120-122) — family-gated suggestions /
+  macro-availability gating.
+
+Bootstrap data (наполнение `licenses.allowed` / `groups.allowed` в
+bundled-профилях) — отдельная задача; пока RPM024/025 silent с
+default-профилем (`mode == Off`).
+
+## Phase 15 — Family-gated rules with emit/no-emit polarity (✅ implemented)
+
+Новый `Lint::applies_to_profile(&Profile) -> bool` (default `true`) даёт
+правилам декларативный способ сказать «я не применим на этом distro».
+`LintSession::from_config_with_profile` отфильтровывает rules где false
+*до* visit pass'а — экономит обход AST и не загрязняет вывод
+неприменимыми диагностиками. Подробно — в
+[doc/profile-aware-lints.md](profile-aware-lints.md) («Шаблоны
+profile-gating'а»).
+
+| ID     | Name                            | Default | Family/Distro gate           | Notes |
+|--------|---------------------------------|---------|------------------------------|-------|
+| RPM127 | legacy-license-syntax           | warn    | Fedora ≥ 40                  | ✅ Phase 15; flags pre-SPDX names (`GPLv2+`, `LGPLv2`, `BSD`, `ASL 2.0`) on modern Fedora (F40+ mandates SPDX). Composite gate: `family == Fedora` AND `.fcN` parses to N ≥ 40. |
+| RPM128 | group-tag-required-on-suse      | warn    | openSUSE only                | ✅ Phase 15; flags missing `Group:` on main и subpackages (openSUSE Specfile Guidelines). Silent on Fedora/Alt/Rhel — те `Group:` formally dropped или не требуют. |
+| RPM129 | bcond-on-non-fedora             | warn    | NOT Fedora/Rhel              | ✅ Phase 15; flags `%bcond_with` / `%bcond_without` на ALT / openSUSE / Mageia / Generic. Silent on Fedora/RHEL (там макрос определён в стандартном macroset). Silent when family unknown — pre-profile pipeline noise prevention. |
+
+Test helper `make_test_profile(family, dist_tag, macros, rpmlib)` в
+`rules::util` — для unit-тестов profile-aware rules без bundled-профилей.
+
 ## Maintenance rules
 
 - Новые правила получают **следующий свободный ID в своей сотне** (Packaging: 0xx, Correctness: 03x, Sections: 01x/02x/03x на конкретный диапазон, Style: 05x, Modernization: 06x).

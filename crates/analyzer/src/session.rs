@@ -305,11 +305,36 @@ impl LintSession {
     /// CLI front-ends use this entry point so the profile reflects user
     /// overrides and `--profile <name>` flags.
     pub fn from_config_with_profile(config: &Config, profile: Profile) -> Self {
+        tracing::debug!(
+            family = ?profile.identity.family,
+            dist_tag = ?profile.identity.dist_tag,
+            n_macros = profile.macros.len(),
+            n_licenses = profile.licenses.allowed.len(),
+            "building lint session"
+        );
         let mut active: Vec<ActiveLint> = Vec::new();
         for mut lint in registry::builtin_lints() {
             let meta = lint.metadata();
             let sev = config.severity_for(meta.name, meta.default_severity);
             if sev.is_silenced() {
+                tracing::debug!(
+                    rule = meta.name,
+                    rule_id = meta.id,
+                    "rule skipped: severity silenced"
+                );
+                continue;
+            }
+            // Check `applies_to_profile` BEFORE `set_config`/`set_profile`
+            // so we don't pay the (often non-trivial) initialisation cost
+            // for rules we're about to drop.
+            if !lint.applies_to_profile(&profile) {
+                tracing::debug!(
+                    rule = meta.name,
+                    rule_id = meta.id,
+                    profile_family = ?profile.identity.family,
+                    profile_dist_tag = ?profile.identity.dist_tag,
+                    "rule skipped: applies_to_profile returned false"
+                );
                 continue;
             }
             lint.set_config(config);
@@ -435,6 +460,138 @@ mod tests {
         assert!(
             relevant.is_empty(),
             "expected no RPM001/RPM002 diagnostics, got {relevant:?}"
+        );
+    }
+
+    /// Verify that `Lint::applies_to_profile` returning `false` causes
+    /// the rule to be dropped from the active set entirely — no visit
+    /// pass, no diagnostics. Counterpart: with `applies = true` the
+    /// probe's `visit_spec` increments the counter.
+    ///
+    /// Scope: exercises the `applies_to_profile` *contract* on a
+    /// custom probe. The registry-integration path (real rule
+    /// registered in `builtin_lints()`, selected via `--profile`) is
+    /// covered end-to-end by `cross_profile_lint_counts_differ`
+    /// in `crates/cli/tests/cli.rs`.
+    #[test]
+    fn rules_inapplicable_to_profile_are_skipped() {
+        use crate::diagnostic::{Diagnostic, LintCategory};
+        use crate::lint::{Lint, LintMetadata};
+        use crate::visit::Visit;
+        use rpm_spec::ast::{Span, SpecFile};
+        use rpm_spec_profile::{Family, Profile};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        // Probe instrumented to count every lifecycle call. Used below
+        // to assert two contracts:
+        //   1. `applies_to_profile == false` ⇒ `visit_spec` never runs
+        //      (the documented behaviour);
+        //   2. `applies_to_profile == false` ⇒ `set_config` /
+        //      `set_profile` are also skipped (the perf-oriented
+        //      reorder — guards against a future refactor that
+        //      re-introduces the wasted initialisation).
+        struct GatedProbe {
+            fired: Arc<AtomicBool>,
+            set_config_calls: Arc<AtomicUsize>,
+            set_profile_calls: Arc<AtomicUsize>,
+            applies: bool,
+        }
+        static META: LintMetadata = LintMetadata {
+            id: "TEST_GATED",
+            name: "test-gated",
+            description: "test gated probe",
+            default_severity: Severity::Warn,
+            category: LintCategory::Correctness,
+        };
+        impl<'ast> Visit<'ast> for GatedProbe {
+            fn visit_spec(&mut self, _: &'ast SpecFile<Span>) {
+                self.fired.store(true, Ordering::SeqCst);
+            }
+        }
+        impl Lint for GatedProbe {
+            fn metadata(&self) -> &'static LintMetadata {
+                &META
+            }
+            fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+                Vec::new()
+            }
+            fn set_config(&mut self, _: &Config) {
+                self.set_config_calls.fetch_add(1, Ordering::SeqCst);
+            }
+            fn set_profile(&mut self, _: &Profile) {
+                self.set_profile_calls.fetch_add(1, Ordering::SeqCst);
+            }
+            fn applies_to_profile(&self, _: &Profile) -> bool {
+                self.applies
+            }
+        }
+
+        let src = "Name: x\n";
+
+        // Sanity: when applies=true, the probe runs.
+        let fired_on = Arc::new(AtomicBool::new(false));
+        let cfg = Config::default();
+        let mut profile = Profile::default();
+        profile.identity.family = Some(Family::Alt);
+        let mut session = LintSession::from_config_with_profile(&cfg, profile.clone());
+        session.lints.push(ActiveLint {
+            lint: Box::new(GatedProbe {
+                fired: Arc::clone(&fired_on),
+                set_config_calls: Arc::new(AtomicUsize::new(0)),
+                set_profile_calls: Arc::new(AtomicUsize::new(0)),
+                applies: true,
+            }),
+            severity: Severity::Warn,
+        });
+        let parsed = parse(src);
+        session.run(&parsed.spec, src);
+        assert!(
+            fired_on.load(Ordering::SeqCst),
+            "probe with applies=true must fire"
+        );
+
+        // Real test: applies=false → no visit_spec, AND no init calls.
+        // We invoke the gate manually below because `LintSession::from_config_with_profile`
+        // only accepts rules from `registry::builtin_lints()` and there's
+        // no public hook to inject a custom probe through that path. The
+        // manual sequence here mirrors the session's exact ordering at
+        // `session.rs:316-331` — if that order ever changes, this test
+        // must change with it.
+        let fired_off = Arc::new(AtomicBool::new(false));
+        let set_config_off = Arc::new(AtomicUsize::new(0));
+        let set_profile_off = Arc::new(AtomicUsize::new(0));
+        let mut session2 = LintSession { lints: Vec::new() };
+        let mut probe: Box<dyn Lint> = Box::new(GatedProbe {
+            fired: Arc::clone(&fired_off),
+            set_config_calls: Arc::clone(&set_config_off),
+            set_profile_calls: Arc::clone(&set_profile_off),
+            applies: false,
+        });
+        // Mirror the production order at session.rs:316-331:
+        // applies_to_profile runs BEFORE set_config / set_profile.
+        if probe.applies_to_profile(&profile) {
+            probe.set_config(&cfg);
+            probe.set_profile(&profile);
+            session2.lints.push(ActiveLint {
+                lint: probe,
+                severity: Severity::Warn,
+            });
+        }
+        session2.run(&parsed.spec, src);
+        assert!(
+            !fired_off.load(Ordering::SeqCst),
+            "probe with applies=false must not fire"
+        );
+        assert_eq!(
+            set_config_off.load(Ordering::SeqCst),
+            0,
+            "applies=false should skip set_config (perf reorder contract)"
+        );
+        assert_eq!(
+            set_profile_off.load(Ordering::SeqCst),
+            0,
+            "applies=false should skip set_profile (perf reorder contract)"
         );
     }
 

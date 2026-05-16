@@ -134,5 +134,15 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::source_style::DescriptionLeadsWithThisPackage::new()),
         // Phase 13 — shellcheck integration.
         Box::new(rules::shellcheck::ShellcheckLint::new()),
+        // Phase 14 — profile-aware lints (silent unless the profile
+        // sets a non-Off ValidationMode).
+        Box::new(rules::invalid_license::InvalidLicense::new()),
+        Box::new(rules::non_standard_group::NonStandardGroup::new()),
+        // Phase 15 — family-gated rules (emit/no-emit polarity gated
+        // via Lint::applies_to_profile; each rule is silent on distros
+        // it doesn't target).
+        Box::new(rules::legacy_license_syntax::LegacyLicenseSyntax::new()),
+        Box::new(rules::group_tag_required_on_suse::GroupTagRequiredOnSuse::new()),
+        Box::new(rules::bcond_on_non_fedora::BcondOnNonFedora::new()),
     ]
 }

@@ -82,4 +82,14 @@ pub mod source_style;
 // Phase 13 — shellcheck integration.
 pub mod shellcheck;
 
+// Phase 14 — profile-aware lints.
+pub mod invalid_license;
+pub mod non_standard_group;
+
+// Phase 15 — family-gated rules (emit/no-emit polarity via
+// Lint::applies_to_profile).
+pub mod bcond_on_non_fedora;
+pub mod group_tag_required_on_suse;
+pub mod legacy_license_syntax;
+
 mod util;

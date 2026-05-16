@@ -57,4 +57,26 @@ pub trait Lint: for<'ast> Visit<'ast> + Send {
     fn set_profile(&mut self, profile: &Profile) {
         let _ = profile;
     }
+
+    /// Called once by [`crate::session::LintSession::from_config_with_profile`]
+    /// **before** [`Self::set_config`] / [`Self::set_profile`] — gating
+    /// happens first so we don't pay the (often non-trivial)
+    /// initialisation cost for rules that are about to be dropped. The
+    /// implementation therefore must read everything it needs from the
+    /// `profile` parameter and cannot rely on prior `set_*` state.
+    ///
+    /// Rules whose semantic applicability depends on the active distro
+    /// (e.g. "Fedora-only convention", "openSUSE requires `Group:`")
+    /// return `false` to be dropped from the active set entirely —
+    /// saves the visit pass and avoids polluting output with
+    /// inapplicable diagnostics.
+    ///
+    /// Default returns `true` so most rules don't need to opt in. This
+    /// is **distinct** from emit-time gating (`if !condition { return }`
+    /// inside `visit_*`): use `applies_to_profile` for "rule logically
+    /// doesn't apply here", and keep emit-time checks for "rule applies
+    /// but severity/suggestion varies per profile".
+    fn applies_to_profile(&self, _profile: &Profile) -> bool {
+        true
+    }
 }

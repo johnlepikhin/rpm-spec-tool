@@ -28,10 +28,11 @@
 //! sub-span pointing at the matched path.
 
 use rpm_spec::ast::{FileEntry, PreambleItem, Scriptlet, Section, Span, Tag, Trigger};
+use rpm_spec_profile::Profile;
 
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
 use crate::lint::{Lint, LintMetadata};
-use crate::rules::util::match_path_prefix;
+use crate::rules::util::{FALLBACK_PATH_TABLE, is_path_boundary};
 use crate::visit::{self, Visit};
 
 pub static METADATA: LintMetadata = LintMetadata {
@@ -42,18 +43,51 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct HardcodedPaths {
     diagnostics: Vec<Diagnostic>,
     /// Raw source bytes, set via [`Lint::set_source`] before each pass.
     /// Required because the rule scans the source slice covered by an
     /// anchor span to compute precise per-occurrence sub-spans.
     source: Option<String>,
+    /// `(literal_prefix, "%{macro}")` pairs scanned top-down. Defaults
+    /// to [`FALLBACK_PATH_TABLE`]; replaced from `profile.macros` in
+    /// [`Lint::set_profile`] so distro-specific paths (e.g. `_libdir`
+    /// on e2k / aarch64 / non-Fedora layouts) suggest the correct
+    /// macro instead of the x86_64 / RHEL default.
+    path_table: Vec<(String, String)>,
+}
+
+impl Default for HardcodedPaths {
+    fn default() -> Self {
+        Self {
+            diagnostics: Vec::new(),
+            source: None,
+            path_table: FALLBACK_PATH_TABLE
+                .iter()
+                .map(|(p, m)| ((*p).to_string(), (*m).to_string()))
+                .collect(),
+        }
+    }
 }
 
 impl HardcodedPaths {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Try to find the longest matching prefix from `path_table` against
+    /// the start of `text`, with the same path-boundary rule as the
+    /// previous `util::match_path_prefix` helper.
+    fn match_prefix<'a>(&'a self, text: &str) -> Option<(usize, &'a str)> {
+        for (prefix, replacement) in &self.path_table {
+            if let Some(rest) = text.strip_prefix(prefix.as_str())
+                && is_path_boundary(rest)
+            {
+                return Some((prefix.len(), replacement.as_str()));
+            }
+        }
+        None
     }
 
     /// Scan the source slice covered by `anchor` and emit one
@@ -72,7 +106,7 @@ impl HardcodedPaths {
         let mut idx = 0;
         while let Some(slash_offset) = slice[idx..].find('/') {
             let slash_pos = idx + slash_offset;
-            if let Some((prefix_len, replacement)) = match_path_prefix(&slice[slash_pos..]) {
+            if let Some((prefix_len, replacement)) = self.match_prefix(&slice[slash_pos..]) {
                 let abs_start = start + slash_pos;
                 let abs_end = abs_start + prefix_len;
                 self.diagnostics.push(
@@ -168,7 +202,54 @@ impl Lint for HardcodedPaths {
     fn set_source(&mut self, source: &str) {
         self.source = Some(source.to_owned());
     }
+    fn set_profile(&mut self, profile: &Profile) {
+        // Profile-derived entries: for each well-known path macro, try
+        // to expand to a literal absolute path; record the mapping
+        // `<literal> → %{<macro>}`. Skip macros the profile didn't
+        // define or couldn't expand cleanly.
+        let mut table: Vec<(String, String)> = Vec::new();
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for path_macro in PATH_MACROS {
+            if let Some(literal) = profile.macros.expand_to_literal(path_macro, 8)
+                && literal.starts_with('/')
+                && seen.insert(literal.clone())
+            {
+                table.push((literal, format!("%{{{path_macro}}}")));
+            }
+        }
+        // Append every fallback entry whose path the profile didn't
+        // already cover. Preserves coverage of legacy/multi-arch
+        // aliases (e.g. `/usr/lib → %{_libdir}` even when the profile
+        // says `_libdir = /usr/lib64`).
+        for (path, macro_expr) in FALLBACK_PATH_TABLE {
+            if seen.insert((*path).to_string()) {
+                table.push(((*path).to_string(), (*macro_expr).to_string()));
+            }
+        }
+        // Longest prefix first, so `/usr/lib64` is checked before
+        // `/usr/lib` and `/var/log` before `/var/lib`.
+        table.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        self.path_table = table;
+    }
 }
+
+/// Path-macro names that `set_profile` probes for in `profile.macros`.
+/// Order doesn't matter — the merged table is sorted by prefix length
+/// descending in `set_profile`.
+const PATH_MACROS: &[&str] = &[
+    "_bindir",
+    "_sbindir",
+    "_libdir",
+    "_libexecdir",
+    "_includedir",
+    "_datadir",
+    "_mandir",
+    "_infodir",
+    "_docdir",
+    "_sysconfdir",
+    "_localstatedir",
+    "_sharedstatedir",
+];
 
 #[cfg(test)]
 mod tests {
@@ -310,5 +391,99 @@ mod tests {
         assert_eq!(span.end_byte - span.start_byte, 8);
         // And the matched slice must actually be `/usr/lib`.
         assert_eq!(&src[span.start_byte..span.end_byte], "/usr/lib");
+    }
+
+    /// `set_profile` pulls actual path values from `profile.macros` —
+    /// so a profile defining `_libdir = /opt/myproj/lib` makes the rule
+    /// suggest `%{_libdir}` for that path, not `/usr/lib64`.
+    #[test]
+    fn profile_redefines_libdir_path() {
+        use rpm_spec_profile::{MacroEntry, Profile, Provenance};
+
+        let src = "Name: x\n%install\ncp libfoo.so /opt/myproj/lib/\n";
+        let outcome = parse(src);
+        let mut lint = HardcodedPaths::new();
+        lint.set_source(src);
+
+        let mut profile = Profile::default();
+        profile.macros.insert(
+            "_libdir",
+            MacroEntry::literal("/opt/myproj/lib", Provenance::Override),
+        );
+        lint.set_profile(&profile);
+        lint.visit_spec(&outcome.spec);
+        let diags = lint.take_diagnostics();
+
+        assert_eq!(diags.len(), 1, "expected one diag; got {diags:?}");
+        assert!(
+            diags[0].message.contains("%{_libdir}"),
+            "should suggest %{{_libdir}}; got {}",
+            diags[0].message
+        );
+    }
+
+    /// Profile expansion follows `%{...}` references — so RHEL's
+    /// `_libdir = %{_prefix}/lib64` + `_prefix = /usr` resolves to
+    /// `/usr/lib64` and the rule continues to flag it.
+    #[test]
+    fn profile_expands_macro_chain() {
+        use rpm_spec_profile::{MacroEntry, MacroValue, Profile, Provenance};
+
+        let src = "Name: x\n%install\ncp libfoo.so /usr/lib64/\n";
+        let outcome = parse(src);
+        let mut lint = HardcodedPaths::new();
+        lint.set_source(src);
+
+        let mut profile = Profile::default();
+        profile
+            .macros
+            .insert("_prefix", MacroEntry::literal("/usr", Provenance::Override));
+        // `MacroEntry` is `#[non_exhaustive]` — build via `literal()`
+        // and mutate the `pub` fields to swap in a `Raw` value.
+        let mut libdir = MacroEntry::literal("", Provenance::Override);
+        libdir.value = MacroValue::Raw {
+            body: "%{_prefix}/lib64".into(),
+            multiline: false,
+        };
+        profile.macros.insert("_libdir", libdir);
+        lint.set_profile(&profile);
+        lint.visit_spec(&outcome.spec);
+        let diags = lint.take_diagnostics();
+
+        assert_eq!(diags.len(), 1, "got {diags:?}");
+        assert!(diags[0].message.contains("%{_libdir}"));
+    }
+
+    /// When a profile's macro doesn't expand cleanly (e.g. a lua-bodied
+    /// macro), the rule falls back to the hardcoded default so flagging
+    /// still happens on standard FHS paths.
+    #[test]
+    fn profile_falls_back_when_macro_is_unresolvable() {
+        use rpm_spec_profile::{MacroEntry, MacroValue, Profile, Provenance};
+
+        let src = "Name: x\n%install\ncp foo /usr/bin/bar\n";
+        let outcome = parse(src);
+        let mut lint = HardcodedPaths::new();
+        lint.set_source(src);
+
+        let mut profile = Profile::default();
+        let mut bindir = MacroEntry::literal("", Provenance::Override);
+        // `_bindir` is a lua expression — unresolvable at lint time.
+        // The fallback `/usr/bin` should still trigger the rule.
+        bindir.value = MacroValue::Raw {
+            body: "%{lua:print('/usr/bin')}".into(),
+            multiline: false,
+        };
+        profile.macros.insert("_bindir", bindir);
+        lint.set_profile(&profile);
+        lint.visit_spec(&outcome.spec);
+        let diags = lint.take_diagnostics();
+
+        assert_eq!(
+            diags.len(),
+            1,
+            "fallback to hardcoded /usr/bin; got {diags:?}"
+        );
+        assert!(diags[0].message.contains("%{_bindir}"));
     }
 }

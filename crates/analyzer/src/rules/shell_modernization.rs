@@ -22,6 +22,7 @@
 //! preserved.
 
 use rpm_spec::ast::{FileTrigger, Scriptlet, Section, Span, Trigger};
+use rpm_spec_profile::Profile;
 
 use crate::diagnostic::{Applicability, Diagnostic, Edit, LintCategory, Severity, Suggestion};
 use crate::lint::{Lint, LintMetadata};
@@ -62,10 +63,26 @@ pub static CONFIGURE_MACRO_METADATA: LintMetadata = LintMetadata {
 // Rule structs
 // =====================================================================
 
-#[derive(Debug, Default)]
+/// `macro_available` defaults to `true` so that, when no profile has
+/// been applied (or the profile carries no `macros` data), the rule
+/// behaves exactly as before — assume the suggested macro exists and
+/// emit the warning. `Lint::set_profile` flips it to `false` only when
+/// the active profile explicitly demonstrates the macro is missing.
+#[derive(Debug)]
 pub struct MakeWithoutMakeBuild {
     diagnostics: Vec<Diagnostic>,
     source: Option<String>,
+    macro_available: bool,
+}
+
+impl Default for MakeWithoutMakeBuild {
+    fn default() -> Self {
+        Self {
+            diagnostics: Vec::new(),
+            source: None,
+            macro_available: true,
+        }
+    }
 }
 
 impl MakeWithoutMakeBuild {
@@ -74,10 +91,21 @@ impl MakeWithoutMakeBuild {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MakeInstallWithoutMakeInstall {
     diagnostics: Vec<Diagnostic>,
     source: Option<String>,
+    macro_available: bool,
+}
+
+impl Default for MakeInstallWithoutMakeInstall {
+    fn default() -> Self {
+        Self {
+            diagnostics: Vec::new(),
+            source: None,
+            macro_available: true,
+        }
+    }
 }
 
 impl MakeInstallWithoutMakeInstall {
@@ -86,10 +114,21 @@ impl MakeInstallWithoutMakeInstall {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ConfigureWithoutConfigureMacro {
     diagnostics: Vec<Diagnostic>,
     source: Option<String>,
+    macro_available: bool,
+}
+
+impl Default for ConfigureWithoutConfigureMacro {
+    fn default() -> Self {
+        Self {
+            diagnostics: Vec::new(),
+            source: None,
+            macro_available: true,
+        }
+    }
 }
 
 impl ConfigureWithoutConfigureMacro {
@@ -103,9 +142,17 @@ impl ConfigureWithoutConfigureMacro {
 // =====================================================================
 
 macro_rules! impl_rule {
-    ($rule:ident, $meta:ident, $kind:ident) => {
+    ($rule:ident, $meta:ident, $kind:ident, $macro_name:literal) => {
         impl<'ast> Visit<'ast> for $rule {
             fn visit_section(&mut self, node: &'ast Section<Span>) {
+                // Profile-gating: silent when the replacement macro
+                // isn't defined in the active profile. Saves the user
+                // from being told to switch to `%make_build` on a
+                // distro that doesn't have it.
+                if !self.macro_available {
+                    visit::walk_section(self, node);
+                    return;
+                }
                 // Borrow `source` and `diagnostics` as disjoint fields
                 // — NLL lets us read one immutably while pushing to
                 // the other. Avoids a per-section full-source clone
@@ -119,18 +166,30 @@ macro_rules! impl_rule {
                 visit::walk_section(self, node);
             }
             fn visit_scriptlet(&mut self, node: &'ast Scriptlet<Span>) {
+                if !self.macro_available {
+                    visit::walk_scriptlet(self, node);
+                    return;
+                }
                 if let Some(src) = self.source.as_deref() {
                     scan_section(src, node.data, RuleKind::$kind, &mut self.diagnostics);
                 }
                 visit::walk_scriptlet(self, node);
             }
             fn visit_trigger(&mut self, node: &'ast Trigger<Span>) {
+                if !self.macro_available {
+                    visit::walk_trigger(self, node);
+                    return;
+                }
                 if let Some(src) = self.source.as_deref() {
                     scan_section(src, node.data, RuleKind::$kind, &mut self.diagnostics);
                 }
                 visit::walk_trigger(self, node);
             }
             fn visit_file_trigger(&mut self, node: &'ast FileTrigger<Span>) {
+                if !self.macro_available {
+                    visit::walk_file_trigger(self, node);
+                    return;
+                }
                 if let Some(src) = self.source.as_deref() {
                     scan_section(src, node.data, RuleKind::$kind, &mut self.diagnostics);
                 }
@@ -148,20 +207,36 @@ macro_rules! impl_rule {
             fn set_source(&mut self, source: &str) {
                 self.source = Some(source.to_owned());
             }
+            fn set_profile(&mut self, profile: &Profile) {
+                // The rule is meaningful only when the replacement
+                // macro actually exists on the target distro. If the
+                // profile has no `macros` data at all (default
+                // `Profile::default()`) we fall back to "assume
+                // present" so pre-profile pipelines keep working.
+                self.macro_available =
+                    profile.macros.is_empty() || profile.macros.get($macro_name).is_some();
+            }
         }
     };
 }
 
-impl_rule!(MakeWithoutMakeBuild, MAKE_BUILD_METADATA, MakeBuild);
+impl_rule!(
+    MakeWithoutMakeBuild,
+    MAKE_BUILD_METADATA,
+    MakeBuild,
+    "make_build"
+);
 impl_rule!(
     MakeInstallWithoutMakeInstall,
     MAKE_INSTALL_METADATA,
-    MakeInstall
+    MakeInstall,
+    "make_install"
 );
 impl_rule!(
     ConfigureWithoutConfigureMacro,
     CONFIGURE_MACRO_METADATA,
-    Configure
+    Configure,
+    "configure"
 );
 
 // =====================================================================
@@ -278,10 +353,13 @@ fn match_make_install(body: &str, body_abs: usize, out: &mut Vec<Diagnostic>) {
     if second != "install" {
         return;
     }
-    // Span covers both words verbatim — counting the inter-word
-    // whitespace exactly as it appears in source via pointer
-    // arithmetic on the `&str` slices we already hold.
-    let second_offset_in_body = (second.as_ptr() as usize) - (body.as_ptr() as usize);
+    // Span covers `make` + inter-word whitespace + `install`, taken
+    // verbatim from source. `split_first_word` strips leading
+    // whitespace from its second return, so `rest` already starts at
+    // `second`'s position inside `body`. Hence position of `second`
+    // in `body` = `body.len() - rest.len()`. Index arithmetic on
+    // slice lengths — no raw pointer subtraction.
+    let second_offset_in_body = body.len() - rest.len();
     let span = Span::from_bytes(body_abs, body_abs + second_offset_in_body + second.len());
     out.push(
         Diagnostic::new(
@@ -479,5 +557,60 @@ mod tests {
     fn rpm120_silent_for_comment_lines() {
         let src = "Name: x\n%build\n# make foo\n";
         assert!(run(src, MakeWithoutMakeBuild::new()).is_empty());
+    }
+
+    // ---- Profile-aware gating ----
+
+    /// Run a rule against a `Profile` that has the named macro registered.
+    /// Mimics what `LintSession` does in production: `set_profile` runs
+    /// before `set_source`.
+    fn run_with_profile<L: Lint>(
+        src: &str,
+        mut lint: L,
+        present_macros: &[&str],
+    ) -> Vec<Diagnostic> {
+        use rpm_spec_profile::{MacroEntry, Provenance};
+        let outcome = parse(src);
+        let mut profile = Profile::default();
+        for name in present_macros {
+            profile
+                .macros
+                .insert(*name, MacroEntry::literal("", Provenance::Override));
+        }
+        lint.set_profile(&profile);
+        lint.set_source(src);
+        lint.visit_spec(&outcome.spec);
+        lint.take_diagnostics()
+    }
+
+    #[test]
+    fn rpm120_silent_when_make_build_macro_missing() {
+        // Profile says `make_build` doesn't exist on this distro —
+        // suggesting it would mislead.
+        let src = "Name: x\n%build\nmake %{?_smp_mflags}\n";
+        let diags = run_with_profile(src, MakeWithoutMakeBuild::new(), &["something_else"]);
+        assert!(diags.is_empty(), "expected silence; got {diags:?}");
+    }
+
+    #[test]
+    fn rpm120_fires_when_make_build_macro_present() {
+        let src = "Name: x\n%build\nmake %{?_smp_mflags}\n";
+        let diags = run_with_profile(src, MakeWithoutMakeBuild::new(), &["make_build"]);
+        assert_eq!(diags.len(), 1, "got {diags:?}");
+        assert_eq!(diags[0].lint_id, "RPM120");
+    }
+
+    #[test]
+    fn rpm121_silent_when_make_install_macro_missing() {
+        let src = "Name: x\n%install\nmake install DESTDIR=%{buildroot}\n";
+        let diags = run_with_profile(src, MakeInstallWithoutMakeInstall::new(), &["make_build"]);
+        assert!(diags.is_empty(), "got {diags:?}");
+    }
+
+    #[test]
+    fn rpm122_silent_when_configure_macro_missing() {
+        let src = "Name: x\n%build\n./configure --foo\n";
+        let diags = run_with_profile(src, ConfigureWithoutConfigureMacro::new(), &["make_build"]);
+        assert!(diags.is_empty(), "got {diags:?}");
     }
 }

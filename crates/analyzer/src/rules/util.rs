@@ -67,15 +67,22 @@ pub fn drop_span(span: Span) -> Edit {
     Edit::new(span, "")
 }
 
-/// Mapping from a literal hardcoded path prefix to the RPM macro that
-/// should replace it. Used by [`RPM050 hardcoded-paths`] in
-/// `rules/hardcoded_paths.rs`.
+/// Default mapping from a literal hardcoded path prefix to the RPM macro
+/// that should replace it. Used by [`crate::rules::hardcoded_paths`]
+/// when no profile has been applied (or when the profile doesn't
+/// override the macro's value). Distribution profiles can replace these
+/// entries via `HardcodedPaths::set_profile`, which reads the actual
+/// `_bindir` / `_libdir` / etc. from `profile.macros`.
 ///
 /// **Order matters.** The table is scanned top-down; more-specific
 /// prefixes (`/usr/lib64`, `/var/log`) must precede their less-specific
 /// peers (`/usr/lib`, `/var/lib`) so that a literal like `/usr/lib64/foo`
 /// matches the right replacement.
-pub const HARDCODED_PATHS: &[(&str, &str)] = &[
+///
+/// `pub(crate)` because this is an analyzer-internal default — downstream
+/// consumers should read the actual path table off a resolved `Profile`,
+/// not the fallback constants.
+pub(crate) const FALLBACK_PATH_TABLE: &[(&str, &str)] = &[
     ("/usr/lib64", "%{_libdir}"),
     ("/usr/libexec", "%{_libexecdir}"),
     ("/usr/include", "%{_includedir}"),
@@ -88,44 +95,54 @@ pub const HARDCODED_PATHS: &[(&str, &str)] = &[
     ("/etc", "%{_sysconfdir}"),
 ];
 
-/// Match the longest hardcoded-path prefix from [`HARDCODED_PATHS`]
-/// against the start of `text`. Returns `(matched_prefix_len, replacement)`
-/// or `None` if no entry matches.
+/// Split an SPDX license expression on the `OR` / `AND` / `WITH`
+/// keywords (case-insensitive, word-boundary-respecting) and return
+/// the trimmed atoms. Surrounding parentheses and commas are stripped.
 ///
-/// The match is valid when the byte after `prefix` is a *path-end* —
-/// end of string, a path separator (`/`), or any byte that can't
-/// continue a path name (whitespace, shell punctuation, …). This
-/// rejects `/usr/binfoo` (`/usr/bin` + `foo`) while still accepting
-/// `/usr/bin`, `/usr/bin/python3`, `/usr/bin\n`, `/usr/bin foo`,
-/// `/usr/bin"`.
-pub fn match_path_prefix(text: &str) -> Option<(usize, &'static str)> {
-    for &(prefix, replacement) in HARDCODED_PATHS {
-        if let Some(rest) = text.strip_prefix(prefix)
-            && is_path_boundary(rest)
-        {
-            return Some((prefix.len(), replacement));
-        }
-    }
-    None
+/// Used by both RPM024 (`invalid-license`) and RPM127
+/// (`legacy-license-syntax`). Kept here as the single source of truth
+/// so a future fix (e.g. `WITH` exception identifier handling) applies
+/// uniformly.
+///
+/// Implementation: tokenise on whitespace + paren/comma into raw
+/// tokens, then drop the operator tokens. SPDX identifiers themselves
+/// cannot contain whitespace, so a whitespace split never breaks an
+/// atom.
+pub(crate) fn split_spdx_atoms(expr: &str) -> Vec<&str> {
+    expr.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty() && !is_spdx_operator(t))
+        .collect()
 }
 
-/// `true` when `rest` (the bytes immediately after a candidate path
-/// prefix) marks the path's end. Name-continuation characters
+/// True when `tok` is one of the SPDX expression operators
+/// (`OR`/`AND`/`WITH`), case-insensitive.
+pub(crate) fn is_spdx_operator(tok: &str) -> bool {
+    tok.eq_ignore_ascii_case("OR")
+        || tok.eq_ignore_ascii_case("AND")
+        || tok.eq_ignore_ascii_case("WITH")
+}
+
+/// `true` when `b` can continue a shell-token / path-name. Used by
+/// boundary checks in path-prefix matching ([`is_path_boundary`]) and
+/// in command-word matching (e.g. RPM062 `egrep`/`fgrep` detection).
+#[inline]
+pub(crate) fn is_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.')
+}
+
+/// `true` when `rest` (the bytes immediately after a candidate
+/// path-prefix) marks the path's end. Name-continuation characters
 /// (`a-zA-Z0-9._-`) keep the match going; anything else terminates.
-fn is_path_boundary(rest: &str) -> bool {
+/// Used by [`crate::rules::hardcoded_paths`] to validate matches
+/// like `/usr/bin` vs `/usr/binfoo`.
+#[inline]
+pub(crate) fn is_path_boundary(rest: &str) -> bool {
     match rest.as_bytes().first() {
         None => true,
         Some(b'/') => true,
         Some(&b) => !is_name_byte(b),
     }
-}
-
-/// `true` when `b` can continue a shell-token / path-name. Used by
-/// boundary checks in path-prefix matching ([`match_path_prefix`]) and
-/// in command-word matching (e.g. RPM062 `egrep`/`fgrep` detection).
-#[inline]
-pub(crate) fn is_name_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.')
 }
 
 /// One declared patch tag.
@@ -742,6 +759,34 @@ macro_rules! declare_missing_section_lint {
     };
 }
 
+/// Build a synthetic `Profile` for unit-testing profile-aware rules.
+/// Convenience over `Profile::default()` mutation for the common
+/// "family + a few macros + a few rpmlib features" case.
+///
+/// `dist_tag` is optional because most rules gate on family alone;
+/// composite gates (RPM127's "Fedora ≥ 40") pass `Some(".fc40")` etc.
+#[cfg(test)]
+#[allow(dead_code)] // construction helper used selectively across rule modules
+pub fn make_test_profile(
+    family: Option<rpm_spec_profile::Family>,
+    dist_tag: Option<&str>,
+    macros: &[(&str, &str)],
+    rpmlib: &[(&str, &str)],
+) -> rpm_spec_profile::Profile {
+    use rpm_spec_profile::{MacroEntry, Profile, Provenance};
+    let mut p = Profile::default();
+    p.identity.family = family;
+    p.identity.dist_tag = dist_tag.map(str::to_owned);
+    for (name, body) in macros {
+        p.macros
+            .insert(*name, MacroEntry::literal(*body, Provenance::Override));
+    }
+    for (name, ver) in rpmlib {
+        p.rpmlib.features.insert((*name).into(), (*ver).into());
+    }
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -867,5 +912,86 @@ Summary: standalone\n\
         assert!(names.contains(&"a"));
         assert!(names.contains(&"b"));
         assert!(names.contains(&"c"));
+    }
+
+    // -- shared helpers extracted by Phase-15 fixall --
+
+    #[test]
+    fn is_path_boundary_at_end_of_string() {
+        assert!(is_path_boundary(""));
+    }
+
+    #[test]
+    fn is_path_boundary_on_slash_continues_path() {
+        assert!(is_path_boundary("/foo"));
+    }
+
+    #[test]
+    fn is_path_boundary_rejects_name_continuation() {
+        // `/usr/bin` followed by `foo` (alpha) is NOT a boundary —
+        // the path keeps going as `/usr/binfoo`. Same for digits,
+        // `_`, `-`, `.`.
+        assert!(!is_path_boundary("foo"));
+        assert!(!is_path_boundary("1"));
+        assert!(!is_path_boundary("_x"));
+        assert!(!is_path_boundary("-x"));
+        assert!(!is_path_boundary(".x"));
+    }
+
+    #[test]
+    fn is_path_boundary_terminator_chars() {
+        // Anything that can't continue a path-name terminates: whitespace,
+        // shell punctuation, end-of-string.
+        assert!(is_path_boundary(" "));
+        assert!(is_path_boundary("\t"));
+        assert!(is_path_boundary("\""));
+        assert!(is_path_boundary("'"));
+        assert!(is_path_boundary(":"));
+    }
+
+    #[test]
+    fn split_spdx_atoms_empty_input() {
+        let v = split_spdx_atoms("");
+        assert!(v.is_empty(), "empty input → no atoms; got {v:?}");
+    }
+
+    #[test]
+    fn split_spdx_atoms_single_identifier() {
+        assert_eq!(split_spdx_atoms("MIT"), vec!["MIT"]);
+    }
+
+    #[test]
+    fn split_spdx_atoms_or_and_with() {
+        assert_eq!(
+            split_spdx_atoms("MIT OR GPL-2.0-or-later WITH Classpath-exception-2.0"),
+            vec!["MIT", "GPL-2.0-or-later", "Classpath-exception-2.0"]
+        );
+    }
+
+    #[test]
+    fn split_spdx_atoms_handles_parens_and_commas() {
+        // `(MIT OR Apache-2.0), GPL-3.0-or-later` — atoms regardless
+        // of grouping syntax.
+        let v = split_spdx_atoms("(MIT OR Apache-2.0), GPL-3.0-or-later");
+        assert_eq!(v, vec!["MIT", "Apache-2.0", "GPL-3.0-or-later"]);
+    }
+
+    #[test]
+    fn split_spdx_atoms_only_operators_yields_empty() {
+        assert!(split_spdx_atoms("OR AND WITH").is_empty());
+    }
+
+    #[test]
+    fn is_spdx_operator_case_insensitive() {
+        for op in ["OR", "or", "Or", "AND", "and", "WITH", "with", "WitH"] {
+            assert!(is_spdx_operator(op), "{op} should match");
+        }
+    }
+
+    #[test]
+    fn is_spdx_operator_rejects_non_operators() {
+        for tok in ["MIT", "GPL", "ORIGINAL", "ANDX", "WITHOUT", "", "or-"] {
+            assert!(!is_spdx_operator(tok), "{tok} should not match");
+        }
     }
 }
