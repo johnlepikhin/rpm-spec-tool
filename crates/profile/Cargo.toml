@@ -7,6 +7,11 @@ rust-version.workspace = true
 license.workspace      = true
 authors.workspace      = true
 repository.workspace   = true
+readme        = "README.md"
+homepage      = "https://github.com/johnlepikhin/rpm-spec-tool"
+documentation = "https://docs.rs/rpm-spec-profile"
+keywords      = ["rpm", "spec", "linux", "packaging", "macros"]
+categories    = ["parser-implementations", "config"]
 
 [lib]
 name = "rpm_spec_profile"

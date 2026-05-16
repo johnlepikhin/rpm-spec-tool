@@ -7,6 +7,11 @@ rust-version.workspace = true
 license.workspace      = true
 authors.workspace      = true
 repository.workspace   = true
+readme        = "README.md"
+homepage      = "https://github.com/johnlepikhin/rpm-spec-tool"
+documentation = "https://docs.rs/rpm-spec-analyzer"
+keywords      = ["rpm", "spec", "linter", "static-analysis", "linux"]
+categories    = ["development-tools", "parser-implementations"]
 
 [dependencies]
 rpm-spec.workspace         = true
