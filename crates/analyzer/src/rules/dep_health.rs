@@ -33,7 +33,10 @@
 
 use std::collections::BTreeSet;
 
-use rpm_spec::ast::{BoolDep, DepAtom, DepExpr, PreambleItem, Span, SpecFile, Tag, TagValue};
+use rpm_spec::ast::{
+    BoolDep, DepAtom, DepExpr, PreambleContent, PreambleItem, Section, Span, SpecFile, SpecItem,
+    Tag, TagValue,
+};
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
 use crate::lint::{Lint, LintMetadata};
@@ -186,28 +189,131 @@ const DEP_CLASSES: &[TagClass] = &[
 
 impl<'ast> Visit<'ast> for DuplicateDependencyAtom {
     fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
-        for pkg in iter_packages(spec) {
-            for (matcher, label) in DEP_CLASSES {
-                let mut seen: BTreeSet<AtomKey> = BTreeSet::new();
-                for_each_atom(pkg.items(), matcher, |item_span, atom| {
-                    let Some(key) = atom_key(atom) else {
-                        return;
-                    };
-                    if !seen.insert(key.clone()) {
-                        self.diagnostics.push(Diagnostic::new(
-                            &DUPLICATE_ATOM_METADATA,
-                            Severity::Warn,
-                            format!(
-                                "`{label}: {atom}` is listed more than once in this package",
-                                atom = render_atom_key(&key),
-                            ),
-                            item_span,
-                        ));
-                    }
-                });
+        // Conditional-aware dedup: atoms in mutually-exclusive arms of
+        // a `%if`/`%else`/`%elif` are never both live at build time and
+        // must not flag each other as duplicates. Each branch inherits
+        // its parent scope's `seen` set, so a duplicate is flagged only
+        // when the two atoms could co-exist in the same build.
+        for (matcher, label) in DEP_CLASSES {
+            let initial = BTreeSet::new();
+            walk_spec_items_dedup(
+                &spec.items,
+                *matcher,
+                label,
+                &initial,
+                &mut self.diagnostics,
+            );
+            for item in &spec.items {
+                if let SpecItem::Section(boxed) = item
+                    && let Section::Package { content, .. } = boxed.as_ref()
+                {
+                    let initial = BTreeSet::new();
+                    walk_preamble_content_dedup(
+                        content,
+                        *matcher,
+                        label,
+                        &initial,
+                        &mut self.diagnostics,
+                    );
+                }
             }
         }
     }
+}
+
+/// Recurse over the main package's top-level item tree, flagging
+/// duplicate atoms on tags matching `matcher`. Each conditional branch
+/// gets a fresh `seen` set cloned from its parent — so atoms in
+/// mutually-exclusive arms don't conflict, but a duplicate that the
+/// parent scope already declared is still caught inside the arm.
+fn walk_spec_items_dedup(
+    items: &[SpecItem<Span>],
+    matcher: fn(&Tag) -> bool,
+    label: &'static str,
+    parent_seen: &BTreeSet<AtomKey>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let mut local_seen = parent_seen.clone();
+    for item in items {
+        match item {
+            SpecItem::Preamble(p) => {
+                check_item_for_dup(p, matcher, label, &mut local_seen, out);
+            }
+            SpecItem::Conditional(c) => {
+                for branch in &c.branches {
+                    walk_spec_items_dedup(&branch.body, matcher, label, &local_seen, out);
+                }
+                if let Some(els) = &c.otherwise {
+                    walk_spec_items_dedup(els, matcher, label, &local_seen, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Subpackage-flavoured walker (operates on `PreambleContent` instead
+/// of `SpecItem`). Same scoping semantics as
+/// [`walk_spec_items_dedup`].
+fn walk_preamble_content_dedup(
+    items: &[PreambleContent<Span>],
+    matcher: fn(&Tag) -> bool,
+    label: &'static str,
+    parent_seen: &BTreeSet<AtomKey>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let mut local_seen = parent_seen.clone();
+    for item in items {
+        match item {
+            PreambleContent::Item(p) => {
+                check_item_for_dup(p, matcher, label, &mut local_seen, out);
+            }
+            PreambleContent::Conditional(c) => {
+                for branch in &c.branches {
+                    walk_preamble_content_dedup(&branch.body, matcher, label, &local_seen, out);
+                }
+                if let Some(els) = &c.otherwise {
+                    walk_preamble_content_dedup(els, matcher, label, &local_seen, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Check one preamble item against the current scope's `local_seen`
+/// set. Inserts new atoms; emits a `RPM320` diagnostic for any that
+/// were already there. Shared between the main-package and
+/// subpackage walkers.
+fn check_item_for_dup(
+    p: &PreambleItem<Span>,
+    matcher: fn(&Tag) -> bool,
+    label: &'static str,
+    local_seen: &mut BTreeSet<AtomKey>,
+    out: &mut Vec<Diagnostic>,
+) {
+    if !matcher(&p.tag) {
+        return;
+    }
+    let TagValue::Dep(expr) = &p.value else {
+        return;
+    };
+    unfold(expr, p.data, &mut |_span, atom| {
+        let Some(key) = atom_key(atom) else {
+            return;
+        };
+        if !local_seen.insert(key.clone()) {
+            out.push(Diagnostic::new(
+                &DUPLICATE_ATOM_METADATA,
+                Severity::Warn,
+                format!(
+                    "`{label}: {atom}` is listed more than once in this package",
+                    atom = render_atom_key(&key),
+                ),
+                p.data,
+            ));
+        }
+    });
 }
 
 impl Lint for DuplicateDependencyAtom {
@@ -243,52 +349,150 @@ impl WeakDepDuplicatesStrongDep {
     }
 }
 
-/// Weak-dep tag classes with their human labels. Used to iterate
-/// `(matcher, label)` in `visit_spec`.
-const WEAK_DEP_CLASSES: &[TagClass] = &[
-    (|t| matches!(t, Tag::Recommends), "Recommends"),
-    (|t| matches!(t, Tag::Suggests), "Suggests"),
-    (|t| matches!(t, Tag::Supplements), "Supplements"),
-    (|t| matches!(t, Tag::Enhances), "Enhances"),
-];
-
 impl<'ast> Visit<'ast> for WeakDepDuplicatesStrongDep {
     fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
-        for pkg in iter_packages(spec) {
-            let mut strong: BTreeSet<AtomKey> = BTreeSet::new();
-            for_each_atom(
-                pkg.items(),
-                |t| matches!(t, Tag::Requires),
-                |_, atom| {
-                    if let Some(key) = atom_key(atom) {
-                        strong.insert(key);
-                    }
-                },
-            );
-            if strong.is_empty() {
-                continue;
-            }
-            for (matcher, label) in WEAK_DEP_CLASSES {
-                for_each_atom(pkg.items(), matcher, |item_span, atom| {
-                    let Some(key) = atom_key(atom) else {
-                        return;
-                    };
-                    if strong.contains(&key) {
-                        let rendered = render_atom_key(&key);
-                        self.diagnostics.push(Diagnostic::new(
-                            &WEAK_DUPLICATES_STRONG_METADATA,
-                            Severity::Warn,
-                            format!(
-                                "`{label}: {rendered}` is shadowed by an existing \
-                                 `Requires: {rendered}` — drop the weak dep",
-                            ),
-                            item_span,
-                        ));
-                    }
-                });
+        // Conditional-aware shadow detection. A weak dep in scope S is
+        // shadowed only if a matching `Requires:` is reachable from S
+        // (declared in S itself or any ancestor). Mutually-exclusive
+        // branches of `%if` are independent scopes.
+        let initial = BTreeSet::new();
+        walk_spec_items_weak(&spec.items, &initial, &mut self.diagnostics);
+        for item in &spec.items {
+            if let SpecItem::Section(boxed) = item
+                && let Section::Package { content, .. } = boxed.as_ref()
+            {
+                let initial = BTreeSet::new();
+                walk_preamble_content_weak(content, &initial, &mut self.diagnostics);
             }
         }
     }
+}
+
+/// `(Tag, human label)` for the four weak-dep tags. Returns `None` for
+/// other tags so callers can skip non-weak items cheaply.
+fn weak_label(tag: &Tag) -> Option<&'static str> {
+    match tag {
+        Tag::Recommends => Some("Recommends"),
+        Tag::Suggests => Some("Suggests"),
+        Tag::Supplements => Some("Supplements"),
+        Tag::Enhances => Some("Enhances"),
+        _ => None,
+    }
+}
+
+/// Two-pass walk over a main-package item list. Pass 1 builds the
+/// current scope's strong set (this scope's own `Requires:` atoms,
+/// without descending into conditionals — branches are independent).
+/// Pass 2 checks weak atoms in this scope against the strong set, and
+/// recurses into conditional branches with that strong set as the new
+/// parent.
+fn walk_spec_items_weak(
+    items: &[SpecItem<Span>],
+    parent_strong: &BTreeSet<AtomKey>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let mut local_strong = parent_strong.clone();
+    for item in items {
+        if let SpecItem::Preamble(p) = item
+            && matches!(p.tag, Tag::Requires)
+            && let TagValue::Dep(expr) = &p.value
+        {
+            unfold(expr, p.data, &mut |_, atom| {
+                if let Some(key) = atom_key(atom) {
+                    local_strong.insert(key);
+                }
+            });
+        }
+    }
+    for item in items {
+        match item {
+            SpecItem::Preamble(p) => {
+                if let Some(label) = weak_label(&p.tag) {
+                    check_weak_item(p, label, &local_strong, out);
+                }
+            }
+            SpecItem::Conditional(c) => {
+                for branch in &c.branches {
+                    walk_spec_items_weak(&branch.body, &local_strong, out);
+                }
+                if let Some(els) = &c.otherwise {
+                    walk_spec_items_weak(els, &local_strong, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Subpackage-flavoured weak/strong walker; same semantics as
+/// [`walk_spec_items_weak`] but for `PreambleContent` trees.
+fn walk_preamble_content_weak(
+    items: &[PreambleContent<Span>],
+    parent_strong: &BTreeSet<AtomKey>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let mut local_strong = parent_strong.clone();
+    for item in items {
+        if let PreambleContent::Item(p) = item
+            && matches!(p.tag, Tag::Requires)
+            && let TagValue::Dep(expr) = &p.value
+        {
+            unfold(expr, p.data, &mut |_, atom| {
+                if let Some(key) = atom_key(atom) {
+                    local_strong.insert(key);
+                }
+            });
+        }
+    }
+    for item in items {
+        match item {
+            PreambleContent::Item(p) => {
+                if let Some(label) = weak_label(&p.tag) {
+                    check_weak_item(p, label, &local_strong, out);
+                }
+            }
+            PreambleContent::Conditional(c) => {
+                for branch in &c.branches {
+                    walk_preamble_content_weak(&branch.body, &local_strong, out);
+                }
+                if let Some(els) = &c.otherwise {
+                    walk_preamble_content_weak(els, &local_strong, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Emit a `RPM321` diagnostic for each weak-dep atom that is already
+/// in `strong`. Shared between the main-package and subpackage
+/// walkers.
+fn check_weak_item(
+    p: &PreambleItem<Span>,
+    label: &'static str,
+    strong: &BTreeSet<AtomKey>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let TagValue::Dep(expr) = &p.value else {
+        return;
+    };
+    unfold(expr, p.data, &mut |_, atom| {
+        let Some(key) = atom_key(atom) else {
+            return;
+        };
+        if strong.contains(&key) {
+            let rendered = render_atom_key(&key);
+            out.push(Diagnostic::new(
+                &WEAK_DUPLICATES_STRONG_METADATA,
+                Severity::Warn,
+                format!(
+                    "`{label}: {rendered}` is shadowed by an existing \
+                     `Requires: {rendered}` — drop the weak dep",
+                ),
+                p.data,
+            ));
+        }
+    });
 }
 
 impl Lint for WeakDepDuplicatesStrongDep {
@@ -589,6 +793,62 @@ Requires: foo\n\
         assert_eq!(diags.len(), 1);
     }
 
+    #[test]
+    fn rpm320_silent_for_same_atom_in_mutually_exclusive_branches() {
+        // Real-world ALT spec: `BuildRequires: gcc-c++` repeated in
+        // every arm of nested `%if`/`%else`. Each arm is independently
+        // active at build time — no duplicate.
+        let src = "Name: x\n\
+%if 0%{?fedora}\n\
+BuildRequires: gcc-c++\n\
+%else\n\
+BuildRequires: gcc-c++\n\
+%endif\n";
+        assert!(run_320(src).is_empty(), "{:?}", run_320(src));
+    }
+
+    #[test]
+    fn rpm320_silent_for_same_atom_in_nested_elif_chain() {
+        // Nested elif chain — all arms mutually exclusive.
+        let src = "Name: x\n\
+%if 0%{?suse_version}\n\
+BuildRequires: gcc-c++\n\
+%elif 0%{?fedora}\n\
+BuildRequires: gcc-c++\n\
+%elif 0%{?rhel}\n\
+BuildRequires: gcc-c++\n\
+%else\n\
+BuildRequires: gcc-c++\n\
+%endif\n";
+        assert!(run_320(src).is_empty(), "{:?}", run_320(src));
+    }
+
+    #[test]
+    fn rpm320_flags_duplicate_inside_one_branch() {
+        // Two BuildRequires: foo lines inside the SAME branch — still
+        // a real duplicate.
+        let src = "Name: x\n\
+%if 0%{?fedora}\n\
+BuildRequires: gcc-c++\n\
+BuildRequires: gcc-c++\n\
+%endif\n";
+        let diags = run_320(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn rpm320_flags_duplicate_when_parent_scope_already_has_atom() {
+        // `BuildRequires: foo` at top level + `BuildRequires: foo`
+        // inside `%if` — in the branch where %if is true, foo is
+        // declared twice. Flag inside the arm.
+        let src = "Name: x\n\
+BuildRequires: foo\n\
+%if 0%{?fedora}\n\
+BuildRequires: foo\n\
+%endif\n";
+        assert_eq!(run_320(src).len(), 1);
+    }
+
     // ----- RPM321 -----
 
     #[test]
@@ -638,6 +898,27 @@ Requires: foo\n\
         // pkgconfig(openssl) vs pkgconfig(zlib) — distinct keys.
         let src = "Name: x\nRequires: pkgconfig(openssl)\nRecommends: pkgconfig(zlib)\n";
         assert!(run_321(src).is_empty(), "{:?}", run_321(src));
+    }
+
+    #[test]
+    fn rpm321_silent_when_strong_and_weak_in_mutually_exclusive_branches() {
+        // `Requires: foo` in one arm and `Recommends: foo` in the other
+        // — never both live at once, so no shadowing.
+        let src = "Name: x\n\
+%if 0%{?fedora}\n\
+Requires: foo\n\
+%else\n\
+Recommends: foo\n\
+%endif\n";
+        assert!(run_321(src).is_empty(), "{:?}", run_321(src));
+    }
+
+    #[test]
+    fn rpm321_flags_when_strong_in_parent_scope_covers_weak_in_branch() {
+        // `Requires: foo` at top level + `Recommends: foo` in `%if`:
+        // when %if fires, both are present → shadow.
+        let src = "Name: x\nRequires: foo\n%if 0%{?fedora}\nRecommends: foo\n%endif\n";
+        assert_eq!(run_321(src).len(), 1);
     }
 
     // ----- RPM322 -----
