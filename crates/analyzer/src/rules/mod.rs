@@ -114,4 +114,11 @@ pub mod files_locale;
 pub mod files_standard;
 pub mod files_volatile;
 
+// Phase 19 — scriptlet/install rules built on CommandUseIndex + shell walkers.
+pub mod install_boundaries;
+pub mod install_chown;
+pub mod install_make;
+pub mod scriptlet_commands;
+pub mod scriptlet_health;
+
 mod util;

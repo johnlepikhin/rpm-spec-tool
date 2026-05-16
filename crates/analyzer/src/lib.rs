@@ -15,6 +15,7 @@ pub mod lint;
 pub mod registry;
 pub mod rules;
 pub mod session;
+pub(crate) mod shell;
 pub mod visit;
 
 pub use diagnostic::{Applicability, Diagnostic, Edit, Label, LintCategory, Severity, Suggestion};

@@ -27,7 +27,7 @@ Current head is Phase 16. New phases are **17–25**.
 |---|---|---|
 | 17 | Metadata / cross-tag consistency (P0) | shipped @ 88e3308 |
 | 18 | `FilesClassifier` + first `%files` rules (P0) | shipped @ f681549 |
-| 19 | `CommandUseIndex` + scriptlet/install rules (P0) | not started |
+| 19 | `CommandUseIndex` + scriptlet/install rules (P0) | in progress |
 | 20 | `ProfilePolicyRegistry` + systemd/tmpfiles/users (P1) | not started |
 | 21 | Dependency semantics (P0/P1) | not started |
 | 22 | build-tool ↔ BuildRequires + pkgconfig (P1) | not started |

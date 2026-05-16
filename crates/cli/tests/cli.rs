@@ -299,9 +299,12 @@ URL: https://e.org\nProvides: hello\n\
 
 #[test]
 fn missing_prep_section_warns() {
+    // `make install DESTDIR=%{buildroot}` avoids Phase 19's
+    // make-install-missing-destdir Deny; the test is only meant to
+    // exercise RPM016 missing-prep-section, which is Warn-level.
     let spec = write_temp(
         "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
-%build\nmake\n%install\nmake install\n\
+%build\nmake\n%install\nmake install DESTDIR=%{buildroot}\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
     let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
@@ -342,10 +345,13 @@ URL: https://e.org\n\
 
 #[test]
 fn hardcoded_paths_flags_install_script() {
+    // Use a `%{buildroot}`-prefixed target so the literal path still
+    // exercises RPM050 hardcoded-paths (Warn) without simultaneously
+    // tripping Phase 19's install-writes-outside-buildroot (Deny).
     let spec = write_temp(
         "Name: hello\nVersion: 1\nRelease: 1\nSummary: Demo\nLicense: MIT\n\
 URL: https://e.org\n\
-%install\nmkdir -p /usr/lib/foo\n\
+%install\nmkdir -p %{buildroot}/usr/lib/foo\n\
 %description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
     let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);

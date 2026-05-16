@@ -169,5 +169,15 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::files_volatile::VarRunVarLockNotGhost::new()),
         Box::new(rules::files_attr::SuspiciousAttrPermissions::new()),
         Box::new(rules::files_debuginfo::DebuginfoPathInMainFiles::new()),
+        // Phase 19 — scriptlet/install rules built on CommandUseIndex.
+        Box::new(rules::scriptlet_health::ScriptletExitNotGuaranteedZero::new()),
+        Box::new(rules::scriptlet_health::ScriptletUpgradeTestEqTwo::new()),
+        Box::new(rules::scriptlet_commands::DirectSystemctlInScriptlet::new()),
+        Box::new(rules::scriptlet_commands::ScriptletStateOutsideRpmState::new()),
+        Box::new(rules::install_boundaries::InstallWritesOutsideBuildroot::new()),
+        Box::new(rules::install_boundaries::RmRfBuildrootInInstall::new()),
+        Box::new(rules::install_make::MakeinstallWithoutUnderscore::new()),
+        Box::new(rules::install_make::MakeInstallMissingDestdir::new()),
+        Box::new(rules::install_chown::InstallChownOrOwner::new()),
     ]
 }
