@@ -450,6 +450,8 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "rpm-spec"
 version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fe7f53cb1fcf96efa7a2f9d178b34a50ac37f4da202a77ed62df360150ab3e1"
 dependencies = [
  "nom",
  "nom_locate",
