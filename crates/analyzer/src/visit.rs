@@ -58,10 +58,7 @@ pub trait Visit<'ast> {
         walk_top_conditional(self, node)
     }
 
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         walk_preamble_conditional(self, node)
     }
 
@@ -178,7 +175,11 @@ pub fn walk_section<'a, V: Visit<'a> + ?Sized>(v: &mut V, node: &'a Section<Span
             }
         }
         Section::BuildScript { body, .. } => v.visit_shell_body(body),
-        Section::Files { file_lists, content, .. } => {
+        Section::Files {
+            file_lists,
+            content,
+            ..
+        } => {
             for t in file_lists {
                 v.visit_text(t);
             }
@@ -209,10 +210,7 @@ pub fn walk_macro_def<'a, V: Visit<'a> + ?Sized>(v: &mut V, node: &'a MacroDef<S
     v.visit_text(&node.body);
 }
 
-pub fn walk_build_condition<'a, V: Visit<'a> + ?Sized>(
-    v: &mut V,
-    node: &'a BuildCondition<Span>,
-) {
+pub fn walk_build_condition<'a, V: Visit<'a> + ?Sized>(v: &mut V, node: &'a BuildCondition<Span>) {
     if let Some(default) = &node.default {
         v.visit_text(default);
     }
@@ -287,10 +285,7 @@ pub fn walk_preamble_content<'a, V: Visit<'a> + ?Sized>(
     }
 }
 
-pub fn walk_files_content<'a, V: Visit<'a> + ?Sized>(
-    v: &mut V,
-    node: &'a FilesContent<Span>,
-) {
+pub fn walk_files_content<'a, V: Visit<'a> + ?Sized>(v: &mut V, node: &'a FilesContent<Span>) {
     match node {
         FilesContent::Entry(e) => v.visit_file_entry(e),
         FilesContent::Conditional(c) => v.visit_files_conditional(c),
@@ -306,10 +301,7 @@ pub fn walk_file_entry<'a, V: Visit<'a> + ?Sized>(v: &mut V, node: &'a FileEntry
     }
 }
 
-pub fn walk_changelog_entry<'a, V: Visit<'a> + ?Sized>(
-    v: &mut V,
-    node: &'a ChangelogEntry<Span>,
-) {
+pub fn walk_changelog_entry<'a, V: Visit<'a> + ?Sized>(v: &mut V, node: &'a ChangelogEntry<Span>) {
     v.visit_text(&node.author);
     if let Some(email) = &node.email {
         v.visit_text(email);
@@ -375,7 +367,16 @@ pub fn walk_bool_dep<'a, V: Visit<'a> + ?Sized>(v: &mut V, node: &'a BoolDep) {
                 v.visit_dep_expr(it);
             }
         }
-        BoolDep::If { cond, then, otherwise } | BoolDep::Unless { cond, then, otherwise } => {
+        BoolDep::If {
+            cond,
+            then,
+            otherwise,
+        }
+        | BoolDep::Unless {
+            cond,
+            then,
+            otherwise,
+        } => {
             v.visit_dep_expr(cond);
             v.visit_dep_expr(then);
             if let Some(o) = otherwise {

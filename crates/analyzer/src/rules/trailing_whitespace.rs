@@ -34,7 +34,9 @@ impl TrailingWhitespace {
 
 impl<'ast> Visit<'ast> for TrailingWhitespace {
     fn visit_spec(&mut self, _spec: &'ast SpecFile<Span>) {
-        let Some(source) = self.source.clone() else { return };
+        let Some(source) = self.source.clone() else {
+            return;
+        };
         let mut line_start = 0usize;
         for (idx, byte) in source.bytes().enumerate() {
             if byte == b'\n' {

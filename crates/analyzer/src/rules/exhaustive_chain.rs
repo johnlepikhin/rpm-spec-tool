@@ -12,15 +12,14 @@ use rpm_spec::ast::{CondExpr, Conditional, FilesContent, PreambleContent, Span, 
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
 use crate::lint::{Lint, LintMetadata};
 use crate::rules::path_cond::{
-    analyse_conditional, conjoin, else_effective_dnf, is_unsat, BranchAnalyser, PathConditions,
+    BranchAnalyser, PathConditions, analyse_conditional, conjoin, else_effective_dnf, is_unsat,
 };
 use crate::visit::Visit;
 
 pub static EXHAUSTIVE_CHAIN_METADATA: LintMetadata = LintMetadata {
     id: "RPM116",
     name: "mutex-branches-spell-out-else",
-    description:
-        "`%if`/`%elif` chain exhausts the path-condition space yet lacks an explicit \
+    description: "`%if`/`%elif` chain exhausts the path-condition space yet lacks an explicit \
          `%else`; rewriting the last `%elif` as `%else` makes the chain clearer.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
@@ -114,10 +113,7 @@ impl<'ast> Visit<'ast> for ExhaustiveChain {
     fn visit_top_conditional(&mut self, node: &'ast Conditional<Span, SpecItem<Span>>) {
         analyse_conditional(self, node, walk_top_body);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         analyse_conditional(self, node, walk_preamble_body);
     }
     fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
@@ -149,8 +145,7 @@ mod tests {
     #[test]
     fn rpm116_flags_chain_covers_space() {
         // %if A %elif !A %endif — implicit-else region is ¬A ∧ ¬¬A = ⊥.
-        let src =
-            "Name: x\n%if A\n%global foo bar\n%elif !A\n%global baz qux\n%endif\n";
+        let src = "Name: x\n%if A\n%global foo bar\n%elif !A\n%global baz qux\n%endif\n";
         let diags = run(src);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(diags[0].lint_id, "RPM116");

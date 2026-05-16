@@ -94,12 +94,10 @@ mod tests {
 
     #[test]
     fn flags_subpackage_self_conflict() {
-        let diags = run(
-            "Name: main\n\
+        let diags = run("Name: main\n\
 %package -n foo\n\
 Conflicts: foo\n\
-%description -n foo\nbody\n",
-        );
+%description -n foo\nbody\n");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("foo"));
     }

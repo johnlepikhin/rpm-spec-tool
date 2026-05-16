@@ -138,10 +138,18 @@ fn apply_edits(text: &mut String, edits: &[Edit]) -> usize {
             continue;
         }
         if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
-            warn!(start, end, "edit straddles UTF-8 codepoint boundary, skipping");
+            warn!(
+                start,
+                end, "edit straddles UTF-8 codepoint boundary, skipping"
+            );
             continue;
         }
-        debug!(start, end, replacement_len = e.replacement.len(), "applying edit");
+        debug!(
+            start,
+            end,
+            replacement_len = e.replacement.len(),
+            "applying edit"
+        );
         text.replace_range(start..end, &e.replacement);
         applied += 1;
     }

@@ -40,7 +40,9 @@ impl TabIndent {
 
 impl<'ast> Visit<'ast> for TabIndent {
     fn visit_spec(&mut self, _spec: &'ast SpecFile<Span>) {
-        let Some(source) = self.source.clone() else { return };
+        let Some(source) = self.source.clone() else {
+            return;
+        };
         let mut line_start = 0usize;
         for (idx, byte) in source.bytes().enumerate() {
             if byte == b'\n' {
@@ -71,9 +73,7 @@ impl TabIndent {
             Diagnostic::new(
                 &METADATA,
                 Severity::Warn,
-                format!(
-                    "line starts with {leading_tabs} tab(s); use spaces for stable alignment"
-                ),
+                format!("line starts with {leading_tabs} tab(s); use spaces for stable alignment"),
                 line_span,
             )
             .with_suggestion(Suggestion::new(

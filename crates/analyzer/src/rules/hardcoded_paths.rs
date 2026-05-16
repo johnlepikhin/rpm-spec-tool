@@ -37,8 +37,7 @@ use crate::visit::{self, Visit};
 pub static METADATA: LintMetadata = LintMetadata {
     id: "RPM050",
     name: "hardcoded-paths",
-    description:
-        "Use the matching RPM macro instead of a hardcoded path (e.g. `%{_bindir}` for `/usr/bin`).",
+    description: "Use the matching RPM macro instead of a hardcoded path (e.g. `%{_bindir}` for `/usr/bin`).",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -66,7 +65,9 @@ impl HardcodedPaths {
         // `source.get` returns `None` if either bound falls between
         // UTF-8 code-point boundaries — protect against malformed
         // spans rather than panicking inside a library call.
-        let Some(slice) = source.get(start..end) else { return };
+        let Some(slice) = source.get(start..end) else {
+            return;
+        };
 
         let mut idx = 0;
         while let Some(slash_offset) = slice[idx..].find('/') {
@@ -78,9 +79,7 @@ impl HardcodedPaths {
                     Diagnostic::new(
                         &METADATA,
                         Severity::Warn,
-                        format!(
-                            "literal path found here — consider using `{replacement}` instead"
-                        ),
+                        format!("literal path found here — consider using `{replacement}` instead"),
                         Span::from_bytes(abs_start, abs_end),
                     )
                     .with_suggestion(Suggestion::new(
@@ -259,7 +258,10 @@ mod tests {
         // in `match_path_prefix` must reject this.
         let src = "Name: x\n%install\necho /usr/binfoo\n";
         let diags = run(src);
-        assert!(diags.is_empty(), "false positive on prefix substring: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "false positive on prefix substring: {diags:?}"
+        );
     }
 
     #[test]
@@ -269,7 +271,11 @@ mod tests {
         // that as a path terminator and still emit the diagnostic.
         let src = "Name: x\n%install\nif [ -d /usr/bin ]; then :; fi\n";
         let diags = run(src);
-        assert_eq!(diags.len(), 1, "expected match on `/usr/bin ` (space-terminated): {diags:?}");
+        assert_eq!(
+            diags.len(),
+            1,
+            "expected match on `/usr/bin ` (space-terminated): {diags:?}"
+        );
     }
 
     #[test]
@@ -284,8 +290,10 @@ mod tests {
         assert_ne!(diags[0].primary_span, diags[1].primary_span);
         // Each span covers exactly the matched prefix length
         // (`/usr/bin` = 8 bytes, `/usr/sbin` = 9 bytes).
-        let lens: Vec<usize> =
-            diags.iter().map(|d| d.primary_span.end_byte - d.primary_span.start_byte).collect();
+        let lens: Vec<usize> = diags
+            .iter()
+            .map(|d| d.primary_span.end_byte - d.primary_span.start_byte)
+            .collect();
         assert!(lens.contains(&8), "got {lens:?}");
         assert!(lens.contains(&9), "got {lens:?}");
     }

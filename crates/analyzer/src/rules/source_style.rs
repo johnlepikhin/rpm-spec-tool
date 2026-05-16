@@ -16,9 +16,7 @@
 //! conservatively when the value is pure-macro (we can't reason
 //! about what the macro expands to).
 
-use rpm_spec::ast::{
-    PreambleItem, Section, Span, Tag, TagValue, TextBody, TextSegment,
-};
+use rpm_spec::ast::{PreambleItem, Section, Span, Tag, TagValue, TextBody, TextSegment};
 
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
 use crate::lint::{Lint, LintMetadata};
@@ -31,8 +29,7 @@ use crate::visit::{self, Visit};
 pub static SOURCE_WITHOUT_URL_METADATA: LintMetadata = LintMetadata {
     id: "RPM125",
     name: "source-without-url",
-    description:
-        "`SourceN:` should be a URL (http/https/ftp) where the upstream tarball can \
+    description: "`SourceN:` should be a URL (http/https/ftp) where the upstream tarball can \
          be downloaded — Fedora packaging guideline.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
@@ -119,8 +116,7 @@ const MAX_SUBJECT_LEN: usize = 50;
 pub static DESCRIPTION_LEADS_WITH_THIS_PACKAGE_METADATA: LintMetadata = LintMetadata {
     id: "RPM126",
     name: "description-leads-with-this-package",
-    description:
-        "`%description` body begins with `This package …` / `The X package …` — \
+    description: "`%description` body begins with `This package …` / `The X package …` — \
          Fedora style guide prefers leading with the subject of the description.",
     // Style preference; opt-in so consistency-focused projects can
     // enable it without surprising others.

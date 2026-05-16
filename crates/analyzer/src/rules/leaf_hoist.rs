@@ -38,8 +38,7 @@ use crate::visit::{self, Visit};
 pub static LEAF_HOIST_METADATA: LintMetadata = LintMetadata {
     id: "RPM119",
     name: "common-leaf-line-hoistable",
-    description:
-        "A line appears on every root-to-leaf path of a nested `%if` tree — it can be \
+    description: "A line appears on every root-to-leaf path of a nested `%if` tree — it can be \
          hoisted outside the conditional to remove redundant duplication.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
@@ -68,13 +67,18 @@ impl CommonLeafLineHoistable {
     }
 
     fn check<B: BodyNode>(&mut self, node: &Conditional<Span, B>) {
-        let Some(source) = self.source.clone() else { return };
+        let Some(source) = self.source.clone() else {
+            return;
+        };
         let common = lines_in_all_paths::<B>(node, &source);
         if common.is_empty() {
             return;
         }
-        let mut shown: Vec<&str> =
-            common.iter().take(MAX_REPORTED_LINES).map(String::as_str).collect();
+        let mut shown: Vec<&str> = common
+            .iter()
+            .take(MAX_REPORTED_LINES)
+            .map(String::as_str)
+            .collect();
         // Stable order for readability + test determinism.
         shown.sort();
         let preview = shown.join("` / `");
@@ -113,10 +117,7 @@ impl<'ast> Visit<'ast> for CommonLeafLineHoistable {
         visit::walk_top_conditional(self, node);
         self.depth -= 1;
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         if self.depth == 0 {
             self.check(node);
         }
@@ -187,14 +188,14 @@ impl BodyNode for FilesContent<Span> {
 /// rooted at `node`. Returns the empty set when the conditional has
 /// no `%else` (the implicit fall-through path contributes nothing)
 /// or when any branch yields an empty set.
-fn lines_in_all_paths<B: BodyNode>(
-    node: &Conditional<Span, B>,
-    source: &str,
-) -> BTreeSet<String> {
+fn lines_in_all_paths<B: BodyNode>(node: &Conditional<Span, B>, source: &str) -> BTreeSet<String> {
     if node.otherwise.is_none() {
         return BTreeSet::new();
     }
-    let mut iter = node.branches.iter().map(|b| lines_in_path::<B>(&b.body, source));
+    let mut iter = node
+        .branches
+        .iter()
+        .map(|b| lines_in_path::<B>(&b.body, source));
     let Some(mut acc) = iter.next() else {
         return BTreeSet::new();
     };

@@ -5,7 +5,7 @@
 //! `Requires: foo = 1.2` (no release) is fine — sometimes intentional
 //! when version-and-release semantics aren't needed.
 
-use rpm_spec::ast::{DepAtom, Span, Tag, Text, TextSegment, VerOp, EVR};
+use rpm_spec::ast::{DepAtom, EVR, Span, Tag, Text, TextSegment, VerOp};
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
 use crate::lint::{Lint, LintMetadata};

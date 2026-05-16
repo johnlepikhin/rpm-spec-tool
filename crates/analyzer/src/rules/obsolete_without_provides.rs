@@ -104,9 +104,7 @@ mod tests {
 
     #[test]
     fn silent_when_provides_matches() {
-        assert!(
-            run("Name: hello\nObsoletes: old-hello\nProvides: old-hello\n").is_empty()
-        );
+        assert!(run("Name: hello\nObsoletes: old-hello\nProvides: old-hello\n").is_empty());
     }
 
     #[test]

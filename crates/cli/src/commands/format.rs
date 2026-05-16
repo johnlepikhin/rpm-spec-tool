@@ -20,8 +20,7 @@ enum IndentSource {
 }
 
 /// Tail of the warning, shared between CLI- and config-sourced cases.
-const INDENT_COSMETIC_WARNING: &str =
-    "is cosmetic only; rpm does not accept indented %if directives. \
+const INDENT_COSMETIC_WARNING: &str = "is cosmetic only; rpm does not accept indented %if directives. \
      Do not commit the formatted output.";
 
 #[derive(Debug, Args)]
@@ -67,8 +66,7 @@ impl Cmd {
         let mut indent_warning_emitted = false;
 
         for source in sources {
-            let Some(analyzer_cfg) =
-                config_cache.load_or_report(&source.path, &mut any_io_error)
+            let Some(analyzer_cfg) = config_cache.load_or_report(&source.path, &mut any_io_error)
             else {
                 continue;
             };
@@ -100,9 +98,7 @@ impl Cmd {
                     eprintln!("would reformat: {}", source.display_name());
                 }
             } else if self.in_place && !source.is_stdin {
-                if changed
-                    && let Err(e) = io::write_atomic(&source.path, &formatted)
-                {
+                if changed && let Err(e) = io::write_atomic(&source.path, &formatted) {
                     eprintln!("error writing {}: {e:#}", source.display_name());
                     any_io_error = true;
                 }

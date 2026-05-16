@@ -34,7 +34,12 @@ impl DeprecatedCleanSection {
 
 impl<'ast> Visit<'ast> for DeprecatedCleanSection {
     fn visit_section(&mut self, node: &'ast Section<Span>) {
-        if let Section::BuildScript { kind: BuildScriptKind::Clean, data, .. } = node {
+        if let Section::BuildScript {
+            kind: BuildScriptKind::Clean,
+            data,
+            ..
+        } = node
+        {
             let diag = Diagnostic::new(
                 &METADATA,
                 Severity::Warn,

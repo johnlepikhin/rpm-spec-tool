@@ -56,7 +56,12 @@ struct IntConstraint<'a> {
 /// preserving the conservative top-level-only contract.
 fn flatten_and_chain<'a>(ast: &'a ExprAst<Span>, out: &mut Vec<&'a ExprAst<Span>>) {
     match ast.peel_parens() {
-        ExprAst::Binary { kind: BinOp::LogAnd, lhs, rhs, .. } => {
+        ExprAst::Binary {
+            kind: BinOp::LogAnd,
+            lhs,
+            rhs,
+            ..
+        } => {
             flatten_and_chain(lhs, out);
             flatten_and_chain(rhs, out);
         }
@@ -76,7 +81,11 @@ fn extract_int_constraint(ast: &ExprAst<Span>) -> Option<IntConstraint<'_>> {
         )
         && let ExprAst::Integer { value, .. } = rhs.peel_parens()
     {
-        return Some(IntConstraint { lhs, op: *kind, value: *value });
+        return Some(IntConstraint {
+            lhs,
+            op: *kind,
+            value: *value,
+        });
     }
     None
 }
@@ -171,8 +180,10 @@ fn contradicts(a: &IntConstraint<'_>, b: &IntConstraint<'_>) -> Option<bool> {
 fn analyse(ast: &ExprAst<Span>) -> (bool, bool) {
     let mut operands = Vec::new();
     flatten_and_chain(ast, &mut operands);
-    let constraints: Vec<IntConstraint<'_>> =
-        operands.iter().filter_map(|o| extract_int_constraint(o)).collect();
+    let constraints: Vec<IntConstraint<'_>> = operands
+        .iter()
+        .filter_map(|o| extract_int_constraint(o))
+        .collect();
     let mut redundant = false;
     let mut contradicts_any = false;
     for i in 0..constraints.len() {
@@ -200,8 +211,7 @@ fn analyse(ast: &ExprAst<Span>) -> (bool, bool) {
 pub static REDUNDANCY_METADATA: LintMetadata = LintMetadata {
     id: "RPM102",
     name: "inequality-redundancy",
-    description:
-        "`X OP a && X OP b` where one constraint subsumes the other — drop the weaker side.",
+    description: "`X OP a && X OP b` where one constraint subsumes the other — drop the weaker side.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -218,7 +228,9 @@ impl InequalityRedundancy {
 
     fn check<B>(&mut self, node: &Conditional<Span, B>) {
         for branch in &node.branches {
-            let CondExpr::Parsed(ast) = &branch.expr else { continue };
+            let CondExpr::Parsed(ast) = &branch.expr else {
+                continue;
+            };
             let (redundant, _) = analyse(ast);
             if redundant {
                 self.diagnostics.push(
@@ -245,17 +257,11 @@ impl<'ast> Visit<'ast> for InequalityRedundancy {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -294,7 +300,9 @@ impl InequalityContradiction {
 
     fn check<B>(&mut self, node: &Conditional<Span, B>) {
         for branch in &node.branches {
-            let CondExpr::Parsed(ast) = &branch.expr else { continue };
+            let CondExpr::Parsed(ast) = &branch.expr else {
+                continue;
+            };
             let (_, contradicts_any) = analyse(ast);
             if contradicts_any {
                 self.diagnostics.push(Diagnostic::new(
@@ -314,17 +322,11 @@ impl<'ast> Visit<'ast> for InequalityContradiction {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }

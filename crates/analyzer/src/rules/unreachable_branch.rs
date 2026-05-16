@@ -15,15 +15,14 @@ use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Sugge
 use crate::lint::{Lint, LintMetadata};
 use crate::rules::boolean_dnf::Dnf;
 use crate::rules::path_cond::{
-    analyse_conditional, conjoin, is_unsat, BranchAnalyser, PathConditions,
+    BranchAnalyser, PathConditions, analyse_conditional, conjoin, is_unsat,
 };
 use crate::visit::Visit;
 
 pub static UNREACHABLE_BRANCH_METADATA: LintMetadata = LintMetadata {
     id: "RPM113",
     name: "unreachable-branch-under-parent",
-    description:
-        "`%if` branch is unsatisfiable under the conjunction of ancestor conditions; \
+    description: "`%if` branch is unsatisfiable under the conjunction of ancestor conditions; \
          its body can never execute.",
     default_severity: Severity::Warn,
     category: LintCategory::Correctness,
@@ -101,10 +100,7 @@ impl<'ast> Visit<'ast> for UnreachableBranch {
     fn visit_top_conditional(&mut self, node: &'ast Conditional<Span, SpecItem<Span>>) {
         analyse_conditional(self, node, walk_top_body);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         analyse_conditional(self, node, walk_preamble_body);
     }
     fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
@@ -169,7 +165,10 @@ mod tests {
         // the outer may be Raw or Parsed. The contract: no spurious
         // RPM113 firing when the outer is opaque.
         for d in run(src) {
-            assert_ne!(d.lint_id, "RPM113", "no RPM113 fire under opaque parent: {d:?}");
+            assert_ne!(
+                d.lint_id, "RPM113",
+                "no RPM113 fire under opaque parent: {d:?}"
+            );
         }
     }
 
@@ -177,8 +176,7 @@ mod tests {
     fn rpm113_flags_negated_arch() {
         // %ifarch x86_64 → %ifnarch x86_64 is unreachable.
         // Easier formulation: %ifarch x86_64 then %ifnarch x86_64 inside.
-        let src =
-            "Name: x\n%ifarch x86_64\n%ifnarch x86_64\n%global foo bar\n%endif\n%endif\n";
+        let src = "Name: x\n%ifarch x86_64\n%ifnarch x86_64\n%global foo bar\n%endif\n%endif\n";
         let diags = run(src);
         // Whether this fires depends on whether the parser produces
         // ArchList for both — assert at most one RPM113 (best-effort).

@@ -56,8 +56,7 @@ use crate::visit::{self, Visit};
 pub static PACKAGE_WITHOUT_DESCRIPTION_METADATA: LintMetadata = LintMetadata {
     id: "RPM123",
     name: "package-without-description",
-    description:
-        "A `%package` subpackage was declared but no matching `%description` exists; \
+    description: "A `%package` subpackage was declared but no matching `%description` exists; \
          rpmbuild will reject the build.",
     // See module-level docs: parser limitation around `%description`
     // inside `%if`-blocks forces an opt-in default. Promote to
@@ -69,8 +68,7 @@ pub static PACKAGE_WITHOUT_DESCRIPTION_METADATA: LintMetadata = LintMetadata {
 pub static PACKAGE_WITHOUT_FILES_METADATA: LintMetadata = LintMetadata {
     id: "RPM124",
     name: "package-without-files",
-    description:
-        "A `%package` subpackage was declared but has no matching `%files` section; \
+    description: "A `%package` subpackage was declared but has no matching `%files` section; \
          no payload will be assembled for it.",
     // Same opt-in default as RPM123.
     default_severity: Severity::Allow,
@@ -102,12 +100,16 @@ impl Collector {
                     self.declared.push((name, *data));
                 }
             }
-            Section::Description { subpkg: Some(s), .. } => {
+            Section::Description {
+                subpkg: Some(s), ..
+            } => {
                 if let Some(name) = canonical_subpkg_ref(self.main_name.as_deref(), s) {
                     self.described.insert(name);
                 }
             }
-            Section::Files { subpkg: Some(s), .. } => {
+            Section::Files {
+                subpkg: Some(s), ..
+            } => {
                 if let Some(name) = canonical_subpkg_ref(self.main_name.as_deref(), s) {
                     self.filed.insert(name);
                 }

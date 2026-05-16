@@ -23,8 +23,8 @@ use std::collections::BTreeSet;
 use rpm_spec::ast::{CondExpr, Conditional, Span, Text, TextSegment};
 
 use crate::rules::boolean_dnf::{
-    distribute_and, eval_cube, is_contradiction, to_dnf, AtomTable, Cube, Dnf, Literal,
-    MAX_ATOMS_FOR_TAUTOLOGY,
+    AtomTable, Cube, Dnf, Literal, MAX_ATOMS_FOR_TAUTOLOGY, distribute_and, eval_cube,
+    is_contradiction, to_dnf,
 };
 
 /// Hard cap on nested-`%if` depth before we bail out of path-condition
@@ -112,14 +112,20 @@ fn arch_list_dnf(archs: &[Text], atoms: &mut AtomTable, negate: bool) -> Option<
         let mut cube = Cube::new();
         for key in keys {
             let atom = atoms.intern_key(key);
-            cube.insert(Literal { atom, negated: true });
+            cube.insert(Literal {
+                atom,
+                negated: true,
+            });
         }
         dnf.insert(cube);
     } else {
         for key in keys {
             let atom = atoms.intern_key(key);
             let mut cube = Cube::new();
-            cube.insert(Literal { atom, negated: false });
+            cube.insert(Literal {
+                atom,
+                negated: false,
+            });
             dnf.insert(cube);
         }
     }
@@ -137,7 +143,11 @@ fn arch_literal(t: &Text) -> Option<String> {
         }
     }
     let trimmed = out.trim();
-    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 /// `current ∧ ¬prior_{n-1} ∧ ... ∧ ¬prior_0`. Returns `None` if any
@@ -215,13 +225,7 @@ pub(crate) trait BranchAnalyser {
     /// `%else` body is walked. Lets a rule observe the complete chain
     /// before commiting (e.g. RPM116 fires here based on whether the
     /// implicit-else region is UNSAT).
-    fn on_post_chain(
-        &mut self,
-        _node_anchor: Span,
-        _has_else: bool,
-        _prior: &[&CondExpr<Span>],
-    ) {
-    }
+    fn on_post_chain(&mut self, _node_anchor: Span, _has_else: bool, _prior: &[&CondExpr<Span>]) {}
 }
 
 /// Walk a [`Conditional`] block with full path-condition tracking.
@@ -295,7 +299,6 @@ pub(crate) fn path_implies(path: &Dnf, branch: &Dnf, atom_count: usize) -> Optio
     }
     Some(true)
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -30,8 +30,7 @@ use crate::visit::{self, Visit};
 pub static SETUP_TEST_METADATA: LintMetadata = LintMetadata {
     id: "RPM060",
     name: "python-setup-test-deprecated",
-    description:
-        "Replace `python setup.py test` with a modern test runner (pytest / tox / nox).",
+    description: "Replace `python setup.py test` with a modern test runner (pytest / tox / nox).",
     default_severity: Severity::Allow,
     category: LintCategory::Style,
 };
@@ -39,8 +38,7 @@ pub static SETUP_TEST_METADATA: LintMetadata = LintMetadata {
 pub static SETUP_INSTALL_METADATA: LintMetadata = LintMetadata {
     id: "RPM061",
     name: "python-setup-install-deprecated",
-    description:
-        "Replace `python setup.py install` with `pip install` / `%py3_install` / PEP 517 builder.",
+    description: "Replace `python setup.py install` with `pip install` / `%py3_install` / PEP 517 builder.",
     default_severity: Severity::Allow,
     category: LintCategory::Style,
 };
@@ -66,15 +64,25 @@ pub struct Needle {
     pub replacement: Option<&'static str>,
 }
 
-pub static SETUP_TEST_NEEDLES: &[Needle] =
-    &[Needle { text: "setup.py test", replacement: None }];
+pub static SETUP_TEST_NEEDLES: &[Needle] = &[Needle {
+    text: "setup.py test",
+    replacement: None,
+}];
 
-pub static SETUP_INSTALL_NEEDLES: &[Needle] =
-    &[Needle { text: "setup.py install", replacement: None }];
+pub static SETUP_INSTALL_NEEDLES: &[Needle] = &[Needle {
+    text: "setup.py install",
+    replacement: None,
+}];
 
 pub static EGREP_FGREP_NEEDLES: &[Needle] = &[
-    Needle { text: "egrep", replacement: Some("grep -E") },
-    Needle { text: "fgrep", replacement: Some("grep -F") },
+    Needle {
+        text: "egrep",
+        replacement: Some("grep -E"),
+    },
+    Needle {
+        text: "fgrep",
+        replacement: Some("grep -F"),
+    },
 ];
 
 // =====================================================================
@@ -94,11 +102,18 @@ pub struct WordScanLint {
 
 impl WordScanLint {
     pub fn new(meta: &'static LintMetadata, needles: &'static [Needle]) -> Self {
-        Self { meta, needles, diagnostics: Vec::new(), source: None }
+        Self {
+            meta,
+            needles,
+            diagnostics: Vec::new(),
+            source: None,
+        }
     }
 
     fn scan(&mut self, anchor: Span) {
-        let Some(source) = self.source.as_deref() else { return };
+        let Some(source) = self.source.as_deref() else {
+            return;
+        };
         for needle in self.needles {
             scan_one(source, anchor, needle, self.meta, &mut self.diagnostics);
         }
@@ -164,7 +179,9 @@ fn scan_one(
 ) {
     let end = anchor.end_byte.min(source.len());
     let start = anchor.start_byte.min(end);
-    let Some(slice) = source.get(start..end) else { return };
+    let Some(slice) = source.get(start..end) else {
+        return;
+    };
 
     let needle_len = needle.text.len();
     let mut idx = 0;
@@ -217,7 +234,11 @@ mod tests {
     use super::*;
     use crate::session::parse;
 
-    fn run_lint(src: &str, meta: &'static LintMetadata, needles: &'static [Needle]) -> Vec<Diagnostic> {
+    fn run_lint(
+        src: &str,
+        meta: &'static LintMetadata,
+        needles: &'static [Needle],
+    ) -> Vec<Diagnostic> {
         let outcome = parse(src);
         let mut lint = WordScanLint::new(meta, needles);
         lint.set_source(src);

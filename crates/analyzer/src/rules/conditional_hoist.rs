@@ -21,9 +21,7 @@
 //! the same `BuildRequires:` line is copy-pasted into every arm of a
 //! distribution-flavour switch.
 
-use rpm_spec::ast::{
-    Conditional, FilesContent, PreambleContent, Span, SpecItem,
-};
+use rpm_spec::ast::{Conditional, FilesContent, PreambleContent, Span, SpecItem};
 
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
 use crate::lint::{Lint, LintMetadata};
@@ -39,7 +37,13 @@ use crate::visit::{self, Visit};
 fn item_text<B: HasBodySpan>(item: &B, source: &str) -> Option<String> {
     let sp = item.body_span()?;
     let slice = source.get(sp.start_byte..sp.end_byte)?;
-    Some(slice.lines().map(str::trim_end).collect::<Vec<_>>().join("\n"))
+    Some(
+        slice
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// Collect bodies as slices, including `%else`.
@@ -61,7 +65,9 @@ fn common_prefix_len<B: HasBodySpan>(bodies: &[&[B]], source: &str) -> usize {
     let min_len = bodies.iter().map(|b| b.len()).min().unwrap_or(0);
     let mut k = 0;
     while k < min_len {
-        let Some(first) = item_text(&bodies[0][k], source) else { break };
+        let Some(first) = item_text(&bodies[0][k], source) else {
+            break;
+        };
         let all_equal = bodies[1..]
             .iter()
             .all(|b| matches!(item_text(&b[k], source), Some(t) if t == first));
@@ -113,8 +119,7 @@ fn at_least_one_item_remains<B>(bodies: &[&[B]], k: usize) -> bool {
 pub static HOIST_PREFIX_METADATA: LintMetadata = LintMetadata {
     id: "RPM097",
     name: "hoist-common-prefix-from-branches",
-    description:
-        "All branches of this conditional start with the same item(s); lift them above the block.",
+    description: "All branches of this conditional start with the same item(s); lift them above the block.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -152,7 +157,9 @@ impl HoistCommonPrefix {
 
 impl HoistCommonPrefix {
     fn check<B: HasBodySpan>(&mut self, node: &Conditional<Span, B>) {
-        let Some(source) = self.source.clone() else { return };
+        let Some(source) = self.source.clone() else {
+            return;
+        };
         let bodies = all_bodies(node);
         // Need at least two arms (branch + branch or branch + else).
         if bodies.len() < 2 {
@@ -171,17 +178,11 @@ impl<'ast> Visit<'ast> for HoistCommonPrefix {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -206,8 +207,7 @@ impl Lint for HoistCommonPrefix {
 pub static HOIST_SUFFIX_METADATA: LintMetadata = LintMetadata {
     id: "RPM098",
     name: "hoist-common-suffix-from-branches",
-    description:
-        "All branches of this conditional end with the same item(s); lift them below the block.",
+    description: "All branches of this conditional end with the same item(s); lift them below the block.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -245,7 +245,9 @@ impl HoistCommonSuffix {
 
 impl HoistCommonSuffix {
     fn check<B: HasBodySpan>(&mut self, node: &Conditional<Span, B>) {
-        let Some(source) = self.source.clone() else { return };
+        let Some(source) = self.source.clone() else {
+            return;
+        };
         let bodies = all_bodies(node);
         if bodies.len() < 2 {
             return;
@@ -263,17 +265,11 @@ impl<'ast> Visit<'ast> for HoistCommonSuffix {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }

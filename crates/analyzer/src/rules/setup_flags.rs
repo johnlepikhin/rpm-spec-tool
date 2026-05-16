@@ -49,7 +49,12 @@ impl SetupWithoutQFlag {
 impl<'ast> Visit<'ast> for SetupWithoutQFlag {
     fn visit_section(&mut self, node: &'ast Section<Span>) {
         let prev = self.current_prep_span.take();
-        if let Section::BuildScript { kind: BuildScriptKind::Prep, data, .. } = node {
+        if let Section::BuildScript {
+            kind: BuildScriptKind::Prep,
+            data,
+            ..
+        } = node
+        {
             self.current_prep_span = Some(*data);
         }
         visit::walk_section(self, node);

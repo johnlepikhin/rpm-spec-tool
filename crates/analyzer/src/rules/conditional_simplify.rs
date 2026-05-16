@@ -31,8 +31,7 @@ use crate::visit::{self, Visit};
 pub static CONSTANT_CONDITION_METADATA: LintMetadata = LintMetadata {
     id: "RPM072",
     name: "constant-condition",
-    description:
-        "`%if 0` / `%if 1` has a fixed outcome; drop the block or simplify to the live branch.",
+    description: "`%if 0` / `%if 1` has a fixed outcome; drop the block or simplify to the live branch.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -49,7 +48,10 @@ impl ConstantCondition {
 
     fn check_first(&mut self, expr: &CondExpr<Span>, anchor: Span) {
         let (verdict, hint) = if is_constant_true_condition(expr) {
-            ("always true", "drop the `%if`/`%endif` wrapper and keep the body")
+            (
+                "always true",
+                "drop the `%if`/`%endif` wrapper and keep the body",
+            )
         } else if is_constant_false_condition(expr) {
             (
                 "always false",
@@ -77,19 +79,13 @@ impl<'ast> Visit<'ast> for ConstantCondition {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         if let Some(first) = node.branches.first() {
             self.check_first(&first.expr, node.data);
         }
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         if let Some(first) = node.branches.first() {
             self.check_first(&first.expr, node.data);
         }
@@ -234,25 +230,39 @@ fn body_text<B: BranchItem>(body: &[B], source: &str) -> Option<String> {
     let slice = source.get(s..e)?;
     // Normalise line-trailing whitespace so cosmetic differences
     // don't hide a true duplicate.
-    Some(slice.lines().map(str::trim_end).collect::<Vec<_>>().join("\n"))
+    Some(
+        slice
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 impl IdenticalConditionalBranches {
     fn check<B: BranchItem>(&mut self, node: &Conditional<Span, B>) {
-        let Some(source) = self.source.as_deref() else { return };
+        let Some(source) = self.source.as_deref() else {
+            return;
+        };
         let total = node.branches.len() + usize::from(node.otherwise.is_some());
         if total < 2 {
             return;
         }
-        let Some(first) = body_text(&node.branches[0].body, source) else { return };
+        let Some(first) = body_text(&node.branches[0].body, source) else {
+            return;
+        };
         for branch in &node.branches[1..] {
-            let Some(text) = body_text(&branch.body, source) else { return };
+            let Some(text) = body_text(&branch.body, source) else {
+                return;
+            };
             if text != first {
                 return;
             }
         }
         if let Some(other) = &node.otherwise {
-            let Some(text) = body_text(other, source) else { return };
+            let Some(text) = body_text(other, source) else {
+                return;
+            };
             if text != first {
                 return;
             }
@@ -266,17 +276,11 @@ impl<'ast> Visit<'ast> for IdenticalConditionalBranches {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -301,8 +305,7 @@ impl Lint for IdenticalConditionalBranches {
 pub static REDUNDANT_NESTED_METADATA: LintMetadata = LintMetadata {
     id: "RPM075",
     name: "redundant-nested-condition",
-    description:
-        "Inner `%if` repeats an enclosing `%if`'s condition; the inner test always passes.",
+    description: "Inner `%if` repeats an enclosing `%if`'s condition; the inner test always passes.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -358,10 +361,7 @@ impl<'ast> Visit<'ast> for RedundantNestedCondition {
             self.leave();
         }
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         let pushed = if let Some(first) = node.branches.first() {
             self.enter(&first.expr, node.data);
             true
@@ -373,10 +373,7 @@ impl<'ast> Visit<'ast> for RedundantNestedCondition {
             self.leave();
         }
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         let pushed = if let Some(first) = node.branches.first() {
             self.enter(&first.expr, node.data);
             true

@@ -255,8 +255,7 @@ fn contains_macro_ref(expr: &ExprAst<Span>) -> bool {
 pub static MACRO_FOLDS_IF_TRIVIAL_METADATA: LintMetadata = LintMetadata {
     id: "RPM117",
     name: "macro-defined-makes-if-trivial",
-    description:
-        "After substituting macro values defined earlier in the spec, the `%if` \
+    description: "After substituting macro values defined earlier in the spec, the `%if` \
          expression reduces to a constant; the test is redundant.",
     // `%define FLAG <default>` followed by `%if %FLAG` is the idiomatic
     // **knob** pattern in real-world specs: the spec author declares a
@@ -287,11 +286,7 @@ impl<'ast> Visit<'ast> for MacroFoldsIfTrivial {
     }
 }
 
-fn walk_items_117(
-    items: &[SpecItem<Span>],
-    table: &mut MacroTable,
-    out: &mut Vec<Diagnostic>,
-) {
+fn walk_items_117(items: &[SpecItem<Span>], table: &mut MacroTable, out: &mut Vec<Diagnostic>) {
     for item in items {
         match item {
             SpecItem::MacroDef(m) => table.insert(m),
@@ -438,8 +433,7 @@ impl Lint for MacroFoldsIfTrivial {
 pub static UNUSED_CONDITIONAL_GLOBAL_METADATA: LintMetadata = LintMetadata {
     id: "RPM118",
     name: "unused-conditional-global",
-    description:
-        "`%global` macro is defined but never read elsewhere in the spec — may indicate \
+    description: "`%global` macro is defined but never read elsewhere in the spec — may indicate \
          a leftover or unintended dead code.",
     // Defaults to `Allow` because `%global` is frequently used as a
     // public knob meant for downstream `rpmbuild --define` overrides,
@@ -604,7 +598,11 @@ fn walk_section_118(s: &Section<Span>, r: &mut UnusedConditionalGlobal) {
                 r.record_text(line);
             }
         }
-        Section::Files { file_lists, content, .. } => {
+        Section::Files {
+            file_lists,
+            content,
+            ..
+        } => {
             for t in file_lists {
                 r.record_text(t);
             }
@@ -708,13 +706,22 @@ mod tests {
 
     #[test]
     fn parse_macro_ref_handles_basic_forms() {
-        assert_eq!(parse_macro_ref("%{X}"), Some((MacroMod::None, "X".to_string())));
-        assert_eq!(parse_macro_ref("%{?X}"), Some((MacroMod::IfDefined, "X".to_string())));
+        assert_eq!(
+            parse_macro_ref("%{X}"),
+            Some((MacroMod::None, "X".to_string()))
+        );
+        assert_eq!(
+            parse_macro_ref("%{?X}"),
+            Some((MacroMod::IfDefined, "X".to_string()))
+        );
         assert_eq!(
             parse_macro_ref("%{!?X}"),
             Some((MacroMod::IfNotDefined, "X".to_string()))
         );
-        assert_eq!(parse_macro_ref("%X"), Some((MacroMod::None, "X".to_string())));
+        assert_eq!(
+            parse_macro_ref("%X"),
+            Some((MacroMod::None, "X".to_string()))
+        );
     }
 
     #[test]

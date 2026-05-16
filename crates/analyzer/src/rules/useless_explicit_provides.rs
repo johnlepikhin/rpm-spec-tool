@@ -118,12 +118,10 @@ mod tests {
 
     #[test]
     fn flags_subpackage_useless_provides() {
-        let diags = run(
-            "Name: main\n\
+        let diags = run("Name: main\n\
 %package -n foo\n\
 Provides: foo\n\
-%description -n foo\nbody\n",
-        );
+%description -n foo\nbody\n");
         assert_eq!(diags.len(), 1);
     }
 

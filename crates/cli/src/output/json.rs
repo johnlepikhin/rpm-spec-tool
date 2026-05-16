@@ -21,7 +21,10 @@ struct Report<'a> {
 pub fn render(items: &[(Source, Vec<Diagnostic>)]) -> Result<()> {
     let files = items
         .iter()
-        .map(|(s, d)| FileEntry { path: s.display_name(), diagnostics: d })
+        .map(|(s, d)| FileEntry {
+            path: s.display_name(),
+            diagnostics: d,
+        })
         .collect();
     let report = Report { files };
     println!("{}", serde_json::to_string_pretty(&report)?);

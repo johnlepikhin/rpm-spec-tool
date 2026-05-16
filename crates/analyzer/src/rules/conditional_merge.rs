@@ -30,8 +30,7 @@ use crate::visit::Visit;
 pub static METADATA: LintMetadata = LintMetadata {
     id: "RPM076",
     name: "adjacent-mergeable-conditionals",
-    description:
-        "Two adjacent `%if` blocks share the same condition; merge them into one block.",
+    description: "Two adjacent `%if` blocks share the same condition; merge them into one block.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -121,14 +120,10 @@ where
 impl<'ast> Visit<'ast> for AdjacentMergeableConditionals {
     fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
         // Top-level pass.
-        let emits = scan_pairs(
-            &spec.items,
-            is_separator_top,
-            |it| match it {
-                SpecItem::Conditional(c) => Some(c),
-                _ => None,
-            },
-        );
+        let emits = scan_pairs(&spec.items, is_separator_top, |it| match it {
+            SpecItem::Conditional(c) => Some(c),
+            _ => None,
+        });
         for span in emits {
             self.emit(span);
         }
@@ -137,14 +132,10 @@ impl<'ast> Visit<'ast> for AdjacentMergeableConditionals {
             if let SpecItem::Section(boxed) = item
                 && let Section::Package { content, .. } = boxed.as_ref()
             {
-                let emits = scan_pairs(
-                    content,
-                    is_separator_preamble,
-                    |it| match it {
-                        PreambleContent::Conditional(c) => Some(c),
-                        _ => None,
-                    },
-                );
+                let emits = scan_pairs(content, is_separator_preamble, |it| match it {
+                    PreambleContent::Conditional(c) => Some(c),
+                    _ => None,
+                });
                 for span in emits {
                     self.emit(span);
                 }
@@ -155,14 +146,10 @@ impl<'ast> Visit<'ast> for AdjacentMergeableConditionals {
             if let SpecItem::Section(boxed) = item
                 && let Section::Files { content, .. } = boxed.as_ref()
             {
-                let emits = scan_pairs(
-                    content,
-                    is_separator_files,
-                    |it| match it {
-                        FilesContent::Conditional(c) => Some(c),
-                        _ => None,
-                    },
-                );
+                let emits = scan_pairs(content, is_separator_files, |it| match it {
+                    FilesContent::Conditional(c) => Some(c),
+                    _ => None,
+                });
                 for span in emits {
                     self.emit(span);
                 }
@@ -187,8 +174,7 @@ impl Lint for AdjacentMergeableConditionals {
 pub static IF_NOT_X_AFTER_X_METADATA: LintMetadata = LintMetadata {
     id: "RPM084",
     name: "if-not-x-after-if-x",
-    description:
-        "Two adjacent `%ifarch X` / `%ifnarch X` blocks form a perfect `%else` — fold them.",
+    description: "Two adjacent `%ifarch X` / `%ifnarch X` blocks form a perfect `%else` — fold them.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -285,11 +271,10 @@ impl<'ast> Visit<'ast> for IfNotXAfterIfX {
             if let SpecItem::Section(boxed) = item
                 && let Section::Package { content, .. } = boxed.as_ref()
             {
-                let emits =
-                    scan_arch_anti_pairs(content, is_separator_preamble, |it| match it {
-                        PreambleContent::Conditional(c) => Some(c),
-                        _ => None,
-                    });
+                let emits = scan_arch_anti_pairs(content, is_separator_preamble, |it| match it {
+                    PreambleContent::Conditional(c) => Some(c),
+                    _ => None,
+                });
                 for span in emits {
                     self.emit(span);
                 }
@@ -325,8 +310,7 @@ impl Lint for IfNotXAfterIfX {
 pub static MERGE_ELIF_METADATA: LintMetadata = LintMetadata {
     id: "RPM099",
     name: "merge-elif-same-body",
-    description:
-        "Two adjacent `%elif` branches share the same body — combine their conditions via `||`.",
+    description: "Two adjacent `%elif` branches share the same body — combine their conditions via `||`.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -362,7 +346,9 @@ impl MergeElifSameBody {
     fn check<B: HasBodySpan>(&mut self, node: &Conditional<Span, B>) {
         // Clone the source out of `self` so the loop body can call
         // `self.emit` without a borrow-checker conflict.
-        let Some(source) = self.source.clone() else { return };
+        let Some(source) = self.source.clone() else {
+            return;
+        };
         for i in 1..node.branches.len() {
             let prev = &node.branches[i - 1];
             let curr = &node.branches[i];
@@ -398,13 +384,15 @@ fn body_text<'a, B: HasBodySpan>(body: &[B], source: &'a str) -> Option<&'a str>
 }
 
 fn bodies_source_eq<B: HasBodySpan>(a: &[B], b: &[B], source: &str) -> bool {
-    let Some(t1) = body_text(a, source) else { return false };
-    let Some(t2) = body_text(b, source) else { return false };
+    let Some(t1) = body_text(a, source) else {
+        return false;
+    };
+    let Some(t2) = body_text(b, source) else {
+        return false;
+    };
     // Normalise trailing whitespace per line so cosmetic differences
     // (trailing spaces) don't hide a true duplicate.
-    let norm = |s: &str| -> String {
-        s.lines().map(str::trim_end).collect::<Vec<_>>().join("\n")
-    };
+    let norm = |s: &str| -> String { s.lines().map(str::trim_end).collect::<Vec<_>>().join("\n") };
     norm(t1) == norm(t2)
 }
 
@@ -460,17 +448,11 @@ impl<'ast> Visit<'ast> for MergeElifSameBody {
         self.check(node);
         crate::visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         crate::visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         crate::visit::walk_files_conditional(self, node);
     }
@@ -531,7 +513,8 @@ mod tests {
     #[test]
     fn silent_for_multi_branch_block() {
         // First block has %else — merging would change semantics.
-        let src = "Name: x\n%if 1\nVersion: 1\n%else\nVersion: 2\n%endif\n%if 1\nRelease: 1\n%endif\n";
+        let src =
+            "Name: x\n%if 1\nVersion: 1\n%else\nVersion: 2\n%endif\n%if 1\nRelease: 1\n%endif\n";
         assert!(run(src).is_empty());
     }
 
@@ -599,7 +582,8 @@ mod tests {
     fn rpm099_flags_chain_of_three() {
         // Three consecutive same-body branches → two diagnostics
         // (the second and third).
-        let src = "Name: x\n%if A\nLicense: MIT\n%elif B\nLicense: MIT\n%elif C\nLicense: MIT\n%endif\n";
+        let src =
+            "Name: x\n%if A\nLicense: MIT\n%elif B\nLicense: MIT\n%elif C\nLicense: MIT\n%endif\n";
         let diags = run_merge(src);
         assert_eq!(diags.len(), 2, "{diags:?}");
     }

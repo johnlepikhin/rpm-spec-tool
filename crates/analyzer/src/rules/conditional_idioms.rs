@@ -25,8 +25,7 @@ use crate::visit::{self, Visit};
 pub static PREFER_BCOND_METADATA: LintMetadata = LintMetadata {
     id: "RPM095",
     name: "prefer-bcond-for-build-options",
-    description:
-        "`%if 0%{?with_NAME}` pattern is the build-option idiom; use `%bcond_with NAME` instead.",
+    description: "`%if 0%{?with_NAME}` pattern is the build-option idiom; use `%bcond_with NAME` instead.",
     default_severity: Severity::Allow,
     category: LintCategory::Style,
 };
@@ -43,7 +42,11 @@ impl PreferBcondForBuildOptions {
 
     fn check_expr(&mut self, branch_data: Span, expr: &CondExpr<Span>) {
         let text = match expr {
-            CondExpr::Raw(t) => t.literal_str().map(str::trim).unwrap_or_default().to_string(),
+            CondExpr::Raw(t) => t
+                .literal_str()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string(),
             CondExpr::Parsed(_) => return, // Parsed paths cover non-idiomatic forms first.
             _ => return,
         };
@@ -81,10 +84,7 @@ fn parse_with_pattern(text: &str) -> Option<&str> {
     if inner.is_empty() {
         return None;
     }
-    if !inner
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if !inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return None;
     }
     Some(inner)
@@ -97,19 +97,13 @@ impl<'ast> Visit<'ast> for PreferBcondForBuildOptions {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         for b in &node.branches {
             self.check_expr(b.data, &b.expr);
         }
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         for b in &node.branches {
             self.check_expr(b.data, &b.expr);
         }
@@ -133,8 +127,7 @@ impl Lint for PreferBcondForBuildOptions {
 pub static IF_ONLY_BR_METADATA: LintMetadata = LintMetadata {
     id: "RPM096",
     name: "if-only-buildrequires",
-    description:
-        "`%if X BuildRequires: foo %endif` is stylistically heavy; consider `%bcond_with` or \
+    description: "`%if X BuildRequires: foo %endif` is stylistically heavy; consider `%bcond_with` or \
          a conditional dependency clause.",
     default_severity: Severity::Allow,
     category: LintCategory::Style,
@@ -171,14 +164,20 @@ impl IfOnlyBuildRequires {
 fn is_build_requires_item_top(item: &SpecItem<Span>) -> bool {
     matches!(
         item,
-        SpecItem::Preamble(PreambleItem { tag: Tag::BuildRequires, .. })
+        SpecItem::Preamble(PreambleItem {
+            tag: Tag::BuildRequires,
+            ..
+        })
     )
 }
 
 fn is_build_requires_item_preamble(item: &PreambleContent<Span>) -> bool {
     matches!(
         item,
-        PreambleContent::Item(PreambleItem { tag: Tag::BuildRequires, .. })
+        PreambleContent::Item(PreambleItem {
+            tag: Tag::BuildRequires,
+            ..
+        })
     )
 }
 
@@ -186,9 +185,10 @@ impl<'ast> Visit<'ast> for IfOnlyBuildRequires {
     fn visit_top_conditional(&mut self, node: &'ast Conditional<Span, SpecItem<Span>>) {
         let only_br = node.branches.iter().all(|b| {
             !b.body.is_empty()
-                && b.body
-                    .iter()
-                    .all(|i| matches!(i, SpecItem::Blank | SpecItem::Comment(_)) || is_build_requires_item_top(i))
+                && b.body.iter().all(|i| {
+                    matches!(i, SpecItem::Blank | SpecItem::Comment(_))
+                        || is_build_requires_item_top(i)
+                })
                 && b.body.iter().any(is_build_requires_item_top)
         });
         if only_br {
@@ -196,10 +196,7 @@ impl<'ast> Visit<'ast> for IfOnlyBuildRequires {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         let only_br = node.branches.iter().all(|b| {
             !b.body.is_empty()
                 && b.body.iter().all(|i| {
@@ -231,8 +228,7 @@ impl Lint for IfOnlyBuildRequires {
 pub static CONDITIONAL_BUILDARCH_METADATA: LintMetadata = LintMetadata {
     id: "RPM106",
     name: "conditional-buildarch",
-    description:
-        "`BuildArch:` inside a `%if` block — RPM uses last-wins semantics, so this is fragile.",
+    description: "`BuildArch:` inside a `%if` block — RPM uses last-wins semantics, so this is fragile.",
     default_severity: Severity::Allow,
     category: LintCategory::Correctness,
 };
@@ -260,7 +256,12 @@ impl ConditionalBuildArch {
 }
 
 fn is_buildarch_top(item: &SpecItem<Span>) -> Option<Span> {
-    if let SpecItem::Preamble(PreambleItem { tag: Tag::BuildArch, data, .. }) = item {
+    if let SpecItem::Preamble(PreambleItem {
+        tag: Tag::BuildArch,
+        data,
+        ..
+    }) = item
+    {
         Some(*data)
     } else {
         None
@@ -268,7 +269,12 @@ fn is_buildarch_top(item: &SpecItem<Span>) -> Option<Span> {
 }
 
 fn is_buildarch_preamble(item: &PreambleContent<Span>) -> Option<Span> {
-    if let PreambleContent::Item(PreambleItem { tag: Tag::BuildArch, data, .. }) = item {
+    if let PreambleContent::Item(PreambleItem {
+        tag: Tag::BuildArch,
+        data,
+        ..
+    }) = item
+    {
         Some(*data)
     } else {
         None
@@ -293,10 +299,7 @@ impl<'ast> Visit<'ast> for ConditionalBuildArch {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         for b in &node.branches {
             for item in &b.body {
                 if let Some(span) = is_buildarch_preamble(item) {
@@ -331,8 +334,7 @@ impl Lint for ConditionalBuildArch {
 pub static CONDITIONAL_NAME_METADATA: LintMetadata = LintMetadata {
     id: "RPM107",
     name: "conditional-name-tag",
-    description:
-        "`Name:` inside a `%if` block — the package will have different names in different \
+    description: "`Name:` inside a `%if` block — the package will have different names in different \
          build contexts, which confuses downstream tooling.",
     default_severity: Severity::Allow,
     category: LintCategory::Correctness,
@@ -360,7 +362,12 @@ impl ConditionalNameTag {
 }
 
 fn is_name_top(item: &SpecItem<Span>) -> Option<Span> {
-    if let SpecItem::Preamble(PreambleItem { tag: Tag::Name, data, .. }) = item {
+    if let SpecItem::Preamble(PreambleItem {
+        tag: Tag::Name,
+        data,
+        ..
+    }) = item
+    {
         Some(*data)
     } else {
         None
@@ -368,7 +375,12 @@ fn is_name_top(item: &SpecItem<Span>) -> Option<Span> {
 }
 
 fn is_name_preamble(item: &PreambleContent<Span>) -> Option<Span> {
-    if let PreambleContent::Item(PreambleItem { tag: Tag::Name, data, .. }) = item {
+    if let PreambleContent::Item(PreambleItem {
+        tag: Tag::Name,
+        data,
+        ..
+    }) = item
+    {
         Some(*data)
     } else {
         None
@@ -393,10 +405,7 @@ impl<'ast> Visit<'ast> for ConditionalNameTag {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         for b in &node.branches {
             for item in &b.body {
                 if let Some(span) = is_name_preamble(item) {

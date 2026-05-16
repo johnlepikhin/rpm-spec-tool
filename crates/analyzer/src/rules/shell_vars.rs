@@ -12,9 +12,7 @@
 //! `TextSegment` doesn't carry per-segment spans, so auto-fix is
 //! emitted as a `Manual` suggestion rather than `MachineApplicable`.
 
-use rpm_spec::ast::{
-    FileTrigger, Scriptlet, Section, Span, SpecFile, Text, TextSegment, Trigger,
-};
+use rpm_spec::ast::{FileTrigger, Scriptlet, Section, Span, SpecFile, Text, TextSegment, Trigger};
 
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
 use crate::lint::{Lint, LintMetadata};
@@ -56,16 +54,40 @@ impl RpmBuildrootShellVar {
 
 impl<'ast> Visit<'ast> for RpmBuildrootShellVar {
     fn visit_section(&mut self, node: &'ast Section<Span>) {
-        scan_section(self, node, "$RPM_BUILD_ROOT", "%{buildroot}", &BUILDROOT_METADATA);
+        scan_section(
+            self,
+            node,
+            "$RPM_BUILD_ROOT",
+            "%{buildroot}",
+            &BUILDROOT_METADATA,
+        );
     }
     fn visit_scriptlet(&mut self, node: &'ast Scriptlet<Span>) {
-        scan_scriptlet(self, node, "$RPM_BUILD_ROOT", "%{buildroot}", &BUILDROOT_METADATA);
+        scan_scriptlet(
+            self,
+            node,
+            "$RPM_BUILD_ROOT",
+            "%{buildroot}",
+            &BUILDROOT_METADATA,
+        );
     }
     fn visit_trigger(&mut self, node: &'ast Trigger<Span>) {
-        scan_trigger(self, node, "$RPM_BUILD_ROOT", "%{buildroot}", &BUILDROOT_METADATA);
+        scan_trigger(
+            self,
+            node,
+            "$RPM_BUILD_ROOT",
+            "%{buildroot}",
+            &BUILDROOT_METADATA,
+        );
     }
     fn visit_file_trigger(&mut self, node: &'ast FileTrigger<Span>) {
-        scan_file_trigger(self, node, "$RPM_BUILD_ROOT", "%{buildroot}", &BUILDROOT_METADATA);
+        scan_file_trigger(
+            self,
+            node,
+            "$RPM_BUILD_ROOT",
+            "%{buildroot}",
+            &BUILDROOT_METADATA,
+        );
     }
 }
 
@@ -96,16 +118,40 @@ impl RpmSourceDirShellVar {
 
 impl<'ast> Visit<'ast> for RpmSourceDirShellVar {
     fn visit_section(&mut self, node: &'ast Section<Span>) {
-        scan_section(self, node, "$RPM_SOURCE_DIR", "%{_sourcedir}", &SOURCE_DIR_METADATA);
+        scan_section(
+            self,
+            node,
+            "$RPM_SOURCE_DIR",
+            "%{_sourcedir}",
+            &SOURCE_DIR_METADATA,
+        );
     }
     fn visit_scriptlet(&mut self, node: &'ast Scriptlet<Span>) {
-        scan_scriptlet(self, node, "$RPM_SOURCE_DIR", "%{_sourcedir}", &SOURCE_DIR_METADATA);
+        scan_scriptlet(
+            self,
+            node,
+            "$RPM_SOURCE_DIR",
+            "%{_sourcedir}",
+            &SOURCE_DIR_METADATA,
+        );
     }
     fn visit_trigger(&mut self, node: &'ast Trigger<Span>) {
-        scan_trigger(self, node, "$RPM_SOURCE_DIR", "%{_sourcedir}", &SOURCE_DIR_METADATA);
+        scan_trigger(
+            self,
+            node,
+            "$RPM_SOURCE_DIR",
+            "%{_sourcedir}",
+            &SOURCE_DIR_METADATA,
+        );
     }
     fn visit_file_trigger(&mut self, node: &'ast FileTrigger<Span>) {
-        scan_file_trigger(self, node, "$RPM_SOURCE_DIR", "%{_sourcedir}", &SOURCE_DIR_METADATA);
+        scan_file_trigger(
+            self,
+            node,
+            "$RPM_SOURCE_DIR",
+            "%{_sourcedir}",
+            &SOURCE_DIR_METADATA,
+        );
     }
 }
 

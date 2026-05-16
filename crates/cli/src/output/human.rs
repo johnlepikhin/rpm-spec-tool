@@ -20,8 +20,7 @@ use crate::output::resolve_color;
 const MAX_SUMMARY_ROWS: usize = 10;
 
 pub fn render(items: &[(Source, Vec<Diagnostic>)], color: ColorChoice) -> Result<()> {
-    let stream =
-        StandardStream::stderr(resolve_color(color, || std::io::stderr().is_terminal()));
+    let stream = StandardStream::stderr(resolve_color(color, || std::io::stderr().is_terminal()));
     let mut writer = stream.lock();
     let cfg = Config::default();
 
@@ -67,10 +66,10 @@ fn aggregate(items: &[(Source, Vec<Diagnostic>)]) -> Stats {
                 // appears here it's a transient note — don't count.
                 Severity::Allow => {}
             }
-            let entry =
-                s.by_lint
-                    .entry(d.lint_id)
-                    .or_insert((0, d.lint_name, d.severity));
+            let entry = s
+                .by_lint
+                .entry(d.lint_id)
+                .or_insert((0, d.lint_name, d.severity));
             entry.0 += 1;
             // Promote stored severity to the worst seen so the row
             // colour reflects the highest-impact occurrence.
@@ -103,7 +102,11 @@ fn render_summary<W: WriteColor>(items: &[(Source, Vec<Diagnostic>)], w: &mut W)
 
     let mut parts: Vec<String> = Vec::new();
     if stats.errors > 0 {
-        parts.push(format!("{} {}", stats.errors, plural(stats.errors, "error")));
+        parts.push(format!(
+            "{} {}",
+            stats.errors,
+            plural(stats.errors, "error")
+        ));
     }
     if stats.warnings > 0 {
         parts.push(format!(

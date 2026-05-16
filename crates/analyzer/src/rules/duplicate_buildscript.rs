@@ -39,8 +39,12 @@ impl<'ast> Visit<'ast> for DuplicateBuildscriptSection {
         // type doesn't derive Hash).
         let mut seen: Vec<(BuildScriptKind, Span)> = Vec::new();
         for item in &spec.items {
-            let SpecItem::Section(boxed) = item else { continue };
-            let Section::BuildScript { kind, data, .. } = boxed.as_ref() else { continue };
+            let SpecItem::Section(boxed) = item else {
+                continue;
+            };
+            let Section::BuildScript { kind, data, .. } = boxed.as_ref() else {
+                continue;
+            };
             if let Some(&(_, first)) = seen.iter().find(|(k, _)| k == kind) {
                 self.diagnostics.push(
                     Diagnostic::new(

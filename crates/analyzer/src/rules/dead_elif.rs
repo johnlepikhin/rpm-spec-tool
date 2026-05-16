@@ -11,15 +11,14 @@ use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Sugge
 use crate::lint::{Lint, LintMetadata};
 use crate::rules::boolean_dnf::Dnf;
 use crate::rules::path_cond::{
-    analyse_conditional, conjoin, is_unsat, BranchAnalyser, PathConditions,
+    BranchAnalyser, PathConditions, analyse_conditional, conjoin, is_unsat,
 };
 use crate::visit::Visit;
 
 pub static DEAD_ELIF_METADATA: LintMetadata = LintMetadata {
     id: "RPM115",
     name: "dead-elif-after-parent",
-    description:
-        "`%elif` branch is unsatisfiable under the ancestor path-condition combined \
+    description: "`%elif` branch is unsatisfiable under the ancestor path-condition combined \
          with negations of preceding sibling branches; its body is dead.",
     default_severity: Severity::Warn,
     category: LintCategory::Correctness,
@@ -96,10 +95,7 @@ impl<'ast> Visit<'ast> for DeadElif {
     fn visit_top_conditional(&mut self, node: &'ast Conditional<Span, SpecItem<Span>>) {
         analyse_conditional(self, node, walk_top_body);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         analyse_conditional(self, node, walk_preamble_body);
     }
     fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
@@ -146,8 +142,7 @@ mod tests {
 
     #[test]
     fn rpm115_silent_for_satisfiable_elif() {
-        let src =
-            "Name: x\n%if A\n%global foo bar\n%elif B\n%global baz qux\n%endif\n";
+        let src = "Name: x\n%if A\n%global foo bar\n%elif B\n%global baz qux\n%endif\n";
         assert!(run(src).is_empty());
     }
 }

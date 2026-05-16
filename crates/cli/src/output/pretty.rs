@@ -242,12 +242,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut sink = NoColor::new(&mut buf);
-            render_with(
-                &mut sink,
-                "Version",
-                TokenKind::TagName,
-                Theme::dark(),
-            );
+            render_with(&mut sink, "Version", TokenKind::TagName, Theme::dark());
         }
         let s = String::from_utf8(buf).unwrap();
         assert_eq!(s, "Version", "NoColor sink must not inject escapes");
@@ -283,7 +278,10 @@ mod tests {
         }
         let s = String::from_utf8(buf).unwrap();
         let reset_count = s.matches("\x1b[0m").count();
-        assert!(reset_count >= 2, "expected ≥2 resets, got {reset_count}: {s:?}");
+        assert!(
+            reset_count >= 2,
+            "expected ≥2 resets, got {reset_count}: {s:?}"
+        );
         // Output must end with a reset, otherwise the trailing colour
         // would bleed past the printer's last byte.
         assert!(s.ends_with("\x1b[0m"), "expected trailing reset: {s:?}");

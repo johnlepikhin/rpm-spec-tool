@@ -20,8 +20,7 @@ use crate::visit::{self, Visit};
 pub static METADATA: LintMetadata = LintMetadata {
     id: "RPM059",
     name: "description-shorter-than-summary",
-    description:
-        "Main package %description is shorter than its Summary — looks like a placeholder. \
+    description: "Main package %description is shorter than its Summary — looks like a placeholder. \
          Subpackage descriptions are not checked yet.",
     default_severity: Severity::Allow,
     category: LintCategory::Style,
@@ -53,7 +52,9 @@ fn summary_text_of(spec: &SpecFile<Span>) -> Option<String> {
 }
 
 fn description_text_len(node: &Section<Span>) -> usize {
-    let Section::Description { body, .. } = node else { return 0 };
+    let Section::Description { body, .. } = node else {
+        return 0;
+    };
     body.lines
         .iter()
         .flat_map(|line| line.segments.iter())
@@ -79,9 +80,13 @@ impl<'ast> Visit<'ast> for DescriptionShorterThanSummary {
             return;
         }
         for item in &spec.items {
-            let rpm_spec::ast::SpecItem::Section(boxed) = item else { continue };
+            let rpm_spec::ast::SpecItem::Section(boxed) = item else {
+                continue;
+            };
             let section = boxed.as_ref();
-            let Section::Description { subpkg, data, .. } = section else { continue };
+            let Section::Description { subpkg, data, .. } = section else {
+                continue;
+            };
             if subpkg.is_some() {
                 continue; // Subpackages out of scope (see module docs).
             }

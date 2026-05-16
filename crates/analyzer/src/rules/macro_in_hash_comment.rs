@@ -21,8 +21,7 @@ use crate::visit::Visit;
 pub static METADATA: LintMetadata = LintMetadata {
     id: "RPM036",
     name: "macro-in-hash-comment",
-    description:
-        "`#` comments expand macros — escape each `%` to `%%` or use `%dnl` for a no-expand comment.",
+    description: "`#` comments expand macros — escape each `%` to `%%` or use `%dnl` for a no-expand comment.",
     default_severity: Severity::Warn,
     category: LintCategory::Correctness,
 };

@@ -70,10 +70,7 @@ fn walk_items(
     }
 }
 
-fn walk_conditional(
-    cond: &Conditional<Span, SpecItem<Span>>,
-    out: &mut Vec<Diagnostic>,
-) {
+fn walk_conditional(cond: &Conditional<Span, SpecItem<Span>>, out: &mut Vec<Diagnostic>) {
     // Each branch is treated as its own isolated scope: it does *not*
     // inherit the parent's seen-set. This avoids two common false
     // positives:
@@ -170,9 +167,7 @@ mod tests {
 
     #[test]
     fn silent_for_undefine_redefine_pair() {
-        assert!(
-            run("%define foo 1\n%undefine foo\n%define foo 2\nName: x\n").is_empty(),
-        );
+        assert!(run("%define foo 1\n%undefine foo\n%define foo 2\nName: x\n").is_empty(),);
     }
 
     #[test]
@@ -202,7 +197,10 @@ Name: x\n";
         let src = "%if 1\n%define jit 1\n%else\n%define jit 0\n%endif\n\
 %if 2\n%define jit 1\n%else\n%define jit 0\n%endif\n\
 Name: x\n";
-        assert!(run(src).is_empty(), "consecutive %if blocks are alternatives at top level");
+        assert!(
+            run(src).is_empty(),
+            "consecutive %if blocks are alternatives at top level"
+        );
     }
 
     #[test]
@@ -240,6 +238,9 @@ Name: x\n";
         // unconditionally afterwards. The post-%if line always runs
         // and "wins", which is exactly what the maintainer intended.
         let src = "%if 1\n%define foo 1\n%endif\n%define foo 2\nName: x\n";
-        assert!(run(src).is_empty(), "conditional + top-level override is idiomatic");
+        assert!(
+            run(src).is_empty(),
+            "conditional + top-level override is idiomatic"
+        );
     }
 }

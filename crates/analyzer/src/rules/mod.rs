@@ -58,10 +58,10 @@ pub mod conditional_intervals;
 pub mod boolean_dnf;
 
 // Phase 8b — path-condition engine.
-pub(crate) mod path_cond;
 pub mod always_true_branch;
 pub mod dead_elif;
 pub mod exhaustive_chain;
+pub(crate) mod path_cond;
 pub mod unreachable_branch;
 
 // Phase 8c — macro value propagation.

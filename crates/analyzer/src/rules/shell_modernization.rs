@@ -34,8 +34,7 @@ use crate::visit::{self, Visit};
 pub static MAKE_BUILD_METADATA: LintMetadata = LintMetadata {
     id: "RPM120",
     name: "make-without-make-build",
-    description:
-        "Use `%make_build` instead of bare `make …` / `make %{?_smp_mflags} …` so that \
+    description: "Use `%make_build` instead of bare `make …` / `make %{?_smp_mflags} …` so that \
          parallelism and build flags follow distro convention.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
@@ -44,8 +43,7 @@ pub static MAKE_BUILD_METADATA: LintMetadata = LintMetadata {
 pub static MAKE_INSTALL_METADATA: LintMetadata = LintMetadata {
     id: "RPM121",
     name: "make-install-without-make-install",
-    description:
-        "Use `%make_install` instead of `make install …`; the macro sets `DESTDIR`, \
+    description: "Use `%make_install` instead of `make install …`; the macro sets `DESTDIR`, \
          `INSTALL` paths and other distro conventions automatically.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
@@ -54,8 +52,7 @@ pub static MAKE_INSTALL_METADATA: LintMetadata = LintMetadata {
 pub static CONFIGURE_MACRO_METADATA: LintMetadata = LintMetadata {
     id: "RPM122",
     name: "configure-without-configure-macro",
-    description:
-        "Use `%configure` instead of plain `./configure` / `../configure`; the macro \
+    description: "Use `%configure` instead of plain `./configure` / `../configure`; the macro \
          supplies `--prefix`, `--libdir`, hardening flags and other distro defaults.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
@@ -156,8 +153,16 @@ macro_rules! impl_rule {
 }
 
 impl_rule!(MakeWithoutMakeBuild, MAKE_BUILD_METADATA, MakeBuild);
-impl_rule!(MakeInstallWithoutMakeInstall, MAKE_INSTALL_METADATA, MakeInstall);
-impl_rule!(ConfigureWithoutConfigureMacro, CONFIGURE_MACRO_METADATA, Configure);
+impl_rule!(
+    MakeInstallWithoutMakeInstall,
+    MAKE_INSTALL_METADATA,
+    MakeInstall
+);
+impl_rule!(
+    ConfigureWithoutConfigureMacro,
+    CONFIGURE_MACRO_METADATA,
+    Configure
+);
 
 // =====================================================================
 // Pattern logic
@@ -184,7 +189,9 @@ fn shell_body_anchor(node: &Section<Span>) -> Option<Span> {
 fn scan_section(source: &str, anchor: Span, kind: RuleKind, out: &mut Vec<Diagnostic>) {
     let start = anchor.start_byte.min(source.len());
     let end = anchor.end_byte.min(source.len());
-    let Some(slice) = source.get(start..end) else { return };
+    let Some(slice) = source.get(start..end) else {
+        return;
+    };
 
     let mut line_start_rel = 0usize;
     for line in slice.split_inclusive('\n') {

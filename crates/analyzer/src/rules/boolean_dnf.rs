@@ -70,7 +70,10 @@ pub(crate) struct Literal {
 
 impl Literal {
     fn flip(self) -> Self {
-        Self { atom: self.atom, negated: !self.negated }
+        Self {
+            atom: self.atom,
+            negated: !self.negated,
+        }
     }
 }
 
@@ -129,7 +132,12 @@ fn canonicalise(expr: &ExprAst<Span>) -> String {
         ExprAst::Identifier { name, .. } => name.clone(),
         ExprAst::Not { inner, .. } => format!("!{}", canonicalise(inner)),
         ExprAst::Binary { kind, lhs, rhs, .. } => {
-            format!("({}{}{})", canonicalise(lhs), kind.as_str(), canonicalise(rhs))
+            format!(
+                "({}{}{})",
+                canonicalise(lhs),
+                kind.as_str(),
+                canonicalise(rhs)
+            )
         }
         _ => String::new(),
     }
@@ -138,15 +146,16 @@ fn canonicalise(expr: &ExprAst<Span>) -> String {
 /// Convert an expression to DNF, optionally pushing a negation
 /// through the root via De Morgan. Returns `None` on explosion or
 /// when the AST shape exceeds the modelled grammar.
-pub(crate) fn to_dnf(
-    expr: &ExprAst<Span>,
-    atoms: &mut AtomTable,
-    negate: bool,
-) -> Option<Dnf> {
+pub(crate) fn to_dnf(expr: &ExprAst<Span>, atoms: &mut AtomTable, negate: bool) -> Option<Dnf> {
     let bare = expr.peel_parens();
     match bare {
         ExprAst::Not { inner, .. } => to_dnf(inner, atoms, !negate),
-        ExprAst::Binary { kind: BinOp::LogOr, lhs, rhs, .. } => {
+        ExprAst::Binary {
+            kind: BinOp::LogOr,
+            lhs,
+            rhs,
+            ..
+        } => {
             if !negate {
                 // dnf(L || R) = dnf(L) ∪ dnf(R)
                 let mut left = to_dnf(lhs, atoms, false)?;
@@ -163,7 +172,12 @@ pub(crate) fn to_dnf(
                 distribute_and(&left, &right)
             }
         }
-        ExprAst::Binary { kind: BinOp::LogAnd, lhs, rhs, .. } => {
+        ExprAst::Binary {
+            kind: BinOp::LogAnd,
+            lhs,
+            rhs,
+            ..
+        } => {
             if !negate {
                 let left = to_dnf(lhs, atoms, false)?;
                 let right = to_dnf(rhs, atoms, false)?;
@@ -184,7 +198,10 @@ pub(crate) fn to_dnf(
             // literal, or future ExprAst variant.
             let atom = atoms.intern(bare);
             let mut cube = BTreeSet::new();
-            cube.insert(Literal { atom, negated: negate });
+            cube.insert(Literal {
+                atom,
+                negated: negate,
+            });
             let mut dnf = BTreeSet::new();
             dnf.insert(cube);
             Some(dnf)
@@ -281,8 +298,14 @@ pub(crate) fn is_contradiction(dnf: &Dnf) -> bool {
 /// the normaliser bailed out.
 fn analyse_branch(
     expr: &CondExpr<Span>,
-) -> Option<(Dnf, /*atom_count*/ usize, /*orig_cube_count*/ usize)> {
-    let CondExpr::Parsed(ast) = expr else { return None };
+) -> Option<(
+    Dnf,
+    /*atom_count*/ usize,
+    /*orig_cube_count*/ usize,
+)> {
+    let CondExpr::Parsed(ast) = expr else {
+        return None;
+    };
     // Skip pure atoms — `%if X`, `%if 1`, `%if "foo"` — they're
     // covered by RPM072 (constant-condition) and have no boolean
     // structure to normalise.
@@ -306,9 +329,12 @@ fn analyse_branch(
 /// `BTreeSet` deduplication would otherwise hide (e.g. `A || A`).
 fn count_or_operands<T>(ast: &ExprAst<T>) -> usize {
     match ast.peel_parens() {
-        ExprAst::Binary { kind: BinOp::LogOr, lhs, rhs, .. } => {
-            count_or_operands(lhs) + count_or_operands(rhs)
-        }
+        ExprAst::Binary {
+            kind: BinOp::LogOr,
+            lhs,
+            rhs,
+            ..
+        } => count_or_operands(lhs) + count_or_operands(rhs),
         _ => 1,
     }
 }
@@ -317,7 +343,10 @@ fn has_boolean_structure<T>(ast: &ExprAst<T>) -> bool {
     use rpm_spec::ast::ExprAst;
     matches!(
         ast.peel_parens(),
-        ExprAst::Binary { kind: BinOp::LogAnd | BinOp::LogOr, .. } | ExprAst::Not { .. }
+        ExprAst::Binary {
+            kind: BinOp::LogAnd | BinOp::LogOr,
+            ..
+        } | ExprAst::Not { .. }
     )
 }
 
@@ -328,8 +357,7 @@ fn has_boolean_structure<T>(ast: &ExprAst<T>) -> bool {
 pub static REDUNDANCY_METADATA: LintMetadata = LintMetadata {
     id: "RPM110",
     name: "boolean-dnf-redundancy",
-    description:
-        "Expression contains operands that are absorbed by others — DNF normalisation \
+    description: "Expression contains operands that are absorbed by others — DNF normalisation \
          reveals shorter equivalent form.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
@@ -385,17 +413,11 @@ impl<'ast> Visit<'ast> for BooleanDnfRedundancy {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -417,8 +439,7 @@ impl Lint for BooleanDnfRedundancy {
 pub static TAUTOLOGY_METADATA: LintMetadata = LintMetadata {
     id: "RPM111",
     name: "boolean-tautology-by-cubes",
-    description:
-        "Boolean expression is tautologically true under every assignment — drop the guard.",
+    description: "Boolean expression is tautologically true under every assignment — drop the guard.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -463,17 +484,11 @@ impl<'ast> Visit<'ast> for BooleanTautologyByCubes {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -495,8 +510,7 @@ impl Lint for BooleanTautologyByCubes {
 pub static CONTRADICTION_METADATA: LintMetadata = LintMetadata {
     id: "RPM112",
     name: "boolean-contradiction-by-cubes",
-    description:
-        "Boolean expression is unsatisfiable — every cube collapses to internal contradiction.",
+    description: "Boolean expression is unsatisfiable — every cube collapses to internal contradiction.",
     default_severity: Severity::Warn,
     category: LintCategory::Correctness,
 };
@@ -513,7 +527,9 @@ impl BooleanContradictionByCubes {
 
     fn check<B>(&mut self, node: &Conditional<Span, B>) {
         for branch in &node.branches {
-            let Some((dnf, _, _)) = analyse_branch(&branch.expr) else { continue };
+            let Some((dnf, _, _)) = analyse_branch(&branch.expr) else {
+                continue;
+            };
             if is_contradiction(&dnf) {
                 self.diagnostics.push(Diagnostic::new(
                     &CONTRADICTION_METADATA,
@@ -532,17 +548,11 @@ impl<'ast> Visit<'ast> for BooleanContradictionByCubes {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -576,7 +586,9 @@ mod tests {
             rpm_spec::ast::SpecItem::Conditional(c) => Some(c),
             _ => None,
         })?;
-        let CondExpr::Parsed(ast) = &item.branches[0].expr else { return None };
+        let CondExpr::Parsed(ast) = &item.branches[0].expr else {
+            return None;
+        };
         let mut atoms = AtomTable::new();
         let raw = to_dnf(ast, &mut atoms, false)?;
         let (simplified, _) = simplify_subsumption(&raw);

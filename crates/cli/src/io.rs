@@ -55,17 +55,27 @@ pub fn read_sources(paths: &[PathBuf]) -> Result<Vec<Source>> {
             out.push(read_stdin()?);
             continue;
         }
-        let contents = fs::read_to_string(p)
-            .with_context(|| format!("failed to read {}", p.display()))?;
-        out.push(Source { path: p.clone(), contents, is_stdin: false });
+        let contents =
+            fs::read_to_string(p).with_context(|| format!("failed to read {}", p.display()))?;
+        out.push(Source {
+            path: p.clone(),
+            contents,
+            is_stdin: false,
+        });
     }
     Ok(out)
 }
 
 fn read_stdin() -> Result<Source> {
     let mut buf = String::new();
-    std::io::stdin().read_to_string(&mut buf).context("failed to read stdin")?;
-    Ok(Source { path: PathBuf::from("-"), contents: buf, is_stdin: true })
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .context("failed to read stdin")?;
+    Ok(Source {
+        path: PathBuf::from("-"),
+        contents: buf,
+        is_stdin: true,
+    })
 }
 
 /// Write `contents` to `path` atomically.

@@ -62,8 +62,7 @@ impl Cmd {
 
         let mut any_io_error = false;
         for source in sources {
-            let Some(analyzer_cfg) =
-                config_cache.load_or_report(&source.path, &mut any_io_error)
+            let Some(analyzer_cfg) = config_cache.load_or_report(&source.path, &mut any_io_error)
             else {
                 continue;
             };

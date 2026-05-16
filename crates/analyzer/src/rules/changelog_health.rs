@@ -193,10 +193,9 @@ impl<'ast> Visit<'ast> for ChangelogImplausibleDate {
         // `time::Date::year()` is bounded by ±9999, so `current_year`
         // always fits in u16, but the additive grace still gets
         // protected against weird system clocks via saturating + try_from.
-        let upper_year: u16 = u16::try_from(
-            self.current_year.saturating_add(RPM039_FUTURE_GRACE_YEARS),
-        )
-        .unwrap_or(u16::MAX);
+        let upper_year: u16 =
+            u16::try_from(self.current_year.saturating_add(RPM039_FUTURE_GRACE_YEARS))
+                .unwrap_or(u16::MAX);
 
         // TODO: a calendar-aware day check (Feb 30, Apr 31, leap-year
         // handling) would catch more typos. For now we use the coarse

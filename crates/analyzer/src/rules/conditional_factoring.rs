@@ -28,8 +28,7 @@ const THRESHOLD: usize = 5;
 pub static METADATA: LintMetadata = LintMetadata {
     id: "RPM093",
     name: "condition-mentioned-many-times",
-    description:
-        "Same `%if` expression appears many times across the spec; consider factoring \
+    description: "Same `%if` expression appears many times across the spec; consider factoring \
          it into a `%global` flag.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
@@ -111,8 +110,12 @@ fn is_trivial_raw(s: &str) -> bool {
         return false;
     }
     // Any space or operator byte = composite expression.
-    !s.bytes()
-        .any(|b| matches!(b, b' ' | b'\t' | b'&' | b'|' | b'=' | b'<' | b'>' | b'!' | b'+' | b'-' | b'*' | b'/'))
+    !s.bytes().any(|b| {
+        matches!(
+            b,
+            b' ' | b'\t' | b'&' | b'|' | b'=' | b'<' | b'>' | b'!' | b'+' | b'-' | b'*' | b'/'
+        )
+    })
 }
 
 /// Render an [`ExprAst`] into a canonical comparable string. Drops
@@ -141,17 +144,11 @@ impl<'ast> Visit<'ast> for ConditionMentionedManyTimes {
         self.record(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.record(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.record(node);
         visit::walk_files_conditional(self, node);
     }
@@ -211,7 +208,11 @@ mod tests {
             src.push_str("%if 0%{?rhel} >= 8\nLicense: MIT\n%endif\n");
         }
         let diags = run(&src);
-        assert_eq!(diags.len(), 5, "expected one diag per occurrence: {diags:?}");
+        assert_eq!(
+            diags.len(),
+            5,
+            "expected one diag per occurrence: {diags:?}"
+        );
         assert_eq!(diags[0].lint_id, "RPM093");
     }
 

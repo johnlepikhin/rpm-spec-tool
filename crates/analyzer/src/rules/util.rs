@@ -1,8 +1,8 @@
 //! Helpers shared by lint rules.
 
 use rpm_spec::ast::{
-    BoolDep, CondExpr, DepAtom, DepExpr, FilesContent, PackageName, PreambleContent,
-    PreambleItem, Section, Span, SpecFile, SpecItem, Tag, TagValue, Text,
+    BoolDep, CondExpr, DepAtom, DepExpr, FilesContent, PackageName, PreambleContent, PreambleItem,
+    Section, Span, SpecFile, SpecItem, Tag, TagValue, Text,
 };
 
 use crate::diagnostic::Edit;
@@ -188,7 +188,9 @@ pub(crate) fn is_constant_true_condition<T>(expr: &CondExpr<T>) -> bool {
             _ => false,
         },
         CondExpr::Raw(text) => {
-            let Some(lit) = text.literal_str() else { return false };
+            let Some(lit) = text.literal_str() else {
+                return false;
+            };
             matches!(lit.trim(), "1" | "true")
         }
         _ => false,
@@ -207,7 +209,9 @@ pub(crate) fn is_constant_false_condition<T>(expr: &CondExpr<T>) -> bool {
             _ => false,
         },
         CondExpr::Raw(text) => {
-            let Some(lit) = text.literal_str() else { return false };
+            let Some(lit) = text.literal_str() else {
+                return false;
+            };
             matches!(lit.trim(), "0" | "false" | "")
         }
         _ => false,
@@ -299,8 +303,18 @@ pub(crate) fn exprs_equiv<T, U>(
         (ExprAst::Macro { text: m1, .. }, ExprAst::Macro { text: m2, .. }) => m1 == m2,
         (ExprAst::Not { inner: i1, .. }, ExprAst::Not { inner: i2, .. }) => exprs_equiv(i1, i2),
         (
-            ExprAst::Binary { kind: k1, lhs: l1, rhs: r1, .. },
-            ExprAst::Binary { kind: k2, lhs: l2, rhs: r2, .. },
+            ExprAst::Binary {
+                kind: k1,
+                lhs: l1,
+                rhs: r1,
+                ..
+            },
+            ExprAst::Binary {
+                kind: k2,
+                lhs: l2,
+                rhs: r2,
+                ..
+            },
         ) => k1 == k2 && exprs_equiv(l1, l2) && exprs_equiv(r1, r2),
         _ => false,
     }
@@ -325,15 +339,18 @@ pub(crate) fn contains_macro_ast<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
 /// `true` when every item in the conditional body is "filler"
 /// (blank line or comment) — i.e. the branch has no real content.
 pub(crate) fn is_empty_top_body(body: &[SpecItem<Span>]) -> bool {
-    body.iter().all(|i| matches!(i, SpecItem::Blank | SpecItem::Comment(_)))
+    body.iter()
+        .all(|i| matches!(i, SpecItem::Blank | SpecItem::Comment(_)))
 }
 
 pub(crate) fn is_empty_preamble_body(body: &[PreambleContent<Span>]) -> bool {
-    body.iter().all(|i| matches!(i, PreambleContent::Blank | PreambleContent::Comment(_)))
+    body.iter()
+        .all(|i| matches!(i, PreambleContent::Blank | PreambleContent::Comment(_)))
 }
 
 pub(crate) fn is_empty_files_body(body: &[FilesContent<Span>]) -> bool {
-    body.iter().all(|i| matches!(i, FilesContent::Blank | FilesContent::Comment(_)))
+    body.iter()
+        .all(|i| matches!(i, FilesContent::Blank | FilesContent::Comment(_)))
 }
 
 /// Return the resolved literal name of the main package, or `None`
@@ -404,7 +421,11 @@ pub fn iter_packages(spec: &SpecFile<Span>) -> Vec<PackageView<'_>> {
 
     for item in &spec.items {
         if let SpecItem::Section(boxed) = item
-            && let Section::Package { name_arg, content, data } = boxed.as_ref()
+            && let Section::Package {
+                name_arg,
+                content,
+                data,
+            } = boxed.as_ref()
         {
             views.push(PackageView {
                 name: resolve_subpackage_name(main_name.as_deref(), name_arg),
@@ -488,7 +509,16 @@ fn collect_atoms_bool<'a>(b: &'a BoolDep, out: &mut Vec<&'a DepAtom>) {
                 collect_atoms(x, out);
             }
         }
-        BoolDep::If { cond, then, otherwise } | BoolDep::Unless { cond, then, otherwise } => {
+        BoolDep::If {
+            cond,
+            then,
+            otherwise,
+        }
+        | BoolDep::Unless {
+            cond,
+            then,
+            otherwise,
+        } => {
             collect_atoms(cond, out);
             collect_atoms(then, out);
             if let Some(o) = otherwise {
@@ -733,13 +763,11 @@ mod tests {
     #[test]
     fn skips_subpackage_preamble() {
         // Tags inside `%package -n foo` should not count as top-level.
-        let spec = p(
-            "Name: main\n\
+        let spec = p("Name: main\n\
 %package -n foo\n\
 Summary: subpackage\n\
 %description -n foo\n\
-sub body\n",
-        );
+sub body\n");
         // Only `Name: main` is top-level. `Summary` lives inside the
         // %package section and belongs to the subpackage.
         let items = collect_top_level_preamble(&spec);
@@ -751,13 +779,11 @@ sub body\n",
     fn dives_into_conditional_branches() {
         // Tags inside `%if ... %endif` are still top-level — both arms
         // contribute.
-        let spec = p(
-            "%if 0%{?rhel}\n\
+        let spec = p("%if 0%{?rhel}\n\
 Name: rhel-pkg\n\
 %else\n\
 Name: fedora-pkg\n\
-%endif\n",
-        );
+%endif\n");
         let items = collect_top_level_preamble(&spec);
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|p| matches!(p.tag, Tag::Name)));
@@ -810,12 +836,10 @@ Name: fedora-pkg\n\
     #[test]
     fn iter_packages_relative_subpackage() {
         // `%package devel` resolves to `<main>-devel`.
-        let spec = p(
-            "Name: hello\n\
+        let spec = p("Name: hello\n\
 %package devel\n\
 Summary: dev files\n\
-%description devel\nbody\n",
-        );
+%description devel\nbody\n");
         let pkgs = iter_packages(&spec);
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[1].name.as_deref(), Some("hello-devel"));
@@ -824,12 +848,10 @@ Summary: dev files\n\
 
     #[test]
     fn iter_packages_absolute_subpackage() {
-        let spec = p(
-            "Name: hello\n\
+        let spec = p("Name: hello\n\
 %package -n bar\n\
 Summary: standalone\n\
-%description -n bar\nbody\n",
-        );
+%description -n bar\nbody\n");
         let pkgs = iter_packages(&spec);
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[1].name.as_deref(), Some("bar"));
@@ -841,10 +863,7 @@ Summary: standalone\n\
         let spec = p("Name: x\nRequires: a, (b and c)\n");
         let pkgs = iter_packages(&spec);
         let atoms = collect_dep_atoms_in_items(&pkgs[0].items, |t| matches!(t, Tag::Requires));
-        let names: Vec<&str> = atoms
-            .iter()
-            .filter_map(|a| a.name.literal_str())
-            .collect();
+        let names: Vec<&str> = atoms.iter().filter_map(|a| a.name.literal_str()).collect();
         assert!(names.contains(&"a"));
         assert!(names.contains(&"b"));
         assert!(names.contains(&"c"));

@@ -17,16 +17,13 @@ use rpm_spec::ast::{Conditional, FilesContent, PreambleContent, Span, SpecItem};
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
 use crate::lint::{Lint, LintMetadata};
 use crate::rules::boolean_dnf::Dnf;
-use crate::rules::path_cond::{
-    analyse_conditional, path_implies, BranchAnalyser, PathConditions,
-};
+use crate::rules::path_cond::{BranchAnalyser, PathConditions, analyse_conditional, path_implies};
 use crate::visit::Visit;
 
 pub static ALWAYS_TRUE_METADATA: LintMetadata = LintMetadata {
     id: "RPM114",
     name: "always-true-branch-under-parent",
-    description:
-        "`%if` branch is implied by the enclosing path-condition; the test is \
+    description: "`%if` branch is implied by the enclosing path-condition; the test is \
          redundant and the body always runs.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
@@ -47,7 +44,9 @@ impl AlwaysTrueBranch {
         let Some(eff) = eff else { return };
         // Only meaningful when there IS a non-trivial path. At the
         // root, "always true" means RPM072 (`%if 1`); not our concern.
-        let Some(path) = self.pc.current() else { return };
+        let Some(path) = self.pc.current() else {
+            return;
+        };
         if path.is_empty() {
             return;
         }
@@ -100,10 +99,7 @@ impl<'ast> Visit<'ast> for AlwaysTrueBranch {
     fn visit_top_conditional(&mut self, node: &'ast Conditional<Span, SpecItem<Span>>) {
         analyse_conditional(self, node, walk_top_body);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         analyse_conditional(self, node, walk_preamble_body);
     }
     fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {

@@ -29,8 +29,7 @@ use crate::visit::Visit;
 pub static METADATA: LintMetadata = LintMetadata {
     id: "RPM064",
     name: "patch-defined-not-applied",
-    description:
-        "`PatchN:` is declared but never applied in `%prep`; declare or apply, don't dangle.",
+    description: "`PatchN:` is declared but never applied in `%prep`; declare or apply, don't dangle.",
     default_severity: Severity::Warn,
     category: LintCategory::Correctness,
 };
@@ -298,7 +297,11 @@ mod tests {
         let src = "Name: x\nPatch: foo.patch\n%prep\n%setup -q\n";
         let diags = run(src);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("Patch0"), "got {}", diags[0].message);
+        assert!(
+            diags[0].message.contains("Patch0"),
+            "got {}",
+            diags[0].message
+        );
     }
 
     #[test]

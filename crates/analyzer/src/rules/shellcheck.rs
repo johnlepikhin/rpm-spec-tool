@@ -233,8 +233,13 @@ impl ShellcheckLint {
                     finding_count = findings.len(),
                     "shellcheck section completed",
                 );
-                let mut diags =
-                    build_finding_diagnostics(findings, section_text, &line_map, span, &self.disable);
+                let mut diags = build_finding_diagnostics(
+                    findings,
+                    section_text,
+                    &line_map,
+                    span,
+                    &self.disable,
+                );
                 self.diagnostics.append(&mut diags);
             }
             Err(err) => self.report_fatal(format!("{err}")),
@@ -289,7 +294,6 @@ impl ShellcheckLint {
             ));
         }
     }
-
 }
 
 /// Translate `shellcheck` findings into RPM200 [`Diagnostic`]s.
@@ -307,7 +311,10 @@ fn build_finding_diagnostics(
 ) -> Vec<Diagnostic> {
     // `build_shellcheck_input` always emits at least the shebang line,
     // so an empty `line_map` indicates a programming error upstream.
-    debug_assert!(!line_map.is_empty(), "line_map must contain the shebang entry");
+    debug_assert!(
+        !line_map.is_empty(),
+        "line_map must contain the shebang entry"
+    );
     let line_offsets = compute_line_offsets(section_text);
     let mut out = Vec::with_capacity(findings.len());
     for f in findings {
@@ -333,20 +340,12 @@ fn build_finding_diagnostics(
         let end_line_idx = src_end_in_slice.saturating_sub(1) as usize;
         let (start_byte_in_slice, line_end_in_slice) =
             line_range(&line_offsets, section_text, line_idx);
-        let (_, end_byte_in_slice) =
-            line_range(&line_offsets, section_text, end_line_idx);
+        let (_, end_byte_in_slice) = line_range(&line_offsets, section_text, end_line_idx);
         let abs_start = span.start_byte + start_byte_in_slice;
         let abs_end = span.start_byte + end_byte_in_slice.max(line_end_in_slice);
         let source_start_line = span.start_line.saturating_add(line_idx as u32);
         let source_end_line = span.start_line.saturating_add(end_line_idx as u32);
-        let diag_span = Span::new(
-            abs_start,
-            abs_end,
-            source_start_line,
-            0,
-            source_end_line,
-            0,
-        );
+        let diag_span = Span::new(abs_start, abs_end, source_start_line, 0, source_end_line, 0);
         let message = format!("[SC{:04}:{}] {}", f.code, f.level, f.message);
         let mut diag = Diagnostic::new(
             &SHELLCHECK_METADATA,
@@ -533,8 +532,7 @@ fn split_terminator(raw: &str) -> (&str, &str) {
 fn is_rpm_conditional_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     const KEYWORDS: &[&str] = &[
-        "%ifarch", "%ifnarch", "%ifos", "%ifnos",
-        "%elif", "%else", "%endif", "%if",
+        "%ifarch", "%ifnarch", "%ifos", "%ifnos", "%elif", "%else", "%endif", "%if",
     ];
     for kw in KEYWORDS {
         if let Some(rest) = trimmed.strip_prefix(kw)

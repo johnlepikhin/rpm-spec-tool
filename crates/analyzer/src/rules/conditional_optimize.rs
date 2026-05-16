@@ -21,8 +21,7 @@
 //! - RPM087 `double-negation-in-expr` — `%if !!X` → `%if X`.
 
 use rpm_spec::ast::{
-    CondBranch, CondExpr, CondKind, Conditional, FilesContent, PreambleContent, Span,
-    SpecItem,
+    CondBranch, CondExpr, CondKind, Conditional, FilesContent, PreambleContent, Span, SpecItem,
 };
 
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
@@ -36,8 +35,7 @@ use crate::visit::{self, Visit};
 pub static NESTED_AND_METADATA: LintMetadata = LintMetadata {
     id: "RPM080",
     name: "nested-and-collapse",
-    description:
-        "Two single-branch `%if` blocks nested directly can be merged into one with `&&`.",
+    description: "Two single-branch `%if` blocks nested directly can be merged into one with `&&`.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -71,7 +69,9 @@ fn nested_and_pattern_top(
         .body
         .iter()
         .filter(|i| !matches!(i, SpecItem::Blank | SpecItem::Comment(_)));
-    let SpecItem::Conditional(inner) = non_filler.next()? else { return None };
+    let SpecItem::Conditional(inner) = non_filler.next()? else {
+        return None;
+    };
     if non_filler.next().is_some() {
         return None;
     }
@@ -100,7 +100,9 @@ fn nested_and_pattern_preamble(
         .body
         .iter()
         .filter(|i| !matches!(i, PreambleContent::Blank | PreambleContent::Comment(_)));
-    let PreambleContent::Conditional(inner) = non_filler.next()? else { return None };
+    let PreambleContent::Conditional(inner) = non_filler.next()? else {
+        return None;
+    };
     if non_filler.next().is_some() {
         return None;
     }
@@ -129,7 +131,9 @@ fn nested_and_pattern_files(
         .body
         .iter()
         .filter(|i| !matches!(i, FilesContent::Blank | FilesContent::Comment(_)));
-    let FilesContent::Conditional(inner) = non_filler.next()? else { return None };
+    let FilesContent::Conditional(inner) = non_filler.next()? else {
+        return None;
+    };
     if non_filler.next().is_some() {
         return None;
     }
@@ -206,10 +210,14 @@ fn inner_expr_safe_to_merge(expr: &str) -> bool {
 /// Wraps the literal extraction so the three context-specific
 /// pattern detectors share one entry point.
 fn inner_branch_safe<B>(inner: &Conditional<Span, B>) -> bool {
-    let Some(first) = inner.branches.first() else { return false };
+    let Some(first) = inner.branches.first() else {
+        return false;
+    };
     match &first.expr {
         CondExpr::Raw(text) => {
-            let Some(lit) = text.literal_str() else { return false };
+            let Some(lit) = text.literal_str() else {
+                return false;
+            };
             inner_expr_safe_to_merge(lit)
         }
         CondExpr::Parsed(ast) => expr_ast_safe_to_merge(ast),
@@ -231,9 +239,7 @@ fn expr_ast_safe_to_merge<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
         ExprAst::Integer { .. } | ExprAst::Identifier { .. } => true,
         ExprAst::String { value, .. } => inner_expr_safe_to_merge(value),
         ExprAst::Macro { text, .. } => inner_expr_safe_to_merge(text),
-        ExprAst::Paren { inner, .. } | ExprAst::Not { inner, .. } => {
-            expr_ast_safe_to_merge(inner)
-        }
+        ExprAst::Paren { inner, .. } | ExprAst::Not { inner, .. } => expr_ast_safe_to_merge(inner),
         ExprAst::Binary { lhs, rhs, .. } => {
             expr_ast_safe_to_merge(lhs) && expr_ast_safe_to_merge(rhs)
         }
@@ -267,19 +273,13 @@ impl<'ast> Visit<'ast> for NestedAndCollapse {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         if nested_and_pattern_preamble(node).is_some() {
             self.emit(node.data);
         }
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         if nested_and_pattern_files(node).is_some() {
             self.emit(node.data);
         }
@@ -340,22 +340,22 @@ impl<'ast> Visit<'ast> for EmptyElseDrop {
         // Fire only when at least one branch has real content,
         // otherwise RPM073 (empty-conditional-branch) handles the
         // whole block.
-        let has_real_branch = node
-            .branches
-            .iter()
-            .any(|b| !b.body.iter().all(|i| matches!(i, SpecItem::Blank | SpecItem::Comment(_))));
+        let has_real_branch = node.branches.iter().any(|b| {
+            !b.body
+                .iter()
+                .all(|i| matches!(i, SpecItem::Blank | SpecItem::Comment(_)))
+        });
         if has_real_branch
             && let Some(other) = &node.otherwise
-            && other.iter().all(|i| matches!(i, SpecItem::Blank | SpecItem::Comment(_)))
+            && other
+                .iter()
+                .all(|i| matches!(i, SpecItem::Blank | SpecItem::Comment(_)))
         {
             self.emit(node.data);
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         let has_real_branch = node.branches.iter().any(|b| {
             !b.body
                 .iter()
@@ -371,10 +371,7 @@ impl<'ast> Visit<'ast> for EmptyElseDrop {
         }
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         let has_real_branch = node.branches.iter().any(|b| {
             !b.body
                 .iter()
@@ -408,8 +405,7 @@ impl Lint for EmptyElseDrop {
 pub static INVERT_EMPTY_IF_ARCH_METADATA: LintMetadata = LintMetadata {
     id: "RPM082",
     name: "invert-empty-if-arch",
-    description:
-        "`%ifarch X %else FOO %endif` — empty `%if` branch with content in `%else`; flip kind.",
+    description: "`%ifarch X %else FOO %endif` — empty `%if` branch with content in `%else`; flip kind.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -487,10 +483,7 @@ impl<'ast> Visit<'ast> for InvertEmptyIfArch {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         if let Some(hint) = check_invert_empty(
             node,
             |i| matches!(i, PreambleContent::Blank | PreambleContent::Comment(_)),
@@ -500,10 +493,7 @@ impl<'ast> Visit<'ast> for InvertEmptyIfArch {
         }
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         if let Some(hint) = check_invert_empty(
             node,
             |i| matches!(i, FilesContent::Blank | FilesContent::Comment(_)),
@@ -557,8 +547,7 @@ fn each_branch_expr<B>(
 pub static CONSTANT_TAUTOLOGY_METADATA: LintMetadata = LintMetadata {
     id: "RPM085",
     name: "constant-tautology-in-expr",
-    description:
-        "Expression contains a constant operand (`|| 1`, `&& 0`, …) that fixes the result.",
+    description: "Expression contains a constant operand (`|| 1`, `&& 0`, …) that fixes the result.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -601,7 +590,11 @@ fn detect_tautology(expr: &str) -> Option<&'static str> {
     }
     // Pattern "1||": reject if a digit precedes the `1`.
     if let Some(idx) = norm.find("1||") {
-        let before = if idx == 0 { None } else { bytes.get(idx - 1).copied() };
+        let before = if idx == 0 {
+            None
+        } else {
+            bytes.get(idx - 1).copied()
+        };
         if !matches!(before, Some(c) if c.is_ascii_digit()) {
             return Some("always-true (`1 ||`)");
         }
@@ -615,7 +608,11 @@ fn detect_tautology(expr: &str) -> Option<&'static str> {
     }
     // Pattern "0&&": reject if a digit precedes the `0`.
     if let Some(idx) = norm.find("0&&") {
-        let before = if idx == 0 { None } else { bytes.get(idx - 1).copied() };
+        let before = if idx == 0 {
+            None
+        } else {
+            bytes.get(idx - 1).copied()
+        };
         if !matches!(before, Some(c) if c.is_ascii_digit()) {
             return Some("always-false (`0 &&`)");
         }
@@ -656,14 +653,24 @@ impl ConstantTautologyInExpr {
 fn detect_tautology_ast<T>(ast: &rpm_spec::ast::ExprAst<T>) -> Option<&'static str> {
     use rpm_spec::ast::{BinOp, ExprAst};
     match ast.peel_parens() {
-        ExprAst::Binary { kind: BinOp::LogOr, lhs, rhs, .. } => {
+        ExprAst::Binary {
+            kind: BinOp::LogOr,
+            lhs,
+            rhs,
+            ..
+        } => {
             if is_const_true_ast(lhs) || is_const_true_ast(rhs) {
                 return Some("always-true (`|| 1`)");
             }
             // Recurse into children to catch nested tautologies.
             detect_tautology_ast(lhs).or_else(|| detect_tautology_ast(rhs))
         }
-        ExprAst::Binary { kind: BinOp::LogAnd, lhs, rhs, .. } => {
+        ExprAst::Binary {
+            kind: BinOp::LogAnd,
+            lhs,
+            rhs,
+            ..
+        } => {
             if is_const_false_ast(lhs) || is_const_false_ast(rhs) {
                 return Some("always-false (`&& 0`)");
             }
@@ -699,17 +706,11 @@ impl<'ast> Visit<'ast> for ConstantTautologyInExpr {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -800,17 +801,11 @@ impl<'ast> Visit<'ast> for DoubleNegationInExpr {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -854,7 +849,9 @@ impl CollapseElifIntoElse {
         if node.branches.len() < 2 || node.otherwise.is_some() {
             return;
         }
-        let Some(last) = node.branches.last() else { return };
+        let Some(last) = node.branches.last() else {
+            return;
+        };
         if !matches!(last.kind, CondKind::Elif) {
             return;
         }
@@ -882,17 +879,11 @@ impl<'ast> Visit<'ast> for CollapseElifIntoElse {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -933,7 +924,12 @@ impl IdempotentInExpr {
 fn find_idempotent_op<T>(ast: &rpm_spec::ast::ExprAst<T>) -> Option<&rpm_spec::ast::ExprAst<T>> {
     use rpm_spec::ast::{BinOp, ExprAst};
     match ast.peel_parens() {
-        ExprAst::Binary { kind: BinOp::LogAnd | BinOp::LogOr, lhs, rhs, .. } => {
+        ExprAst::Binary {
+            kind: BinOp::LogAnd | BinOp::LogOr,
+            lhs,
+            rhs,
+            ..
+        } => {
             if exprs_equiv(lhs, rhs) {
                 return Some(ast);
             }
@@ -954,7 +950,9 @@ use crate::rules::util::exprs_equiv;
 impl IdempotentInExpr {
     fn check<B>(&mut self, node: &Conditional<Span, B>) {
         for branch in &node.branches {
-            let CondExpr::Parsed(ast) = &branch.expr else { continue };
+            let CondExpr::Parsed(ast) = &branch.expr else {
+                continue;
+            };
             if find_idempotent_op(ast).is_some() {
                 self.diagnostics.push(
                     Diagnostic::new(
@@ -979,17 +977,11 @@ impl<'ast> Visit<'ast> for IdempotentInExpr {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -1027,9 +1019,7 @@ impl SelfComparisonInExpr {
     }
 }
 
-fn find_self_comparison<T>(
-    ast: &rpm_spec::ast::ExprAst<T>,
-) -> Option<&'static str> {
+fn find_self_comparison<T>(ast: &rpm_spec::ast::ExprAst<T>) -> Option<&'static str> {
     use rpm_spec::ast::{BinOp, ExprAst};
     match ast.peel_parens() {
         ExprAst::Binary { kind, lhs, rhs, .. } => {
@@ -1047,9 +1037,7 @@ fn find_self_comparison<T>(
             }
             find_self_comparison(lhs).or_else(|| find_self_comparison(rhs))
         }
-        ExprAst::Not { inner, .. } | ExprAst::Paren { inner, .. } => {
-            find_self_comparison(inner)
-        }
+        ExprAst::Not { inner, .. } | ExprAst::Paren { inner, .. } => find_self_comparison(inner),
         _ => None,
     }
 }
@@ -1057,7 +1045,9 @@ fn find_self_comparison<T>(
 impl SelfComparisonInExpr {
     fn check<B>(&mut self, node: &Conditional<Span, B>) {
         for branch in &node.branches {
-            let CondExpr::Parsed(ast) = &branch.expr else { continue };
+            let CondExpr::Parsed(ast) = &branch.expr else {
+                continue;
+            };
             if let Some(verdict) = find_self_comparison(ast) {
                 self.diagnostics.push(
                     Diagnostic::new(
@@ -1082,17 +1072,11 @@ impl<'ast> Visit<'ast> for SelfComparisonInExpr {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -1114,8 +1098,7 @@ impl Lint for SelfComparisonInExpr {
 pub static LINE_CONT_METADATA: LintMetadata = LintMetadata {
     id: "RPM094",
     name: "line-continuation-in-condition",
-    description:
-        "`%if` expression spans multiple lines via `\\` — RPM doesn't support continuation here.",
+    description: "`%if` expression spans multiple lines via `\\` — RPM doesn't support continuation here.",
     default_severity: Severity::Warn,
     category: LintCategory::Correctness,
 };
@@ -1132,8 +1115,12 @@ impl LineContinuationInCondition {
 
     fn check<B>(&mut self, node: &Conditional<Span, B>) {
         for branch in &node.branches {
-            let CondExpr::Raw(text) = &branch.expr else { continue };
-            let Some(lit) = text.literal_str() else { continue };
+            let CondExpr::Raw(text) = &branch.expr else {
+                continue;
+            };
+            let Some(lit) = text.literal_str() else {
+                continue;
+            };
             // `logical_line` joins continuation lines with a literal
             // `\n` separator — a `\n` mid-expression is the signal
             // that the author tried to split `%if` across lines.
@@ -1155,17 +1142,11 @@ impl<'ast> Visit<'ast> for LineContinuationInCondition {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -1187,8 +1168,7 @@ impl Lint for LineContinuationInCondition {
 pub static COLLAPSE_ELSE_IF_METADATA: LintMetadata = LintMetadata {
     id: "RPM100",
     name: "collapse-else-if-into-elif",
-    description:
-        "`%else` containing a single `%if` block can be folded into an `%elif` — \
+    description: "`%else` containing a single `%if` block can be folded into an `%elif` — \
          drops one nesting level.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
@@ -1227,12 +1207,13 @@ impl CollapseElseIfIntoElif {
 /// `%else` — in those cases the whole inner chain (including its own
 /// trailing `%else`) merges cleanly into the outer chain via
 /// `%elif <inner-cond>`. Filler items (Blank/Comment) are tolerated.
-fn else_holds_single_if_top(
-    body: &[SpecItem<Span>],
-) -> Option<Span> {
-    let mut non_filler =
-        body.iter().filter(|i| !matches!(i, SpecItem::Blank | SpecItem::Comment(_)));
-    let SpecItem::Conditional(inner) = non_filler.next()? else { return None };
+fn else_holds_single_if_top(body: &[SpecItem<Span>]) -> Option<Span> {
+    let mut non_filler = body
+        .iter()
+        .filter(|i| !matches!(i, SpecItem::Blank | SpecItem::Comment(_)));
+    let SpecItem::Conditional(inner) = non_filler.next()? else {
+        return None;
+    };
     if non_filler.next().is_some() {
         return None;
     }
@@ -1242,13 +1223,13 @@ fn else_holds_single_if_top(
     Some(inner.data)
 }
 
-fn else_holds_single_if_preamble(
-    body: &[PreambleContent<Span>],
-) -> Option<Span> {
+fn else_holds_single_if_preamble(body: &[PreambleContent<Span>]) -> Option<Span> {
     let mut non_filler = body
         .iter()
         .filter(|i| !matches!(i, PreambleContent::Blank | PreambleContent::Comment(_)));
-    let PreambleContent::Conditional(inner) = non_filler.next()? else { return None };
+    let PreambleContent::Conditional(inner) = non_filler.next()? else {
+        return None;
+    };
     if non_filler.next().is_some() {
         return None;
     }
@@ -1258,13 +1239,13 @@ fn else_holds_single_if_preamble(
     Some(inner.data)
 }
 
-fn else_holds_single_if_files(
-    body: &[FilesContent<Span>],
-) -> Option<Span> {
+fn else_holds_single_if_files(body: &[FilesContent<Span>]) -> Option<Span> {
     let mut non_filler = body
         .iter()
         .filter(|i| !matches!(i, FilesContent::Blank | FilesContent::Comment(_)));
-    let FilesContent::Conditional(inner) = non_filler.next()? else { return None };
+    let FilesContent::Conditional(inner) = non_filler.next()? else {
+        return None;
+    };
     if non_filler.next().is_some() {
         return None;
     }
@@ -1283,10 +1264,7 @@ impl<'ast> Visit<'ast> for CollapseElseIfIntoElif {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         if let Some(body) = &node.otherwise
             && else_holds_single_if_preamble(body).is_some()
         {
@@ -1294,10 +1272,7 @@ impl<'ast> Visit<'ast> for CollapseElseIfIntoElif {
         }
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         if let Some(body) = &node.otherwise
             && else_holds_single_if_files(body).is_some()
         {
@@ -1323,8 +1298,7 @@ impl Lint for CollapseElseIfIntoElif {
 pub static ABSORPTION_METADATA: LintMetadata = LintMetadata {
     id: "RPM101",
     name: "absorption-in-expr",
-    description:
-        "Boolean absorption: `A || (A && B)` reduces to `A`; `A && (A || B)` reduces to `A`.",
+    description: "Boolean absorption: `A || (A && B)` reduces to `A`; `A && (A || B)` reduces to `A`.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -1352,12 +1326,24 @@ fn has_absorption<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
         match kind {
             BinOp::LogOr => {
                 // A || (A && B)
-                if let ExprAst::Binary { kind: BinOp::LogAnd, lhs: l2, rhs: r2, .. } = rhs_inner {
+                if let ExprAst::Binary {
+                    kind: BinOp::LogAnd,
+                    lhs: l2,
+                    rhs: r2,
+                    ..
+                } = rhs_inner
+                {
                     if exprs_equiv(lhs, l2) || exprs_equiv(lhs, r2) {
                         return true;
                     }
                 }
-                if let ExprAst::Binary { kind: BinOp::LogAnd, lhs: l2, rhs: r2, .. } = lhs_inner {
+                if let ExprAst::Binary {
+                    kind: BinOp::LogAnd,
+                    lhs: l2,
+                    rhs: r2,
+                    ..
+                } = lhs_inner
+                {
                     if exprs_equiv(rhs, l2) || exprs_equiv(rhs, r2) {
                         return true;
                     }
@@ -1365,12 +1351,24 @@ fn has_absorption<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
             }
             BinOp::LogAnd => {
                 // A && (A || B)
-                if let ExprAst::Binary { kind: BinOp::LogOr, lhs: l2, rhs: r2, .. } = rhs_inner {
+                if let ExprAst::Binary {
+                    kind: BinOp::LogOr,
+                    lhs: l2,
+                    rhs: r2,
+                    ..
+                } = rhs_inner
+                {
                     if exprs_equiv(lhs, l2) || exprs_equiv(lhs, r2) {
                         return true;
                     }
                 }
-                if let ExprAst::Binary { kind: BinOp::LogOr, lhs: l2, rhs: r2, .. } = lhs_inner {
+                if let ExprAst::Binary {
+                    kind: BinOp::LogOr,
+                    lhs: l2,
+                    rhs: r2,
+                    ..
+                } = lhs_inner
+                {
                     if exprs_equiv(rhs, l2) || exprs_equiv(rhs, r2) {
                         return true;
                     }
@@ -1390,7 +1388,9 @@ fn has_absorption<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
 impl AbsorptionInExpr {
     fn check<B>(&mut self, node: &Conditional<Span, B>) {
         for branch in &node.branches {
-            let CondExpr::Parsed(ast) = &branch.expr else { continue };
+            let CondExpr::Parsed(ast) = &branch.expr else {
+                continue;
+            };
             if has_absorption(ast) {
                 self.diagnostics.push(
                     Diagnostic::new(
@@ -1416,17 +1416,11 @@ impl<'ast> Visit<'ast> for AbsorptionInExpr {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -1448,8 +1442,7 @@ impl Lint for AbsorptionInExpr {
 pub static STRING_SET_METADATA: LintMetadata = LintMetadata {
     id: "RPM104",
     name: "string-set-redundancy",
-    description:
-        "`X == \"a\" || X == \"a\"` repeats the same string in an `||`-chain — drop the duplicate.",
+    description: "`X == \"a\" || X == \"a\"` repeats the same string in an `||`-chain — drop the duplicate.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -1472,7 +1465,12 @@ fn flatten_or_chain<'a, T>(
 ) {
     use rpm_spec::ast::{BinOp, ExprAst};
     match ast.peel_parens() {
-        ExprAst::Binary { kind: BinOp::LogOr, lhs, rhs, .. } => {
+        ExprAst::Binary {
+            kind: BinOp::LogOr,
+            lhs,
+            rhs,
+            ..
+        } => {
             flatten_or_chain(lhs, out);
             flatten_or_chain(rhs, out);
         }
@@ -1486,7 +1484,12 @@ fn extract_string_eq<T>(
     ast: &rpm_spec::ast::ExprAst<T>,
 ) -> Option<(&rpm_spec::ast::ExprAst<T>, &str)> {
     use rpm_spec::ast::{BinOp, ExprAst};
-    if let ExprAst::Binary { kind: BinOp::Eq, lhs, rhs, .. } = ast.peel_parens()
+    if let ExprAst::Binary {
+        kind: BinOp::Eq,
+        lhs,
+        rhs,
+        ..
+    } = ast.peel_parens()
         && let ExprAst::String { value, .. } = rhs.peel_parens()
     {
         return Some((lhs, value));
@@ -1497,14 +1500,18 @@ fn extract_string_eq<T>(
 impl StringSetRedundancy {
     fn check<B>(&mut self, node: &Conditional<Span, B>) {
         for branch in &node.branches {
-            let CondExpr::Parsed(ast) = &branch.expr else { continue };
+            let CondExpr::Parsed(ast) = &branch.expr else {
+                continue;
+            };
             let mut operands = Vec::new();
             flatten_or_chain(ast, &mut operands);
             if operands.len() < 2 {
                 continue;
             }
-            let pairs: Vec<_> =
-                operands.iter().filter_map(|o| extract_string_eq(o)).collect();
+            let pairs: Vec<_> = operands
+                .iter()
+                .filter_map(|o| extract_string_eq(o))
+                .collect();
             // Look for any pair (i, j) with same lhs and same string.
             let mut found_dup = false;
             for i in 0..pairs.len() {
@@ -1544,17 +1551,11 @@ impl<'ast> Visit<'ast> for StringSetRedundancy {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -1576,8 +1577,7 @@ impl Lint for StringSetRedundancy {
 pub static INVERTED_IF_ELSE_METADATA: LintMetadata = LintMetadata {
     id: "RPM105",
     name: "inverted-if-else",
-    description:
-        "`%if !X foo %else bar %endif` reads more naturally when the negation is removed and \
+    description: "`%if !X foo %else bar %endif` reads more naturally when the negation is removed and \
          the branches are swapped.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
@@ -1648,17 +1648,11 @@ impl<'ast> Visit<'ast> for InvertedIfElse {
         self.check(node);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check(node);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check(node);
         visit::walk_files_conditional(self, node);
     }
@@ -1837,8 +1831,7 @@ mod tests {
 
     #[test]
     fn rpm082_silent_when_if_branch_has_content() {
-        let src =
-            "Name: x\n%ifarch x86_64\nVersion: 1\n%else\nBuildArch: noarch\n%endif\n";
+        let src = "Name: x\n%ifarch x86_64\nVersion: 1\n%else\nBuildArch: noarch\n%endif\n";
         assert!(run(src, InvertEmptyIfArch::new()).is_empty());
     }
 
@@ -1948,7 +1941,8 @@ mod tests {
 
     #[test]
     fn rpm083_silent_when_already_has_else() {
-        let src = "Name: x\n%if 0\nLicense: MIT\n%elif 1\nLicense: GPL\n%else\nLicense: BSD\n%endif\n";
+        let src =
+            "Name: x\n%if 0\nLicense: MIT\n%elif 1\nLicense: GPL\n%else\nLicense: BSD\n%endif\n";
         assert!(run(src, CollapseElifIntoElse::new()).is_empty());
     }
 
@@ -2077,7 +2071,8 @@ mod tests {
 
     #[test]
     fn rpm104_silent_for_unique_strings() {
-        let src = "Name: x\n%if %{?_vendor} == \"a\" || %{?_vendor} == \"b\"\nLicense: MIT\n%endif\n";
+        let src =
+            "Name: x\n%if %{?_vendor} == \"a\" || %{?_vendor} == \"b\"\nLicense: MIT\n%endif\n";
         assert!(run(src, StringSetRedundancy::new()).is_empty());
     }
 

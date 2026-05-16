@@ -81,19 +81,13 @@ impl<'ast> Visit<'ast> for DeepConditionalNesting {
         visit::walk_top_conditional(self, node);
         self.depth -= 1;
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.depth += 1;
         self.check_depth(node.data);
         visit::walk_preamble_conditional(self, node);
         self.depth -= 1;
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.depth += 1;
         self.check_depth(node.data);
         visit::walk_files_conditional(self, node);
@@ -118,8 +112,7 @@ impl Lint for DeepConditionalNesting {
 pub static UNREACHABLE_ELIF_METADATA: LintMetadata = LintMetadata {
     id: "RPM071",
     name: "unreachable-elif-branch",
-    description:
-        "`%elif` with the same expression as an earlier branch can never fire; likely a typo.",
+    description: "`%elif` with the same expression as an earlier branch can never fire; likely a typo.",
     default_severity: Severity::Warn,
     category: LintCategory::Correctness,
 };
@@ -160,17 +153,11 @@ impl<'ast> Visit<'ast> for UnreachableElifBranch {
         self.check_branches::<Span, _>(&node.branches);
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.check_branches::<Span, _>(&node.branches);
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.check_branches::<Span, _>(&node.branches);
         visit::walk_files_conditional(self, node);
     }
@@ -233,23 +220,26 @@ impl<'ast> Visit<'ast> for EmptyConditionalBranch {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
-        let all_empty = node.branches.iter().all(|b| is_empty_preamble_body(&b.body))
-            && node.otherwise.as_ref().is_none_or(|o| is_empty_preamble_body(o));
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
+        let all_empty = node
+            .branches
+            .iter()
+            .all(|b| is_empty_preamble_body(&b.body))
+            && node
+                .otherwise
+                .as_ref()
+                .is_none_or(|o| is_empty_preamble_body(o));
         if all_empty {
             self.emit(node.data);
         }
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         let all_empty = node.branches.iter().all(|b| is_empty_files_body(&b.body))
-            && node.otherwise.as_ref().is_none_or(|o| is_empty_files_body(o));
+            && node
+                .otherwise
+                .as_ref()
+                .is_none_or(|o| is_empty_files_body(o));
         if all_empty {
             self.emit(node.data);
         }
@@ -273,8 +263,7 @@ impl Lint for EmptyConditionalBranch {
 pub static IFARCH_EMPTY_METADATA: LintMetadata = LintMetadata {
     id: "RPM077",
     name: "ifarch-empty-list",
-    description:
-        "`%ifarch`/`%ifos` with no architecture tokens is always false; likely a missing argument.",
+    description: "`%ifarch`/`%ifos` with no architecture tokens is always false; likely a missing argument.",
     default_severity: Severity::Warn,
     category: LintCategory::Correctness,
 };
@@ -324,19 +313,13 @@ impl<'ast> Visit<'ast> for IfarchEmptyList {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         for b in &node.branches {
             self.check_branch::<Span, _>(b);
         }
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         for b in &node.branches {
             self.check_branch::<Span, _>(b);
         }
@@ -360,8 +343,7 @@ impl Lint for IfarchEmptyList {
 pub static SINGLE_COMMENT_METADATA: LintMetadata = LintMetadata {
     id: "RPM089",
     name: "single-comment-only-branch",
-    description:
-        "Conditional branch contains only a comment — likely a TODO left after a refactor.",
+    description: "Conditional branch contains only a comment — likely a TODO left after a refactor.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -387,18 +369,24 @@ impl SingleCommentOnlyBranch {
 }
 
 fn is_only_comment_top(body: &[SpecItem<Span>]) -> bool {
-    let real: Vec<_> =
-        body.iter().filter(|i| !matches!(i, SpecItem::Blank)).collect();
+    let real: Vec<_> = body
+        .iter()
+        .filter(|i| !matches!(i, SpecItem::Blank))
+        .collect();
     real.len() == 1 && matches!(real[0], SpecItem::Comment(_))
 }
 fn is_only_comment_preamble(body: &[PreambleContent<Span>]) -> bool {
-    let real: Vec<_> =
-        body.iter().filter(|i| !matches!(i, PreambleContent::Blank)).collect();
+    let real: Vec<_> = body
+        .iter()
+        .filter(|i| !matches!(i, PreambleContent::Blank))
+        .collect();
     real.len() == 1 && matches!(real[0], PreambleContent::Comment(_))
 }
 fn is_only_comment_files(body: &[FilesContent<Span>]) -> bool {
-    let real: Vec<_> =
-        body.iter().filter(|i| !matches!(i, FilesContent::Blank)).collect();
+    let real: Vec<_> = body
+        .iter()
+        .filter(|i| !matches!(i, FilesContent::Blank))
+        .collect();
     real.len() == 1 && matches!(real[0], FilesContent::Comment(_))
 }
 
@@ -411,10 +399,7 @@ impl<'ast> Visit<'ast> for SingleCommentOnlyBranch {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         for b in &node.branches {
             if is_only_comment_preamble(&b.body) {
                 self.emit(b.data);
@@ -422,10 +407,7 @@ impl<'ast> Visit<'ast> for SingleCommentOnlyBranch {
         }
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         for b in &node.branches {
             if is_only_comment_files(&b.body) {
                 self.emit(b.data);
@@ -475,9 +457,7 @@ impl IfarchNoarch {
             return;
         }
         if let CondExpr::ArchList(items) = &branch.expr
-            && items
-                .iter()
-                .any(|t| t.literal_str() == Some("noarch"))
+            && items.iter().any(|t| t.literal_str() == Some("noarch"))
         {
             self.diagnostics.push(Diagnostic::new(
                 &IFARCH_NOARCH_METADATA,
@@ -497,19 +477,13 @@ impl<'ast> Visit<'ast> for IfarchNoarch {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         for b in &node.branches {
             self.check_branch(b);
         }
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         for b in &node.branches {
             self.check_branch(b);
         }
@@ -550,7 +524,9 @@ impl DuplicateArchInList {
     }
 
     fn check_branch<B>(&mut self, branch: &CondBranch<Span, B>) {
-        let CondExpr::ArchList(items) = &branch.expr else { return };
+        let CondExpr::ArchList(items) = &branch.expr else {
+            return;
+        };
         let mut seen: Vec<&str> = Vec::with_capacity(items.len());
         for t in items {
             let Some(s) = t.literal_str() else { continue };
@@ -634,19 +610,13 @@ impl<'ast> Visit<'ast> for DuplicateArchInList {
         }
         visit::walk_top_conditional(self, node);
     }
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         for b in &node.branches {
             self.check_branch(b);
         }
         visit::walk_preamble_conditional(self, node);
     }
-    fn visit_files_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, FilesContent<Span>>,
-    ) {
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         for b in &node.branches {
             self.check_branch(b);
         }
@@ -677,8 +647,7 @@ const MAX_BRANCH_SUM: usize = 15;
 pub static CYCLOMATIC_METADATA: LintMetadata = LintMetadata {
     id: "RPM092",
     name: "conditional-cyclomatic-complexity",
-    description:
-        "Section contains more conditional branches than is comfortable to follow; refactor.",
+    description: "Section contains more conditional branches than is comfortable to follow; refactor.",
     default_severity: Severity::Warn,
     category: LintCategory::Style,
 };
@@ -729,9 +698,7 @@ impl<'ast> Visit<'ast> for ConditionalCyclomaticComplexity {
             self.diagnostics.push(Diagnostic::new(
                 &CYCLOMATIC_METADATA,
                 Severity::Warn,
-                format!(
-                    "spec has {sum} conditional branches in total — refactor or split"
-                ),
+                format!("spec has {sum} conditional branches in total — refactor or split"),
                 spec.data,
             ));
         }
