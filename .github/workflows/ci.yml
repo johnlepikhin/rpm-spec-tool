@@ -50,6 +50,31 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - run: cargo test --workspace --all-targets
 
+  lints-doc-check:
+    # Belt-and-braces sanity check: regenerate doc/lints-list.md from
+    # the registry and fail the build if it differs from the committed
+    # copy. The same regeneration also runs as a pre-commit hook
+    # (.githooks/pre-commit), but the hook is opt-in via
+    # `git config core.hooksPath .githooks`, so this job is the
+    # authoritative gate that catches PRs which bypass it.
+    name: lints-doc-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-lints-doc
+      - name: Regenerate and diff
+        run: |
+          cargo run --release --quiet -p rpm-spec-tool -- \
+              lints --format markdown > /tmp/lints-list.md
+          if ! diff -u doc/lints-list.md /tmp/lints-list.md; then
+              echo "::error::doc/lints-list.md is out of date." >&2
+              echo "Run: cargo run --release -p rpm-spec-tool -- lints --format markdown > doc/lints-list.md" >&2
+              exit 1
+          fi
+
   publish-check:
     name: publish-check
     runs-on: ubuntu-latest

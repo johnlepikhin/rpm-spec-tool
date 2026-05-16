@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Regenerate doc/lints-list.md whenever a commit touches code that can
+# change the rule registry. Auto-stages the regenerated file. Skips
+# entirely when no rule-related path is in the staged diff, so commits
+# that only touch README / CI / unrelated code stay fast.
+#
+# Enable once per clone with:  git config core.hooksPath .githooks
+
+set -euo pipefail
+
+if ! git diff --cached --name-only | grep -qE \
+    '^crates/analyzer/src/(rules/|registry\.rs|lint\.rs|lib\.rs)'; then
+    exit 0
+fi
+
+OUT="doc/lints-list.md"
+TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
+
+cargo run --release --quiet -p rpm-spec-tool -- \
+    lints --format markdown > "$TMP"
+
+if ! cmp -s "$TMP" "$OUT"; then
+    mv "$TMP" "$OUT"
+    git add "$OUT"
+    echo "pre-commit: regenerated $OUT and staged it" >&2
+fi

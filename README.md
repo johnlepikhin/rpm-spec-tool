@@ -162,8 +162,21 @@ Subcommand options that override the config:
 
 ## Lint rules
 
-The catalogue of available lints (rule IDs, severities, autofixes, examples)
-will live in a dedicated reference document — _coming soon: `doc/lints.md`_.
+The full catalogue of built-in rules — IDs, default severities,
+categories, one-line descriptions — lives in
+[`doc/lints-list.md`](doc/lints-list.md). That file is regenerated from
+the registry by the `lints` subcommand:
+
+```sh
+rpm-spec-tool lints                                    # text, grouped by category
+rpm-spec-tool lints --format markdown                  # the canonical reference
+rpm-spec-tool lints --category correctness --severity deny
+```
+
+`--category` and `--severity` are repeatable. Values inside one flag
+OR-combine; distinct flags AND-combine — for example
+`--category correctness --severity warn` lists only warn-severity rules
+in the correctness category.
 
 The distribution-profile model is documented in
 [`doc/profiles.md`](doc/profiles.md).
@@ -219,6 +232,21 @@ rpm-spec-tool completions powershell >> $PROFILE
 ```
 
 Supported shells: `bash`, `zsh`, `fish`, `powershell`, `elvish`.
+
+### Pre-commit hook (contributors)
+
+A versioned git pre-commit hook in [`.githooks/`](.githooks/) keeps
+[`doc/lints-list.md`](doc/lints-list.md) in sync with the rule registry.
+Enable it once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The hook fires only when staged files touch `crates/analyzer/src/rules/**`
+or the registry, and auto-stages the regenerated markdown. CI runs the
+same regeneration as a sanity check (`lints-doc-check` job), so PRs
+that bypass the hook still get caught.
 
 ## License
 
