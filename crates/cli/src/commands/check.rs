@@ -1,11 +1,15 @@
 //! `check` subcommand — lint + format --check rolled into one CI invocation.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use anyhow::Result;
 use clap::Args;
 use rpm_spec::printer::print_with;
-use rpm_spec_analyzer::{Severity, analyze};
+use rpm_spec_analyzer::profile::Profile;
+use rpm_spec_analyzer::{Severity, analyze_with_profile};
 
 use crate::app::ColorChoice;
 use crate::config as cli_config;
@@ -16,6 +20,11 @@ use crate::output;
 pub struct Cmd {
     #[command(flatten)]
     pub input: crate::app::CommonInput,
+
+    /// Override the active distribution profile. Wins over the
+    /// `profile = …` key in `.rpmspec.toml`.
+    #[arg(long = "profile", value_name = "NAME")]
+    pub profile: Option<String>,
 }
 
 impl Cmd {
@@ -27,14 +36,40 @@ impl Cmd {
         let mut any_io_error = false;
         let mut all_diagnostics = Vec::new();
 
+        // Profile resolution is memoised by `base_dir` so a batch with a
+        // shared `.rpmspec.toml` reparses showrc only once. Mirrors the
+        // approach used by the `lint` subcommand.
+        let mut profile_cache: HashMap<PathBuf, Arc<Profile>> = HashMap::new();
+
         for source in sources {
-            let Some(analyzer_cfg) =
-                config_cache.load_or_report(&source.path, &mut any_io_error)
+            let Some((analyzer_cfg, base_dir)) =
+                config_cache.load_with_base_dir_or_report(&source.path, &mut any_io_error)
             else {
                 continue;
             };
 
-            let (outcome, diags) = analyze(&source.contents, &analyzer_cfg);
+            let profile = match profile_cache.get(&base_dir) {
+                Some(p) => Arc::clone(p),
+                None => {
+                    let resolved =
+                        match analyzer_cfg.resolve_profile(&base_dir, self.profile.as_deref()) {
+                            Ok(p) => Arc::new(p),
+                            Err(e) => {
+                                eprintln!(
+                                    "error: failed to resolve profile (base_dir={}): {e:#}",
+                                    base_dir.display()
+                                );
+                                any_io_error = true;
+                                continue;
+                            }
+                        };
+                    profile_cache.insert(base_dir.clone(), Arc::clone(&resolved));
+                    resolved
+                }
+            };
+
+            let (outcome, diags) =
+                analyze_with_profile(&source.contents, &analyzer_cfg, (*profile).clone());
 
             if diags.iter().any(|d| d.severity == Severity::Deny) {
                 any_failure = true;

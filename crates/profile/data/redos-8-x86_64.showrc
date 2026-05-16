@@ -1,0 +1,789 @@
+ARCHITECTURE AND OS:
+build arch            : x86_64
+compatible build archs: x86_64 noarch
+build os              : Linux
+compatible build os's : Linux
+install arch          : x86_64
+install os            : Linux
+compatible archs      : x86_64 amd64 em64t athlon noarch i686 i586 i486 i386 fat
+compatible os's       : Linux
+
+BACKEND:
+default backend       : sqlite
+available backends    : sqlite ndb bdb_ro dummy
+
+RPMRC VALUES:
+archcolor             : 2
+optflags              : -O2 -g
+
+Features supported by rpmlib:
+    rpmlib(BuiltinLuaScripts) = 4.2.2-1
+    rpmlib(CaretInVersions) = 4.15.0-1
+    rpmlib(CompressedFileNames) = 3.0.4-1
+    rpmlib(ConcurrentAccess) = 4.1-1
+    rpmlib(DynamicBuildRequires) = 4.15.0-1
+    rpmlib(ExplicitPackageProvide) = 4.0-1
+    rpmlib(FileCaps) = 4.6.1-1
+    rpmlib(FileDigests) = 4.6.0-1
+    rpmlib(HeaderLoadSortsTags) = 4.0.1-1
+    rpmlib(LargeFiles) = 4.12.0-1
+    rpmlib(PartialHardlinkSets) = 4.0.4-1
+    rpmlib(PayloadFilesHavePrefix) = 4.0-1
+    rpmlib(PayloadIsBzip2) = 3.0.5-1
+    rpmlib(PayloadIsLzma) = 4.4.2-1
+    rpmlib(PayloadIsXz) = 5.2-1
+    rpmlib(PayloadIsZstd) = 5.4.18-1
+    rpmlib(RichDependencies) = 4.12.0-1
+    rpmlib(ScriptletExpansion) = 4.9.0-1
+    rpmlib(ScriptletInterpreterArgs) = 4.0.3-1
+    rpmlib(TildeInVersions) = 4.10.0-1
+    rpmlib(VersionedDependencies) = 3.0.3-1
+
+Macro path: /usr/lib/rpm/macros:/usr/lib/rpm/macros.d/macros.*:/usr/lib/rpm/platform/%{_target}/macros:/usr/lib/rpm/fileattrs/*.attr:/usr/lib/rpm/redsoft/macros:/etc/rpm/macros.*:/etc/rpm/macros:/etc/rpm/%{_target}/macros:~/.rpmmacros
+
+========================
+-20: P	<builtin>
+-20: S	<builtin>
+-13: __7zip	/usr/bin/7za
+-13: ___build_args	-e
+-13: ___build_cmd	%{?_sudo:%{_sudo} }%{?_remsh:%{_remsh} %{_remhost} }%{?_remsudo:%{_remsudo} }%{?_remchroot:%{_remchroot} %{_remroot} }%{___build_shell} %{___build_args}
+-13: ___build_post	
+  RPM_EC=$?
+  for pid in $(jobs -p); do kill -9 ${pid} || continue; done
+  exit ${RPM_EC}
+%{nil}
+-13: ___build_pre	
+  %{___build_pre_env} 
+  %[%{verbose}?"set -x":""]
+  umask 022
+  cd "%{_builddir}"
+-13: ___build_pre_env	
+  RPM_SOURCE_DIR="%{_sourcedir}"
+  RPM_BUILD_DIR="%{_builddir}"
+  RPM_OPT_FLAGS="%{optflags}"
+  RPM_LD_FLAGS="%{?build_ldflags}"
+  RPM_ARCH="%{_arch}"
+  RPM_OS="%{_os}"
+  RPM_BUILD_NCPUS="%{_smp_build_ncpus}"
+  export RPM_SOURCE_DIR RPM_BUILD_DIR RPM_OPT_FLAGS RPM_ARCH RPM_OS RPM_BUILD_NCPUS RPM_LD_FLAGS
+  RPM_DOC_DIR="%{_docdir}"
+  export RPM_DOC_DIR
+  RPM_PACKAGE_NAME="%{NAME}"
+  RPM_PACKAGE_VERSION="%{VERSION}"
+  RPM_PACKAGE_RELEASE="%{RELEASE}"
+  export RPM_PACKAGE_NAME RPM_PACKAGE_VERSION RPM_PACKAGE_RELEASE
+  LANG=C
+  export LANG
+  unset CDPATH DISPLAY ||:
+  unset DEBUGINFOD_URLS ||:
+  %{?buildroot:RPM_BUILD_ROOT="%{buildroot}"
+  export RPM_BUILD_ROOT}
+  %{?_javaclasspath:CLASSPATH="%{_javaclasspath}"
+  export CLASSPATH}
+  PKG_CONFIG_PATH="${PKG_CONFIG_PATH}:%{_libdir}/pkgconfig:%{_datadir}/pkgconfig"
+  export PKG_CONFIG_PATH
+  CONFIG_SITE=${CONFIG_SITE:-NONE}
+  export CONFIG_SITE
+-13: ___build_shell	%{?_buildshell:%{_buildshell}}%{!?_buildshell:/bin/sh}
+-13: ___build_template	#!%{___build_shell}
+%{___build_pre}
+%{nil}
+-13: __apply_patch(qp:m:)	
+%{lua:
+local file = rpm.expand("%{1}")
+local num = rpm.expand("%{2}")
+if posix.access(file, "r") then
+    local options = rpm.expand("%{-q} %{-p:-p%{-p*}} %{-m:-m%{-m*}}")
+    local scm_apply = rpm.expand("%__scm_apply_%{__scm}")
+    print(rpm.expand("%{uncompress:"..file.."} | "..scm_apply.." "..options.."  "..file.." "..num.."\n"))
+else
+    print("echo 'Cannot read "..file.."'; exit 1;".."\n")
+end}
+-13: __ar	ar
+-13: __arch_install_post	%{nil}
+-13: __as	as
+-13: __awk	/usr/bin/gawk
+-13: __basename	/usr/bin/basename
+-13: __brp_compress	%{_rpmconfigdir}/brp-compress %{?_prefix}
+-13: __brp_elfperms	%{_rpmconfigdir}/brp-elfperms
+-13: __brp_remove_la_files	%{_rpmconfigdir}/brp-remove-la-files
+-13: __brp_strip	%{_rpmconfigdir}/brp-strip %{__strip}
+-13: __brp_strip_comment_note	%{_rpmconfigdir}/brp-strip-comment-note %{__strip} %{__objdump}
+-13: __brp_strip_static_archive	%{_rpmconfigdir}/brp-strip-static-archive %{__strip}
+-13: __bzip2	/usr/bin/bzip2
+-13: __bzr	/usr/bin/bzr
+-13: __cat	/usr/bin/cat
+-13: __cc	gcc
+-13: __check_files	%{_rpmconfigdir}/check-files %{buildroot}
+-13: __chmod	/usr/bin/chmod
+-13: __chown	/usr/bin/chown
+-13: __chrpath	/usr/bin/chrpath
+-13: __cp	/usr/bin/cp
+-13: __cp_f	%{__cp} -f
+-13: __cp_p	%{__cp} -p
+-13: __cp_r	%{__cp} -r
+-13: __cpp	gcc -E
+-13: __cxx	g++
+-13: __dd	/usr/bin/dd
+-13: __debug_install_post	
+    %{__find_debuginfo} \
+    %{?_smp_build_ncpus:-j%{_smp_build_ncpus}} \
+    %{?_missing_build_ids_terminate_build:--strict-build-id} \
+    %{?_no_recompute_build_ids:-n} \
+    %{?_include_minidebuginfo:-m} \
+    %{?_include_gdb_index:-i} \
+    %{?_unique_build_ids:--build-id-seed "%{VERSION}-%{RELEASE}"} \
+    %{?_unique_debug_names:--unique-debug-suffix "-%{VERSION}-%{RELEASE}.%{_arch}"} \
+    %{?_unique_debug_srcs:--unique-debug-src-base "%{name}-%{VERSION}-%{RELEASE}.%{_arch}"} \
+    %{?_find_debuginfo_dwz_opts} \
+    %{?_find_debuginfo_opts} \
+    %{?_debugsource_packages:-S debugsourcefiles.list} \
+    "%{_builddir}/%{?buildsubdir}"
+%{nil}
+-13: __depmod	/usr/sbin/depmod
+-13: __docdir_path	%{_datadir}/doc:%{_datadir}/man:%{_datadir}/info:%{_datadir}/gtk-doc/html:%{_datadir}/gnome/help:%{?_docdir}:%{?_mandir}:%{?_infodir}:%{?_javadocdir}:/usr/doc:/usr/man:/usr/info:/usr/X11R6/man
+-13: __echo	/usr/bin/echo
+-13: __file	/usr/bin/file
+-13: __find	/usr/bin/find
+-13: __find_debuginfo	/usr/bin/find-debuginfo
+-13: __find_provides	%{_rpmconfigdir}/find-provides
+-13: __find_requires	%{_rpmconfigdir}/find-requires
+-13: __gem	/usr/bin/gem
+-13: __getent	/usr/bin/getent
+-13: __git	/usr/bin/git
+-13: __global_provides_exclude_from	%{?_docdir:%{_docdir}}
+-13: __global_requires_exclude_from	%{?_docdir:%{_docdir}}
+-13: __gpg	/usr/bin/gpg2
+-13: __gpg_reserved_space	4096
+-13: __gpg_sign_cmd	%{shescape:%{__gpg}} 
+	gpg --no-verbose --no-armor --no-secmem-warning 
+	%{?_gpg_digest_algo:--digest-algo=%{_gpg_digest_algo}} 
+	%{?_gpg_sign_cmd_extra_args} 
+	%{?_gpg_name:-u %{shescape:%{_gpg_name}}} 
+	-sbo %{shescape:%{?__signature_filename}} 
+	%{?__plaintext_filename:-- %{shescape:%{__plaintext_filename}}}
+-13: __grep	/usr/bin/grep
+-13: __groupadd	/usr/sbin/groupadd
+-13: __grub_mkconfig	/usr/sbin/grub2-mkconfig
+-13: __gzip	/usr/bin/gzip
+-13: __hg	/usr/bin/hg
+-13: __iconv	/usr/bin/iconv
+-13: __id	/usr/bin/id
+-13: __id_u	%{__id} -u
+-13: __install	/usr/bin/install
+-13: __isa	%{__isa_name}-%{__isa_bits}
+-13: __isa_bits	64
+-13: __isa_name	x86
+-13: __ld	/usr/bin/ld
+-13: __ldconfig	/usr/sbin/ldconfig
+-13: __ln	/usr/bin/ln -sf
+-13: __ln_s	/usr/bin/ln -s
+-13: __lrzip	/usr/bin/lrzip
+-13: __lzip	/usr/bin/lzip
+-13: __make	/usr/bin/make
+-13: __mkdir	/usr/bin/mkdir
+-13: __mkdir_p	%{__mkdir} -p
+-13: __mv	/usr/bin/mv
+-13: __objdump	/usr/bin/objdump
+-13: __os_install_post	
+    %{?__brp_compress} 
+    %{?__brp_elfperms} 
+    %{?__brp_strip} 
+    %{?__brp_strip_static_archive} 
+    %{?__brp_strip_comment_note} 
+    %{?__brp_remove_la_files} 
+%{nil}
+-13: __patch	/usr/bin/patch
+-13: __plugindir	%{_libdir}/rpm-plugins
+-13: __quilt	/usr/bin/quilt
+-13: __readlink	/usr/bin/readlink
+-13: __rm	/usr/bin/rm
+-13: __rm_rf	%{__rm} -rf
+-13: __rpmuncompress	%{_rpmconfigdir}/rpmuncompress
+-13: __scm	patch
+-13: __scm_apply_bzr(qp:m:)	
+%{__patch} %{-p:-p%{-p*}} %{-q:-s}
+%{__bzr} commit %{-q} -m %{-m*}
+-13: __scm_apply_gendiff(qp:m:)	
+%{__patch} %{-p:-p%{-p*}} %{-q:-s} --fuzz=%{_default_patch_fuzz} %{_default_patch_flags} -b --suffix ".%{2}"
+-13: __scm_apply_git(qp:m:)	
+%{__git} apply --index --reject %{-p:-p%{-p*}} -
+%{__git} commit %{-q} -m %{-m*} --author "%{__scm_author}"
+-13: __scm_apply_git_am(qp:m:)	
+%{__git} am --reject %{-q} %{-p:-p%{-p*}}
+-13: __scm_apply_hg(qp:m:)	
+%{__hg} import - %{-p:-p%{-p*}} %{-q} -m %{-m*} --user "%{__scm_author}"
+-13: __scm_apply_patch(qp:m:)	
+%{__patch} %{-p:-p%{-p*}} %{-q:-s} --fuzz=%{_default_patch_fuzz} %{_default_patch_flags}
+-13: __scm_apply_quilt(qp:m:)	
+%{__quilt} import %{-p:-p%{-p*}} %{1} && %{__quilt} push %{-q}
+-13: __scm_author	%{__scm_username} %{__scm_usermail}
+-13: __scm_setup_bzr(q)	
+%{__bzr} init %{-q}
+%{__bzr} whoami --branch "%{__scm_author}"
+%{__bzr} add .
+%{__bzr} commit %{-q} -m "%{NAME}-%{VERSION} base"
+-13: __scm_setup_gendiff(q)	%{nil}
+-13: __scm_setup_git(q)	
+%{__git} init %{-q}
+%{__git} config user.name "%{__scm_username}"
+%{__git} config user.email "%{__scm_usermail}"
+%{__git} config gc.auto 0
+%{__git} add --force .
+%{__git} commit %{-q} --allow-empty -a\
+	--author "%{__scm_author}" -m "%{NAME}-%{VERSION} base"
+%{__git} checkout --track -b rpm-build
+-13: __scm_setup_git_am(q)	
+%{expand:%__scm_setup_git %{-q}}
+-13: __scm_setup_hg(q)	
+%{__hg} init %{-q} .
+%{__hg} add %{-q} .
+%{__hg} commit %{-q} --user "%{__scm_author}" -m "%{NAME}-%{VERSION} base"
+-13: __scm_setup_patch(q)	%{nil}
+-13: __scm_setup_quilt(q)	%{nil}
+-13: __scm_usermail	<rpm-build>
+-13: __scm_username	rpm-build
+-13: __sed	/usr/bin/sed
+-13: __spec_build_args	%{___build_args}
+-13: __spec_build_body	%{___build_body}
+-13: __spec_build_cmd	%{___build_cmd}
+-13: __spec_build_post	%{___build_post}
+-13: __spec_build_pre	%{___build_pre}
+-13: __spec_build_shell	%{___build_shell}
+-13: __spec_build_template	#!%{__spec_build_shell}
+%{__spec_build_pre}
+%{nil}
+-13: __spec_buildrequires_args	%{___build_args}
+-13: __spec_buildrequires_body	%{___build_body}
+-13: __spec_buildrequires_cmd	%{___build_cmd}
+-13: __spec_buildrequires_post	%{___build_post}
+-13: __spec_buildrequires_pre	%{___build_pre}
+-13: __spec_buildrequires_shell	%{___build_shell}
+-13: __spec_buildrequires_template	#!%{__spec_buildrequires_shell}
+%{__spec_buildrequires_pre}
+%{nil}
+-13: __spec_check_args	%{___build_args}
+-13: __spec_check_body	%{___build_body}
+-13: __spec_check_cmd	%{___build_cmd}
+-13: __spec_check_post	%{___build_post}
+-13: __spec_check_pre	%{___build_pre}
+-13: __spec_check_shell	%{___build_shell}
+-13: __spec_check_template	#!%{__spec_check_shell}
+%{__spec_check_pre}
+%{nil}
+-13: __spec_clean_args	%{___build_args}
+-13: __spec_clean_body	%{___build_body}
+-13: __spec_clean_cmd	%{___build_cmd}
+-13: __spec_clean_post	%{___build_post}
+-13: __spec_clean_pre	%{___build_pre}
+-13: __spec_clean_shell	%{___build_shell}
+-13: __spec_clean_template	#!%{__spec_clean_shell}
+%{__spec_clean_pre}
+%{nil}
+-13: __spec_conf_args	%{___build_args}
+-13: __spec_conf_body	%{___build_body}
+-13: __spec_conf_cmd	%{___build_cmd}
+-13: __spec_conf_post	%{___build_post}
+-13: __spec_conf_pre	%{___build_pre}
+-13: __spec_conf_shell	%{___build_shell}
+-13: __spec_conf_template	#!%{__spec_build_shell}
+%{__spec_conf_pre}
+%{nil}
+-13: __spec_install_args	%{___build_args}
+-13: __spec_install_body	%{___build_body}
+-13: __spec_install_cmd	%{___build_cmd}
+-13: __spec_install_post	
+    %{?__debug_package:%{__debug_install_post}}
+    %{__arch_install_post}
+    %{__os_install_post}
+%{nil}
+-13: __spec_install_pre	%{___build_pre}
+    %{__rm} -rf "%{buildroot}"
+    %{__mkdir_p} "%{dirname:%{buildroot}}"
+    %{__mkdir} "%{buildroot}"
+%{nil}
+-13: __spec_install_shell	%{___build_shell}
+-13: __spec_install_template	#!%{__spec_install_shell}
+%{__spec_install_pre}
+%{nil}
+-13: __spec_prep_args	%{___build_args}
+-13: __spec_prep_body	%{___build_body}
+-13: __spec_prep_cmd	%{___build_cmd}
+-13: __spec_prep_post	%{___build_post}
+-13: __spec_prep_pre	%{___build_pre}
+-13: __spec_prep_shell	%{___build_shell}
+-13: __spec_prep_template	#!%{__spec_prep_shell}
+%{__spec_prep_pre}
+%{nil}
+-13: __spec_rmbuild_args	%{___build_args}
+-13: __spec_rmbuild_body	%{___build_body}
+-13: __spec_rmbuild_cmd	%{___build_cmd}
+-13: __spec_rmbuild_post	%{___build_post}
+-13: __spec_rmbuild_pre	%{___build_pre}
+-13: __spec_rmbuild_shell	%{___build_shell}
+-13: __spec_rmbuild_template	#!%{__spec_rmbuild_shell}
+%{__spec_rmbuild_pre}
+%{nil}
+-13: __strip	/usr/bin/strip
+-13: __tar	/usr/bin/tar
+-13: __touch	/usr/bin/touch
+-13: __transaction_audit	%{__plugindir}/audit.so
+-13: __transaction_dbus_announce	%{__plugindir}/dbus_announce.so
+-13: __transaction_fapolicyd	%{__plugindir}/fapolicyd.so
+-13: __transaction_fsverity	%{__plugindir}/fsverity.so
+-13: __transaction_ima	%{__plugindir}/ima.so
+-13: __transaction_prioreset	%{__plugindir}/prioreset.so
+-13: __transaction_selinux	%{__plugindir}/selinux.so
+-13: __transaction_syslog	%{__plugindir}/syslog.so
+-13: __transaction_systemd_inhibit	%{__plugindir}/systemd_inhibit.so
+-13: __unzip	/usr/bin/unzip
+-13: __urlhelper_proxyopts	%{?_httpproxy:--proxy %{_httpproxy}%{?_httpport::%{_httpport}}}%{!?_httpproxy:%{nil}}
+-13: __urlhelpercmd	/usr/bin/curl
+-13: __urlhelperopts	--silent --show-error --fail --globoff --location -o
+-13: __useradd	/usr/sbin/useradd
+-13: __vsflags	0xf0000
+-13: __xargs	/usr/bin/xargs
+-13: __xz	/usr/bin/xz
+-13: __zstd	/usr/bin/zstd
+-13: _appsdir	%{_datadir}/applications
+-13: _arch	x86_64
+-13: _binaries_in_noarch_packages_terminate_build	1
+-13: _binary_filedigest_algorithm	8
+-13: _bindir	%{_exec_prefix}/bin
+-13: _build	%{_host}
+-13: _build_alias	%{_host_alias}
+-13: _build_arch	x86_64
+-13: _build_cpu	%{_host_cpu}
+-13: _build_id_links	compat
+-13: _build_name_fmt	%%{ARCH}/%%{NAME}-%%{VERSION}-%%{RELEASE}.%%{ARCH}.rpm
+-13: _build_os	%{_host_os}
+-13: _build_vendor	%{_host_vendor}
+-13: _builddir	%{_topdir}/BUILD
+-13: _buildrootdir	%{_topdir}/BUILDROOT
+-13: _buildshell	/bin/sh
+-13: _changelog_trimage	0
+-13: _changelog_trimtime	0
+-13: _color_output	never
+-13: _configure	./configure
+-13: _datadir	%{_datarootdir}
+-13: _datarootdir	%{_prefix}/share
+-13= _db_backend	sqlite
+-13: _dbpath	%{_usr}/lib/sysimage/rpm
+-13: _dbpath_rebuild	%{_dbpath}
+-13: _debuginfo_template	
+%package debuginfo
+Summary: Debug information for package %{name}
+Group: Development/Debug
+AutoReq: 0
+AutoProv: 1
+%description debuginfo
+This package provides debug information for package %{name}.
+Debug information is useful when developing applications that use this
+package or when debugging this package.
+%files debuginfo -f debugfiles.list
+%{nil}
+-13: _debugsource_template	%{nil}
+-13: _default_patch_flags	--no-backup-if-mismatch -f
+-13: _default_patch_fuzz	0
+-13: _defaultdocdir	%{_datadir}/doc
+-13: _defaultlicensedir	%{_datadir}/licenses
+-13: _disable_source_fetch	1
+-13: _duplicate_files_terminate_build	0
+-13: _empty_manifest_terminate_build	1
+-13: _exec_prefix	%{_prefix}
+-13: _file_context_file	%{_sysconfdir}/selinux/${SELINUXTYPE}/contexts/files/file_contexts
+-13: _file_context_file_pre	%{_localstatedir}/lib/rpm-state/file_contexts.pre
+-13: _file_custom_defined_booleans	%{_selinux_store_policy_path}/rpmbooleans.custom
+-13: _file_custom_defined_booleans_tmp	%{_selinux_store_policy_path}/rpmbooleans.custom.tmp
+-13: _fileattrsdir	%{_rpmconfigdir}/fileattrs
+-13: _fixperms	%{__chmod} -Rf a+rX,u+w,g-w,o-w
+-13: _gnu	-gnu
+-13: _gschemasdir	%{_datadir}/glib-2.0/schemas
+-13: _host	x86_64-redsoft-linux-gnu
+-13: _host_alias	x86_64-redsoft-linux-gnu%{nil}
+-13: _host_cpu	x86_64
+-13: _host_os	linux
+-13: _host_vendor	redsoft
+-13: _iconsdir	%{_datadir}/icons
+-13: _includedir	%{_prefix}/include
+-13: _infodir	%{_datarootdir}/info
+-13: _initddir	%{_sysconfdir}/rc.d/init.d
+-13: _initrddir	%{_initddir}
+-13: _install_langs	all
+-13: _install_script_path	/sbin:/bin:/usr/sbin:/usr/bin:/usr/X11R6/bin
+-13: _invalid_encoding_terminates_build	1
+-13: _isa	%{?__isa:(%{__isa})}%{!?__isa:%{nil}}
+-13: _keyring	rpmdb
+-13: _keyringpath	%{_dbpath}/pubkeys/
+-13: _lib	lib64
+-13: _libdir	%{_prefix}/lib64
+-13: _libexecdir	%{_exec_prefix}/libexec
+-13: _localstatedir	/var
+-13: _make_output_sync	%(! %{__make} --version -O >/dev/null 2>&1 || echo -O)
+-13: _make_verbose	V=1 VERBOSE=1
+-13: _mandir	%{_datarootdir}/man
+-13: _missing_doc_files_terminate_build	1
+-13: _modkerndir	%{_prefix}/lib/modules
+-13: _oldincludedir	/usr/include
+-13: _os	linux
+-13: _pam_confdir	%{_sysconfdir}/pam.d
+-13: _pam_libdir	%{_libdir}
+-13: _pam_moduledir	%{_libdir}/security
+-13: _pam_secconfdir	%{_sysconfdir}/security
+-13: _pam_vendordir	%{_datadir}/pam.d
+-13: _pkgverify_flags	0x0
+-13: _pkgverify_level	digest
+-13: _prefix	/usr
+-13: _query_all_fmt	%%{nvr}%%{archsuffix}
+-13: _query_selector_match	default
+-13: _rpmconfigdir	%{getconfdir}
+-13: _rpmdir	%{_topdir}/RPMS
+-13: _rpmfilename	%{_build_name_fmt}
+-13: _rpmlock_path	%{_dbpath}/.rpm.lock
+-13: _rpmluadir	%{_rpmconfigdir}/lua
+-13: _rpmmacrodir	%{_rpmconfigdir}/macros.d
+-13: _rundir	/run
+-13: _sbindir	%{_exec_prefix}/sbin
+-13: _selinux_policy_version	38.33-3.red80
+-13: _selinux_store_path	/var/lib/selinux
+-13: _selinux_store_policy_path	%{_selinux_store_path}/${_policytype}
+-13: _sharedstatedir	/var/lib
+-13: _smp_build_ncpus	%([ -z "$RPM_BUILD_NCPUS" ] \
+	&& RPM_BUILD_NCPUS="%{getncpus}"; \
+        ncpus_max=%{?_smp_ncpus_max}; \
+        if [ -n "$ncpus_max" ] && [ "$ncpus_max" -gt 0 ] && [ "$RPM_BUILD_NCPUS" -gt "$ncpus_max" ]; then RPM_BUILD_NCPUS="$ncpus_max"; fi; \
+        echo "$RPM_BUILD_NCPUS";)
+-13: _smp_build_nthreads	%{_smp_build_ncpus}
+-13: _smp_mflags	-j%{_smp_build_ncpus}
+-13: _source_filedigest_algorithm	8
+-13: _sourcedir	%{_topdir}/SOURCES
+-13: _specdir	%{_topdir}/SPECS
+-13: _srckerndir	%{_prefix}/src/kernels
+-13: _srcrpmdir	%{_topdir}/SRPMS
+-13: _sysconfdir	/etc
+-11: _target	x86_64-linux
+-13: _target_alias	%{_host_alias}
+-11= _target_cpu	x86_64
+-11= _target_os	linux
+-13: _target_platform	%{_target_cpu}-%{_vendor}-%{_target_os}
+-13: _target_vendor	%{_host_vendor}
+-13: _tmppath	%{_var}/tmp
+-13: _topdir	%{getenv:HOME}/rpmbuild
+-13: _transaction_color	3
+-13: _unique_build_ids	1
+-13: _unique_debug_names	1
+-13: _unique_debug_srcs	1
+-13: _unpackaged_files_terminate_build	1
+-13: _urlhelper	%{__urlhelpercmd} %{?__urlhelper_localopts} %{?__urlhelper_proxyopts} %{__urlhelperopts}
+-13: _use_internal_dependency_generator	1
+-13: _usr	/usr
+-13: _usrsrc	%{_usr}/src
+-13: _var	/var
+-13: _vendor	redsoft
+-13: _vsflags_build	%{__vsflags}
+-13: _vsflags_erase	%{__vsflags}
+-13: _vsflags_install	%{__vsflags}
+-13: _vsflags_query	%{__vsflags}
+-13: _vsflags_rebuilddb	0xc0c00
+-13: _vsflags_verify	%{__vsflags}
+-13: _wrong_version_format_terminate_build	1
+-13: alpha	alpha alphaev56 alphaev6 alphaev67
+-13: arm	%{arm32}
+-13: arm32	armv3l armv4b armv4l armv4tl armv5tl armv5tel armv5tejl armv6l armv6hl armv7l armv7hl armv7hnl armv8l armv8hl armv8hnl armv8hcnl
+-13: arm64	aarch64
+-13: autopatch(vp:m:M:)	%{lua:
+if #arg == 0 then
+    local lo = tonumber(rpm.expand("%{-m:%{-m*}}"))
+    local hi = tonumber(rpm.expand("%{-M:%{-M*}}"))
+    for i, n in ipairs(patch_nums) do
+        if ((not lo or n >= lo) and (not hi or n <= hi)) then
+            table.insert(arg, n)
+        end
+    end
+end
+local options = rpm.expand("%{!-v:-q} %{-p:-p%{-p*}} ")
+local bynum = {}
+for i, p in ipairs(patches) do
+    bynum[patch_nums[i]] = p
+end
+for i, a in ipairs(arg) do
+    local p = bynum[tonumber(a)]
+    if p then
+        print(rpm.expand("%__apply_patch -m %{basename:"..p.."}  "..options..p.." "..i.."\n"))
+    else
+        macros.error({"no such patch "..a})
+    end
+end
+}
+-13: autosetup(a:b:cDn:TvNS:p:)	
+%setup %{-a} %{-b} %{-c} %{-D} %{-n} %{-T} %{!-v:-q}
+%{-S:%global __scm %{-S*}}
+%{expand:%__scm_setup_%{__scm} %{!-v:-q}}
+%{!-N:%autopatch %{-v} %{-p:-p%{-p*}}}
+-20: basename	<builtin>
+-13: bcond	%[ (%2)
+    ? "%{expand:%%{!?_without_%{1}:%%global with_%{1} 1}}"
+    : "%{expand:%%{?_with_%{1}:%%global with_%{1} 1}}"
+]
+-13: bcond_with	%bcond %{1} 0
+-13: bcond_without	%bcond %{1} 1
+-13: build_cflags	%{optflags}
+-13: build_cxxflags	%{optflags}
+-13: build_fflags	%{optflags} %{?_fmoddir:-I%{_fmoddir}}
+-13: buildroot	%{_buildrootdir}/%{NAME}-%{VERSION}-%{RELEASE}.%{_arch}
+-13: clamp_mtime_to_source_date_epoch	0
+-13: compile_gschemas_scriptlet	/usr/bin/glib-compile-schemas %{_datadir}/glib-2.0/schemas &> /dev/null || :
+-13: configure	
+  %{set_build_flags}; 
+  %{_configure} --host=%{_host} --build=%{_build} \
+	--program-prefix=%{?_program_prefix} \
+	--disable-dependency-tracking \
+	--prefix=%{_prefix} \
+	--exec-prefix=%{_exec_prefix} \
+	--bindir=%{_bindir} \
+	--sbindir=%{_sbindir} \
+	--sysconfdir=%{_sysconfdir} \
+	--datadir=%{_datadir} \
+	--includedir=%{_includedir} \
+	--libdir=%{_libdir} \
+	--libexecdir=%{_libexecdir} \
+	--localstatedir=%{_localstatedir} \
+	--sharedstatedir=%{_sharedstatedir} \
+	--mandir=%{_mandir} \
+	--infodir=%{_infodir}
+-13: debug_package	
+%ifnarch noarch
+%global __debug_package 1
+%_debuginfo_template
+%{?_debugsource_packages:%_debugsource_template}
+%endif
+%{nil}
+-20: define	<builtin>
+-13: defined	%{expand:%%{?%{1}:1}%%{!?%{1}:0}}
+-20: dirname	<builtin>
+-13: dist	.red80
+-13: dist_home_url	https://redos.red-soft.ru
+-13: dist_name	RED OS
+-13: dist_vendor	REDSOFT
+-20: dnl	<builtin>
+-20: dump	<builtin>
+-20: echo	<builtin>
+-20: error	<builtin>
+-20: exists	<builtin>
+-20: expand	<builtin>
+-20: expr	<builtin>
+-13: find_lang	%{_rpmconfigdir}/find-lang.sh %{buildroot}
+-13: firewalld_reload	
+test -x %{_bindir}/firewall-cmd && firewall-cmd --reload --quiet || : 
+%{nil}
+-20: getconfdir	<builtin>
+-20: getenv	<builtin>
+-20: getncpus	<builtin>
+-20: global	<builtin>
+-13: icons_scriptlet	/usr/bin/gtk-update-icon-cache &> /dev/null ; /usr/bin/gtk4-update-icon-cache &> /dev/null || :
+-13: ix86	i386 i486 i586 i686 pentium3 pentium4 athlon geode
+-20: load	<builtin>
+-13: loongarch64	loongarch64
+-20: lua	<builtin>
+-20: macrobody	<builtin>
+-13: make_build	%{__make} %{_make_output_sync} %{?_smp_mflags} %{_make_verbose}
+-13: make_install	%{__make} install DESTDIR=%{?buildroot} INSTALL="%{__install} -p"
+-13: makeinstall	
+  echo "warning: %%makeinstall is deprecated, try %%make_install instead" 1>&2
+  %{__make} \
+	prefix=%{?buildroot:%{buildroot}}%{_prefix} \
+	exec_prefix=%{?buildroot:%{buildroot}}%{_exec_prefix} \
+	bindir=%{?buildroot:%{buildroot}}%{_bindir} \
+	sbindir=%{?buildroot:%{buildroot}}%{_sbindir} \
+	sysconfdir=%{?buildroot:%{buildroot}}%{_sysconfdir} \
+	datadir=%{?buildroot:%{buildroot}}%{_datadir} \
+	includedir=%{?buildroot:%{buildroot}}%{_includedir} \
+	libdir=%{?buildroot:%{buildroot}}%{_libdir} \
+	libexecdir=%{?buildroot:%{buildroot}}%{_libexecdir} \
+	localstatedir=%{?buildroot:%{buildroot}}%{_localstatedir} \
+	sharedstatedir=%{?buildroot:%{buildroot}}%{_sharedstatedir} \
+	mandir=%{?buildroot:%{buildroot}}%{_mandir} \
+	infodir=%{?buildroot:%{buildroot}}%{_infodir} \
+  install
+-13: mips	%{mips32} %{mips64}
+-13: mips32	mips mipsel mipsr6 mipsr6el
+-13: mips64	mips64 mips64el mips64r6 mips64r6el
+-13: mipseb	mips mipsr6 mips64 mips64r6
+-13: mipsel	mipsel mipsr6el mips64el mips64r6el
+-13: nil	%{!?nil}
+-11: optflags	-O2 -g
+-13: patches	%{lua: for i, p in ipairs(patches) do 
+  print(macros.shescape({p}).." ") end}
+-13: power64	ppc64 ppc64p7 ppc64le
+-20: quote	<builtin>
+-13: red80	1
+-13: redos	8
+-13: redos_ver	8
+-13: redos_version	0800
+-13: riscv	%{riscv32} %{riscv64} %{riscv128}
+-13: riscv128	riscv128
+-13: riscv32	riscv32
+-13: riscv64	riscv64
+-20: rpmversion	<builtin>
+-13: selinux_modules_install("s:p:")	
+if [ -e /etc/selinux/config ]; then 
+  . /etc/selinux/config 
+fi 
+_policytype=%{-s*} 
+if [ -z "${_policytype}" ]; then 
+  _policytype="targeted" 
+fi 
+if [ "${SELINUXTYPE}" = "${_policytype}" ]; then 
+  %{_sbindir}/semodule -n -s ${_policytype} -X %{!-p:200}%{-p*} -i %* || : 
+  %{_sbindir}/selinuxenabled && %{_sbindir}/load_policy || : 
+fi 
+%{nil}
+-13: selinux_modules_uninstall("s:p:")	
+if [ -e /etc/selinux/config ]; then 
+  . /etc/selinux/config 
+fi 
+_policytype=%{-s*} 
+if [ -z "${_policytype}" ]; then 
+  _policytype="targeted" 
+fi 
+if [ $1 -eq 0 ]; then 
+  if [ "${SELINUXTYPE}" = "${_policytype}" ]; then 
+    %{_sbindir}/semodule -n -X %{!-p:200}%{-p*} -s ${_policytype} -r %* &> /dev/null || : 
+    %{_sbindir}/selinuxenabled && %{_sbindir}/load_policy || : 
+  fi 
+fi 
+%{nil}
+-13: selinux_relabel_post("s:")	
+if [ -e /etc/selinux/config ]; then 
+  . /etc/selinux/config 
+fi 
+_policytype=%{-s*} 
+if [ -z "${_policytype}" ]; then 
+  _policytype="targeted" 
+fi 
+if %{_sbindir}/selinuxenabled && [ "${SELINUXTYPE}" = "${_policytype}" ]; then 
+   if [ -f %{_file_context_file_pre} ]; then 
+     %{_sbindir}/fixfiles -C %{_file_context_file_pre} restore &> /dev/null 
+     rm -f %{_file_context_file_pre} 
+   fi 
+fi 
+%{nil}
+-13: selinux_relabel_pre("s:")	
+if %{_sbindir}/selinuxenabled; then 
+  if [ -e /etc/selinux/config ]; then 
+    . /etc/selinux/config 
+  fi 
+  _policytype=%{-s*} 
+  if [ -z "${_policytype}" ]; then 
+    _policytype="targeted" 
+  fi 
+  if [ "${SELINUXTYPE}" = "${_policytype}" ]; then 
+    [ -f %{_file_context_file_pre} ] || cp -f %{_file_context_file} %{_file_context_file_pre} 
+  fi 
+fi 
+%{nil}
+-13: selinux_requires	
+Requires: selinux-policy >= %{_selinux_policy_version} 
+BuildRequires: pkgconfig(systemd) 
+BuildRequires: selinux-policy 
+BuildRequires: selinux-policy-devel 
+Requires(post): selinux-policy-base >= %{_selinux_policy_version} 
+Requires(post): libselinux-utils 
+Requires(post): policycoreutils 
+%if 0%{?fedora} || 0%{?rhel} > 7
+Requires(post): policycoreutils-python-utils 
+%else 
+Requires(post): policycoreutils-python 
+%endif 
+%{nil}
+-13: selinux_set_booleans("s:")	
+if [ -e /etc/selinux/config ]; then 
+  . /etc/selinux/config 
+fi 
+_policytype=%{-s*} 
+if [ -z "${_policytype}" ]; then 
+  _policytype="targeted" 
+fi 
+if [ -d "%{_selinux_store_policy_path}" ]; then 
+  LOCAL_MODIFICATIONS=$(%{_sbindir}/semanage boolean -E) 
+  if [ ! -f %_file_custom_defined_booleans ]; then 
+      /bin/echo "# This file is managed by macros.selinux-policy. Do not edit it manually" > %_file_custom_defined_booleans 
+  fi 
+  semanage_import='' 
+  for boolean in %*; do 
+      boolean_name=${boolean%=*} 
+      boolean_value=${boolean#*=} 
+      boolean_local_string=$(grep "$boolean_name$" <<<$LOCAL_MODIFICATIONS) 
+      if [ -n "$boolean_local_string" ]; then 
+          semanage_import="${semanage_import}\nboolean -m -$boolean_value $boolean_name" 
+          boolean_customized_string=$(grep "$boolean_name$" %_file_custom_defined_booleans | tail -n 1) 
+          if [ -n "$boolean_customized_string" ]; then 
+              /bin/echo $boolean_customized_string >> %_file_custom_defined_booleans 
+          else 
+              /bin/echo $boolean_local_string >> %_file_custom_defined_booleans 
+          fi 
+      else 
+          semanage_import="${semanage_import}\nboolean -m -$boolean_value $boolean_name" 
+          boolean_default_value=$(LC_ALL=C %{_sbindir}/semanage boolean -l | grep "^$boolean_name " | sed 's/[^(]*([^,]*, *\(on\|off\).*/\1/') 
+          /bin/echo "boolean -m --$boolean_default_value $boolean_name" >> %_file_custom_defined_booleans 
+      fi 
+  done; 
+  if %{_sbindir}/selinuxenabled && [ "${SELINUXTYPE}" = "${_policytype}" ]; then 
+      /bin/echo -e "$semanage_import" | %{_sbindir}/semanage import -S "${_policytype}" 
+  elif test -d /usr/share/selinux/"${_policytype}"/base.lst; then 
+      /bin/echo -e "$semanage_import" | %{_sbindir}/semanage import -S "${_policytype}" -N 
+  fi 
+fi 
+%{nil}
+-13: selinux_unset_booleans("s:")	
+if [ -e /etc/selinux/config ]; then 
+  . /etc/selinux/config 
+fi 
+_policytype=%{-s*} 
+if [ -z "${_policytype}" ]; then 
+  _policytype="targeted" 
+fi 
+if [ -d "%{_selinux_store_policy_path}" ]; then 
+  semanage_import='' 
+  for boolean in %*; do 
+      boolean_name=${boolean%=*} 
+      boolean_customized_string=$(grep "$boolean_name$" %_file_custom_defined_booleans | tail -n 1) 
+      if [ -n "$boolean_customized_string" ]; then 
+          awk "/$boolean_customized_string/ && !f{f=1; next} 1" %_file_custom_defined_booleans > %_file_custom_defined_booleans_tmp && mv %_file_custom_defined_booleans_tmp %_file_custom_defined_booleans 
+          if ! grep -q "$boolean_name$" %_file_custom_defined_booleans; then 
+              semanage_import="${semanage_import}\n${boolean_customized_string}" 
+          fi 
+      fi 
+  done; 
+  if %{_sbindir}/selinuxenabled && [ "${SELINUXTYPE}" = "${_policytype}" ]; then 
+      /bin/echo -e "$semanage_import" | %{_sbindir}/semanage import -S "${_policytype}" 
+  elif test -d /usr/share/selinux/"${_policytype}"/base.lst; then 
+      /bin/echo -e "$semanage_import" | %{_sbindir}/semanage import -S "${_policytype}" -N 
+  fi 
+fi 
+%{nil}
+-13: set_build_flags	
+  CFLAGS="${CFLAGS:-%{?build_cflags}}" ; export CFLAGS ; 
+  CXXFLAGS="${CXXFLAGS:-%{?build_cxxflags}}" ; export CXXFLAGS ; 
+  FFLAGS="${FFLAGS:-%{?build_fflags}}" ; export FFLAGS ; 
+  FCFLAGS="${FCFLAGS:-%{?build_fflags}}" ; export FCFLAGS ; 
+  LDFLAGS="${LDFLAGS:-%{?build_ldflags}}" ; export LDFLAGS
+-20: shescape	<builtin>
+-20: shrink	<builtin>
+-13: source_date_epoch_from_changelog	0
+-13: sources	%{lua: for i, s in ipairs(sources) do 
+  print(macros.shescape({s}).." ") end}
+-13: sparc	sparc sparcv8 sparcv9 sparcv9v sparc64 sparc64v
+-20: suffix	<builtin>
+-20: trace	<builtin>
+-20: u2p	<builtin>
+-20: uncompress	<builtin>
+-20: undefine	<builtin>
+-13: undefined	%{expand:%%{?%{1}:0}%%{!?%{1}:1}}
+-20: url2path	<builtin>
+-13: use_source_date_epoch_as_buildtime	0
+-20: verbose	<builtin>
+-20: warn	<builtin>
+-13: with	%{expand:%%{?with_%{1}:1}%%{!?with_%{1}:0}}
+-13: without	%{expand:%%{?with_%{1}:0}%%{!?with_%{1}:1}}
+======================== active 399 empty 0

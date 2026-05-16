@@ -119,7 +119,9 @@ impl SummaryEndsWithDot {
 
 impl<'ast> Visit<'ast> for SummaryEndsWithDot {
     fn visit_preamble(&mut self, node: &'ast PreambleItem<Span>) {
-        let Some((value, span)) = summary_literal(node) else { return };
+        let Some((value, span)) = summary_literal(node) else {
+            return;
+        };
         let trimmed = value.trim_end();
         if !trimmed.ends_with('.') {
             return;
@@ -134,13 +136,11 @@ impl<'ast> Visit<'ast> for SummaryEndsWithDot {
         // Locate the trailing dot inside the source line so the auto-fix
         // touches just the period.
         if let Some(source) = &self.source {
-            let line = &source
-                [span.start_byte.min(source.len())..span.end_byte.min(source.len())];
+            let line = &source[span.start_byte.min(source.len())..span.end_byte.min(source.len())];
             if let Some(val_start) = value_start_offset(line) {
                 let line_value = line[val_start..].trim_end();
                 if let Some(dot_byte_in_value) = line_value.rfind('.') {
-                    let abs_start =
-                        span.start_byte + val_start + dot_byte_in_value;
+                    let abs_start = span.start_byte + val_start + dot_byte_in_value;
                     let edit_span = Span::from_bytes(abs_start, abs_start + 1);
                     diag = diag.with_suggestion(Suggestion::new(
                         "remove the trailing period",
@@ -186,9 +186,13 @@ impl SummaryNotCapitalized {
 
 impl<'ast> Visit<'ast> for SummaryNotCapitalized {
     fn visit_preamble(&mut self, node: &'ast PreambleItem<Span>) {
-        let Some((value, span)) = summary_literal(node) else { return };
+        let Some((value, span)) = summary_literal(node) else {
+            return;
+        };
         let value = value.trim_start();
-        let Some(first) = value.chars().next() else { return };
+        let Some(first) = value.chars().next() else {
+            return;
+        };
         if !first.is_alphabetic() || !first.is_lowercase() {
             return;
         }
@@ -200,8 +204,7 @@ impl<'ast> Visit<'ast> for SummaryNotCapitalized {
         );
 
         if let Some(source) = &self.source {
-            let line = &source
-                [span.start_byte.min(source.len())..span.end_byte.min(source.len())];
+            let line = &source[span.start_byte.min(source.len())..span.end_byte.min(source.len())];
             if let Some(val_start) = value_start_offset(line) {
                 // Skip leading whitespace inside the value, then find the
                 // first character byte to replace.
@@ -214,10 +217,7 @@ impl<'ast> Visit<'ast> for SummaryNotCapitalized {
                 let replacement: String = first.to_uppercase().collect();
                 diag = diag.with_suggestion(Suggestion::new(
                     "capitalize the first letter",
-                    vec![Edit::new(
-                        Span::from_bytes(abs_first, abs_end),
-                        replacement,
-                    )],
+                    vec![Edit::new(Span::from_bytes(abs_first, abs_end), replacement)],
                     Applicability::MachineApplicable,
                 ));
             }
@@ -255,15 +255,15 @@ impl SummaryTooLong {
 
 impl<'ast> Visit<'ast> for SummaryTooLong {
     fn visit_preamble(&mut self, node: &'ast PreambleItem<Span>) {
-        let Some((value, span)) = summary_literal(node) else { return };
+        let Some((value, span)) = summary_literal(node) else {
+            return;
+        };
         let len = value.trim().chars().count();
         if len > MAX_SUMMARY_LEN {
             self.diagnostics.push(Diagnostic::new(
                 &TOO_LONG_METADATA,
                 Severity::Warn,
-                format!(
-                    "Summary is {len} chars long, recommended maximum is {MAX_SUMMARY_LEN}"
-                ),
+                format!("Summary is {len} chars long, recommended maximum is {MAX_SUMMARY_LEN}"),
                 span,
             ));
         }
@@ -296,10 +296,16 @@ impl NameInSummary {
 
 impl<'ast> Visit<'ast> for NameInSummary {
     fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
-        let Some(name) = package_name(spec) else { return };
+        let Some(name) = package_name(spec) else {
+            return;
+        };
         for item in &spec.items {
-            let rpm_spec::ast::SpecItem::Preamble(p) = item else { continue };
-            let Some((value, span)) = summary_literal(p) else { continue };
+            let rpm_spec::ast::SpecItem::Preamble(p) = item else {
+                continue;
+            };
+            let Some((value, span)) = summary_literal(p) else {
+                continue;
+            };
             if contains_word(value, name) {
                 self.diagnostics.push(Diagnostic::new(
                     &NAME_IN_SUMMARY_METADATA,
@@ -322,8 +328,8 @@ impl Lint for NameInSummary {
 }
 
 /// Case-insensitive whole-word substring search. We don't want to flag
-/// `Summary: postgresql-helper for postgres` on package `gres` — only
-/// when the package name appears as a separated word.
+/// `Summary: foobar-helper for foobar` on package `bar` — only when the
+/// package name appears as a separated word.
 fn contains_word(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
@@ -335,12 +341,10 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
     while let Some(found) = h[search_from..].find(&n) {
         let start = search_from + found;
         let end = start + n.len();
-        let prev_ok = start == 0
-            || !bytes[start - 1].is_ascii_alphanumeric()
-                && bytes[start - 1] != b'_';
-        let next_ok = end == bytes.len()
-            || !bytes[end].is_ascii_alphanumeric()
-                && bytes[end] != b'_';
+        let prev_ok =
+            start == 0 || !bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_';
+        let next_ok =
+            end == bytes.len() || !bytes[end].is_ascii_alphanumeric() && bytes[end] != b'_';
         if prev_ok && next_ok {
             return true;
         }

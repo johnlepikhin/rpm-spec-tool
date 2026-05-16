@@ -1,0 +1,3 @@
+[identity]
+name = "RHEL 9 (x86_64)"
+dist-tag = ".el9"

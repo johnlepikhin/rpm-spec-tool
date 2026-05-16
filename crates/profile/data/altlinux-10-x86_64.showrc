@@ -1,0 +1,770 @@
+ARCHITECTURE AND OS:
+build arch            : x86_64
+compatible build archs: x86_64 noarch
+build os              : Linux
+compatible build os's : Linux
+install arch          : x86_64
+install os            : Linux
+compatible archs      : x86_64 amd64 em64t athlon noarch i686 i586 i486 i386 fat
+compatible os's       : Linux
+
+RPMRC VALUES:
+archcolor             : 2
+optflags              : -O2 -g
+
+Features supported by rpmlib:
+    rpmlib(BuiltinLuaScripts) = 4.2.2-1
+    rpmlib(CompressedFileNames) = 3.0.4-1
+    rpmlib(ConcurrentAccess) = 4.1-1
+    rpmlib(ExplicitPackageProvide) = 4.0-1
+    rpmlib(FileCaps) = 4.6.1-1
+    rpmlib(FileDigests) = 4.6.0-1
+    rpmlib(HeaderLoadSortsTags) = 4.0.1-1
+    rpmlib(LargeFiles) = 4.12.0-1
+    rpmlib(PartialHardlinkSets) = 4.0.4-1
+    rpmlib(PayloadFilesHavePrefix) = 4.0-1
+    rpmlib(PayloadIsBzip2) = 3.0.5-1
+    rpmlib(PayloadIsLzma) = 4.4.2-1
+    rpmlib(PayloadIsXz) = 5.2-1
+    rpmlib(PayloadIsZstd) = 5.4.18-1
+    rpmlib(PosttransFiletriggers) = 4.0.4
+    rpmlib(RichDependencies) = 4.12.0-1
+    rpmlib(ScriptletExpansion) = 4.9.0-1
+    rpmlib(ScriptletInterpreterArgs) = 4.0.3-1
+    rpmlib(SetVersions) = 4.0.4-alt98
+    rpmlib(TildeInVersions) = 4.10.0-1
+    rpmlib(VersionedDependencies) = 3.0.3-1
+
+Macro path: /usr/lib/rpm/macros:/usr/lib/rpm/platform/%{_target}/macros:/usr/lib/rpm/macros.d/*:/usr/lib/rpm/alt/macros:/etc/rpm/macros.*:/etc/rpm/macros:/etc/rpm/%{_target}/macros:/etc/rpm/macros.d/*:~/.rpmmacros
+
+========================
+-14: EVR	%{?epoch:%epoch:}%{version}-%{release}
+-14: ___build_args	-e
+-14: ___build_cmd	%{?_sudo:%{_sudo} }%{?_remsh:%{_remsh} %{_remhost} }%{?_remsudo:%{_remsudo} }%{?_remchroot:%{_remchroot} %{_remroot} }%{___build_shell} %{___build_args}
+-14: ___build_post	exit 0
+-14: ___build_pre	
+	export RPM_SOURCE_DIR="%{u2p:%_sourcedir}"
+	export RPM_BUILD_DIR="%{u2p:%_builddir}"
+	export RPM_OPT_FLAGS="%optflags"
+	export RPM_ARCH="%_arch"
+	export RPM_OS="%_os"
+	export RPM_TARGET_ARCH="%_target_cpu"
+	export RPM_TARGET_OS="%_target_os"
+	export RPM_DOC_DIR="%_docdir"
+	export RPM_PACKAGE_NAME="%name"
+	export RPM_PACKAGE_VERSION="%version"
+	export RPM_PACKAGE_RELEASE="%release"
+	export RPM_BUILD_ROOT="%{u2p:%buildroot}"
+	%{?_check_contents_method:export RPM_CHECK_CONTENTS_METHOD="%_check_contents_method"}
+	%{?_cleanup_method:export RPM_CLEANUP_METHOD="%_cleanup_method"}
+	%{?_compress_method:export RPM_COMPRESS_METHOD="%_compress_method"}
+	%{?_fixup_method:export RPM_FIXUP_METHOD="%_fixup_method"}
+	%{?_verify_elf_method:export RPM_VERIFY_ELF_METHOD="%_verify_elf_method"}
+	%{?_verify_info_method:export RPM_VERIFY_INFO_METHOD="%_verify_info_method"}
+	%{?_findreq_method:export RPM_FINDREQ_METHOD="%_findreq_method"}
+	%{?_findprov_method:export RPM_FINDPROV_METHOD="%_findprov_method"}
+	%{?_check_contents_topdir:export RPM_CHECK_CONTENTS_TOPDIR="%_check_contents_topdir"}
+	%{?_cleanup_topdir:export RPM_CLEANUP_TOPDIR="%_cleanup_topdir"}
+	%{?_compress_topdir:export RPM_COMPRESS_TOPDIR="%_compress_topdir"}
+	%{?_fixup_topdir:export RPM_FIXUP_TOPDIR="%_fixup_topdir"}
+	%{?_verify_elf_topdir:export RPM_VERIFY_ELF_TOPDIR="%_verify_elf_topdir"}
+	%{?_findreq_topdir:export RPM_FINDREQ_TOPDIR="%_findreq_topdir"}
+	%{?_findprov_topdir:export RPM_FINDPROV_TOPDIR="%_findprov_topdir"}
+	%{?_check_contents_skiplist:export RPM_CHECK_CONTENTS_SKIPLIST="%_check_contents_skiplist"}
+	%{?_cleanup_skiplist:export RPM_CLEANUP_SKIPLIST="%_cleanup_skiplist"}
+	%{?_compress_skiplist:export RPM_COMPRESS_SKIPLIST="%_compress_skiplist"}
+	%{?_debuginfo_skiplist:export RPM_DEBUGINFO_SKIPLIST="%_debuginfo_skiplist"}
+	%{?_fixup_skiplist:export RPM_FIXUP_SKIPLIST="%_fixup_skiplist"}
+	%{?_verify_elf_skiplist:export RPM_VERIFY_ELF_SKIPLIST="%_verify_elf_skiplist"}
+	%{?_findreq_skiplist:export RPM_FINDREQ_SKIPLIST="%_findreq_skiplist"}
+	%{?_findprov_skiplist:export RPM_FINDPROV_SKIPLIST="%_findprov_skiplist"}
+	%{?_findpackage_path:export RPM_FINDPACKAGE_PATH="%_findpackage_path"}
+	%{?_findprov_lib_path:export RPM_FINDPROV_LIB_PATH="%_findprov_lib_path"}
+	%{?_pkg_contents_index_all:export RPM_PKG_CONTENTS_INDEX_ALL="%_pkg_contents_index_all"}
+	%{?_pkg_contents_index_bin:export RPM_PKG_CONTENTS_INDEX_BIN="%_pkg_contents_index_bin"}
+	%{?_scripts_debug:export RPM_SCRIPTS_DEBUG="%_scripts_debug"}
+	%{?_keep_libtool_files:export RPM_KEEP_LIBTOOL_FILES="%_keep_libtool_files"}
+	%{?_brp_strip_debug:export RPM_BRP_STRIP_DEBUG="%_brp_strip_debug"}
+	%{?_brp_strip_none:export RPM_BRP_STRIP_NONE="%_brp_strip_none"}
+	
+	%{?__find_requires_filter:export RPM_FIND_REQUIRES_FILTER=$(cat <<'!FIND!REQUIRES!FILTER!'
+%__find_requires_filter
+!FIND!REQUIRES!FILTER!)}
+	%{?__find_provides_filter:export RPM_FIND_PROVIDES_FILTER=$(cat <<'!FIND!PROVIDES!FILTER!'
+%__find_provides_filter
+!FIND!PROVIDES!FILTER!)}
+	unset LANG LANGUAGE LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY LC_MESSAGES LC_PAPER LC_NAME LC_ADDRESS LC_TELEPHONE LC_MEASUREMENT LC_IDENTIFICATION LC_ALL ||:
+	%{?_build_lang:export LANG="%_build_lang"
+	export LANGUAGE="%_build_lang"
+	export LC_ALL="%_build_lang"}
+	
+	unset DISPLAY XAUTHORITY ||:
+	%{?_build_display:export DISPLAY="%_build_display"}
+	%{?_build_xauthority:export XAUTHORITY="%_build_xauthority"}
+	
+	export RPM_LIB="%_lib"
+	export RPM_LIBDIR="%_libdir"
+	export RPM_DATADIR="%_datadir"
+	
+	unset AUTOCONF_VERSION AUTOMAKE_VERSION LIBTOOL_VERSION GCC_VERSION ||:
+	%{?_autoconf_version:export AUTOCONF_VERSION="%_autoconf_version"}
+	%{?_automake_version:export AUTOMAKE_VERSION="%_automake_version"}
+	%{?_libtool_version:export LIBTOOL_VERSION="%_libtool_version"}
+	%{?_gcc_version:export GCC_VERSION="%_gcc_version"}
+	
+	export PAM_SO_SUFFIX="%{?_pam_so_suffix}"
+	export PAM_NAME_SUFFIX="%{?_pam_name_suffix}"
+	
+	export MAKEFLAGS="-w -O PAM_SO_SUFFIX=%{?_pam_so_suffix}"
+	
+	%{expand:%(cat /usr/lib/rpm/macros.d/*.env @SYSCONFIGDIR@/macros.d/*.env 2>/dev/null)}
+	
+	%{verbose:set -x}
+	umask 022
+	%__mkdir_p %{u2p:%_builddir}
+	cd %{u2p:%_builddir}
+%nil
+-14: ___build_shell	%{?_buildshell:%{_buildshell}}%{!?_buildshell:/bin/sh}
+-14: ___build_template	#!%{___build_shell}
+%{___build_pre}
+%{nil}
+-14: __aclocal	aclocal
+-14: __ar	ar
+-14: __arch_install_post	%{nil}
+-14: __as	as
+-14: __autoconf	autoconf
+-14: __autoheader	autoheader
+-14: __automake	automake
+-14: __autoreconf	%{warning %%__autoreconf is obsolete, use %%autoreconf instead}%autoreconf
+-14: __awk	gawk
+-14: __bzip2	/bin/bzip2
+-14: __cat	/bin/cat
+-14: __cc	gcc
+-14: __chgrp	/bin/chgrp
+-14: __chmod	/bin/chmod
+-14: __chown	/bin/chown
+-14: __cp	/bin/cp
+-14: __cpio	/bin/cpio
+-14: __cpp	gcc -E
+-14: __cxx	g++
+-14: __dbi_other	mp_mmapsize=128Mb mp_size=1Mb
+-14: __debug_install_post	
+   %{_rpmconfigdir}/find-debuginfo.sh %{?_missing_build_ids_terminate_build:--strict-build-id} %{?_include_minidebuginfo:-m} %{?_find_debuginfo_dwz_opts} %{?_find_debuginfo_opts} "%{_builddir}/%{?buildsubdir}"
+%{nil}
+-14: __file	/usr/bin/file
+-14: __file_context_path	/etc/selinux/%{__policy_tree}/contexts/files/file_contexts
+-14: __find_debuginfo_files	/usr/lib/rpm/find-debuginfo-files
+-14: __find_provides	%{_rpmconfigdir}/find-provides
+-14: __find_requires	%__find_requires     %{_rpmconfigdir}/find-requires
+-14: __find_scriptlet_requires	/usr/lib/rpm/find-scriptlet-requires
+-14: __gcc_version	%(gcc -dumpversion)
+-14: __gcc_version_base	%(	
+  maj=`echo %__gcc_version_major`;	
+  min=`echo %__gcc_version_minor`;	
+  if [ "$maj" -ge 5 ]; then	
+    echo -n "$maj";	
+  else	
+    echo -n "$maj.$min";	
+  fi	
+)
+-14: __gcc_version_major	%(gcc -dumpversion |cut -d. -f1)
+-14: __gcc_version_minor	%(gcc -dumpversion |cut -d. -f2)
+-14: __gcc_version_patch	%(gcc -dumpversion |cut -d. -f3)
+-14: __glibc_version	%(rpmquery --qf '%%{VERSION}' glibc)
+-14: __glibc_version_major	%(echo %__glibc_version |cut -d. -f1)
+-14: __glibc_version_minor	%(	
+	maj=`echo %__glibc_version_major`;	
+	min=`echo %__glibc_version|cut -d. -f2`;	
+	rel=`echo %__glibc_version|cut -d. -f3`;	
+	[ -n "$rel" ] || rel=0;	
+	if [ "$maj" -eq 2 -a "$min" -eq 1 -a "$rel" -gt 90 ]; then	
+		min=2	
+	fi	
+	echo -n "$min"	
+)
+-14: __gpg	/usr/bin/gpg
+-14: __gpg_sign_cmd	%{__gpg} 
+	gpg --no-verbose --no-armor 
+	%{?_gpg_digest_algo:--digest-algo %{_gpg_digest_algo}} 
+	--no-secmem-warning 
+	-u "%{_gpg_name}" -sbo %{__signature_filename} %{__plaintext_filename}
+-14: __grep	/bin/grep
+-14: __gzip	/bin/gzip
+-14: __id	/usr/bin/id
+-14: __install	/bin/install
+-14: __install_info	@__INSTALL_INFO@
+-14: __ld	/usr/bin/ld
+-14: __libtoolize	libtoolize
+-14: __ln_s	ln -s
+-14: __lzma	@__LZMA@
+-14: __make	/usr/bin/make
+-14: __mkdir	/bin/mkdir
+-14: __mkdir_p	/bin/mkdir -p
+-14: __mv	/bin/mv
+-14: __nm	/usr/bin/nm
+-14: __nprocs	%(N=`nproc`; [ "$N" -gt 0 ] 2>/dev/null && echo "$N" || echo 1)
+-14: __objcopy	/usr/bin/objcopy
+-14: __objdump	/usr/bin/objdump
+-14: __os_install_post	
+    %{_rpmconfigdir}/brp-%{_vendor}
+%{nil}
+-14: __patch	/usr/bin/patch
+-14: __perl	/usr/bin/perl
+-14: __pgp	@PGPBIN@
+-14: __plugindir	%{_libdir}/rpm-plugins
+-14: __policy_tree	%(sed -rn 's;^[[:blank:]]*SELINUXTYPE=([^[:blank:]]+).*$;\1;p' %{_sysconfdir}/selinux/config)
+-14: __python	/usr/bin/python
+-14: __python_version	%(%__python -c 'import sys; print "%%u.%%u" %% sys.version_info[0:2]' 2>/dev/null || echo unknown)
+-14: __ranlib	ranlib
+-14: __remsh	%{__rsh}
+-14: __rm	/bin/rm
+-14: __rsh	/usr/bin/rsh
+-14: __sed	/bin/sed
+-14: __spec_autodep_args	%{___build_args}
+-14: __spec_autodep_body	%{___build_body}
+-14: __spec_autodep_cmd	%{___build_cmd}
+-14: __spec_autodep_custom_post	%{nil}
+-14: __spec_autodep_custom_pre	%{nil}
+-14: __spec_autodep_post	
+%{___build_post}
+%{__spec_autodep_custom_post}
+%{nil}
+-14: __spec_autodep_pre	
+%{___build_pre}
+%{__spec_autodep_custom_pre}
+%{nil}
+-14: __spec_autodep_shell	%{___build_shell}
+-14: __spec_autodep_template	#!%{__spec_autodep_shell}
+%{__spec_autodep_pre}
+%{nil}
+-14: __spec_build_args	%{___build_args}
+-14: __spec_build_body	%{___build_body}
+-14: __spec_build_cmd	%{___build_cmd}
+-14: __spec_build_custom_post	%{nil}
+-14: __spec_build_custom_pre	%{nil}
+-14: __spec_build_post	
+%{___build_post}
+%{__spec_build_custom_post}
+%{nil}
+-14: __spec_build_pre	
+%{___build_pre}
+%{__spec_build_custom_pre}
+%{nil}
+-14: __spec_build_shell	%{___build_shell}
+-14: __spec_build_template	#!%{__spec_build_shell}
+%{__spec_build_pre}
+%{nil}
+-14: __spec_check_args	%{___build_args}
+-14: __spec_check_body	%{___build_body}
+-14: __spec_check_cmd	%{___build_cmd}
+-14: __spec_check_custom_post	%{nil}
+-14: __spec_check_custom_pre	%{nil}
+-14: __spec_check_post	
+%{___build_post}
+%{__spec_check_custom_post}
+%{nil}
+-14: __spec_check_pre	
+%{?!_enable_check:%{?_disable_check:echo 'Check is turned off by --disable check' >&2; exit 0}}
+%{?!_with_check:%{?_without_check:echo 'Check is turned off by --without check' >&2; exit 0}}
+%{?!_enable_test:%{?_disable_test:echo 'Check is turned off by --disable test' >&2; exit 0}}
+%{?!_with_test:%{?_without_test:echo 'Check is turned off by --without test' >&2; exit 0}}
+%{___build_pre}
+%{__spec_check_custom_pre}
+%nil
+-14: __spec_check_shell	%{___build_shell}
+-14: __spec_check_template	#!%{__spec_check_shell}
+%{__spec_check_pre}
+%{nil}
+-14: __spec_clean_args	%{___build_args}
+-14: __spec_clean_body	%{___build_body}
+-14: __spec_clean_cmd	%{___build_cmd}
+-14: __spec_clean_custom_post	%{nil}
+-14: __spec_clean_custom_pre	%{nil}
+-14: __spec_clean_post	
+%clean_buildroot
+%{___build_post}
+%{__spec_clean_custom_post}
+%nil
+-14: __spec_clean_pre	
+%{___build_pre}
+%{__spec_clean_custom_pre}
+%{nil}
+-14: __spec_clean_shell	%{___build_shell}
+-14: __spec_clean_template	#!%{__spec_clean_shell}
+%{__spec_clean_pre}
+%{nil}
+-14: __spec_install_args	%{___build_args}
+-14: __spec_install_body	%{___build_body}
+-14: __spec_install_cmd	%{___build_cmd}
+-14: __spec_install_custom_post	%{nil}
+-14: __spec_install_custom_pre	%{nil}
+-14: __spec_install_post	
+%{__arch_install_post}
+%{__os_install_post}
+%{__spec_install_custom_post}
+%{nil}
+-14: __spec_install_pre	
+%{___build_pre}
+%clean_buildroot
+%{__spec_install_custom_pre}
+%nil
+-14: __spec_install_shell	%{___build_shell}
+-14: __spec_install_template	#!%{__spec_install_shell}
+%{__spec_install_pre}
+%{nil}
+-14: __spec_prep_args	%{___build_args}
+-14: __spec_prep_body	%{___build_body}
+-14: __spec_prep_cmd	%{___build_cmd}
+-14: __spec_prep_custom_post	%{nil}
+-14: __spec_prep_custom_pre	%{nil}
+-14: __spec_prep_post	
+%{___build_post}
+%{__spec_prep_custom_post}
+%{nil}
+-14: __spec_prep_pre	
+%{___build_pre}
+%{__spec_prep_custom_pre}
+%{nil}
+-14: __spec_prep_shell	%{___build_shell}
+-14: __spec_prep_template	#!%{__spec_prep_shell}
+%{__spec_prep_pre}
+%{nil}
+-14: __spec_rmbuild_args	%{___build_args}
+-14: __spec_rmbuild_body	%{___build_body}
+-14: __spec_rmbuild_cmd	%{___build_cmd}
+-14: __spec_rmbuild_custom_post	%{nil}
+-14: __spec_rmbuild_custom_pre	%{nil}
+-14: __spec_rmbuild_post	
+%{___build_post}
+%{__spec_rmbuild_custom_post}
+%{nil}
+-14: __spec_rmbuild_pre	
+%{___build_pre}
+%{__spec_rmbuild_custom_pre}
+%{nil}
+-14: __spec_rmbuild_shell	%{___build_shell}
+-14: __spec_rmbuild_template	#!%{__spec_rmbuild_shell}
+%{__spec_rmbuild_pre}
+%{nil}
+-14: __ssh	/usr/bin/ssh
+-14: __strip	/usr/bin/strip
+-14: __subst	@__SUBST@
+-14: __tar	/bin/tar
+-14: __transaction_hdrcache	%{__plugindir}/hdrcache.so
+-14: __transaction_ima	%{__plugindir}/ima.so
+-14: __transaction_selinux	%{__plugindir}/selinux.so
+-14: __transaction_syslog	%{__plugindir}/syslog.so
+-14: __transaction_systemd_inhibit	%{__plugindir}/systemd_inhibit.so
+-14: __unzip	/usr/bin/unzip
+-14: __urlhelper_proxyopts	%{?_httpproxy:--proxy %{_httpproxy}%{?_httpport::%{_httpport}}}%{!?_httpproxy:%{nil}}
+-14: __urlhelpercmd	/usr/bin/curl
+-14: __urlhelperopts	--silent --show-error --fail --globoff --location -o
+-14: __vsflags	0xf0c00
+-14: __xz	/usr/bin/xz
+-14: __zstd	/usr/bin/zstd
+-14: _aclocaldir	%{_datadir}/aclocal
+-14: _altdir	%([ ! -f /usr/share/alternatives/functions ])/etc/alternatives/packages.d
+-14: _alterator_backend2dir	%_alterator_libdir/backend2
+-14: _alterator_backend3dir	%_alterator_libdir/backend3
+-14: _alterator_datadir	%_datadir/alterator
+-14: _alterator_libdir	%_libexecdir/alterator
+-14: _arch	x86_64
+-14: _binary_payload	w2.lzdio
+-14: _bindir	/usr/bin
+-14: _binfmtdir	/lib/binfmt.d
+-14: _build	%{_host}
+-14: _build_alias	%{_host_alias}
+-14: _build_arch	@RPMCANONARCH@
+-14: _build_cpu	%{_host_cpu}
+-14: _build_name_fmt	%%{ARCH}/%%{NAME}-%%{VERSION}-%%{RELEASE}.%%{ARCH}.rpm
+-14: _build_os	%{_host_os}
+-14: _build_vendor	%{_host_vendor}
+-14: _builddir	%{_topdir}/BUILD
+-14: _buildrequires_build	%nil
+-14: _buildrootdir	%{_tmppath}
+-14: _buildshell	/bin/sh
+-14: _cachedir	%{_var}/cache
+-14: _check_contents_method	default
+-14: _check_contents_skiplist	%nil
+-14: _check_contents_topdir	%nil
+-14: _cleanup_method	auto
+-14: _cleanup_skiplist	%nil
+-14: _cleanup_topdir	%nil
+-14: _compress_method	auto
+-14: _compress_skiplist	%nil
+-14: _compress_topdir	%_usr
+-14: _configure_gettext	--without-included-gettext
+-14: _configure_platform	%{expand:%%{?_configure_platform_%_target_cpu}%%{!?_configure_platform_%_target_cpu:%%_target_platform}}
+-14: _configure_platform_e2k12c	e2k-%{_vendor}-%{_target_os}%{_gnueabi}
+-14: _configure_platform_e2k16c	e2k-%{_vendor}-%{_target_os}%{_gnueabi}
+-14: _configure_platform_e2k1cp	e2k-%{_vendor}-%{_target_os}%{_gnueabi}
+-14: _configure_platform_e2k2c3	e2k-%{_vendor}-%{_target_os}%{_gnueabi}
+-14: _configure_platform_e2k4c	e2k-%{_vendor}-%{_target_os}%{_gnueabi}
+-14: _configure_platform_e2k8c	e2k-%{_vendor}-%{_target_os}%{_gnueabi}
+-14: _configure_platform_e2k8c2	e2k-%{_vendor}-%{_target_os}%{_gnueabi}
+-14: _configure_platform_e2kv4	e2k-%{_vendor}-%{_target_os}%{_gnueabi}
+-14: _configure_platform_e2kv5	e2k-%{_vendor}-%{_target_os}%{_gnueabi}
+-14: _configure_platform_e2kv6	e2k-%{_vendor}-%{_target_os}%{_gnueabi}
+-14: _configure_platform_noarch	%{_host_cpu}-%{_vendor}-%{_target_os}%{_gnueabi}
+-14: _configure_script	./configure
+-14: _configure_target	--build=%{_configure_platform} --host=%{_configure_platform}
+-14: _configure_update_config	readlink -e -- '%{_configure_script}' |xargs -ri dirname -- '{}' |xargs -ri find '{}' -type f '(' -name config.sub -or -name config.guess ')' -printf '%%h/\n' |sort -u |xargs -rn1 install -pm755 -- /usr/share/gnu-config/config.{sub,guess}
+-14: _controldir	%_sysconfdir/control.d/facilities
+-14: _datadir	/usr/share
+-14: _dbapi	3
+-14: _dbi_config	%{?__dbi_other}
+-14: _dbi_config_Packages	%{?_dbi_config} lockdbfd
+-14: _dbpath	%{_var}/lib/rpm
+-14: _dbpath_rebuild	%{_dbpath}
+-14: _debuginfo_skiplist	%nil
+-14: _defattr	%%defattr(-,root,root,755)
+-14: _default_patch_flags	--no-backup-if-mismatch
+-14: _defaultdocdir	%{_datadir}/doc
+-14: _desktopdir	%_datadir/applications
+-14: _emacslispdir	%{_datadir}/emacs/site-lisp
+-14: _exec_prefix	/usr
+-14: _fileattrsdir	%{_rpmconfigdir}/fileattrs
+-14: _findpackage_path	%nil
+-14: _findprov_lib_path	%nil
+-14: _findprov_skiplist	%_docdir/*
+-14: _findprov_topdir	%nil
+-14: _findreq_skiplist	%_docdir/*
+-14: _findreq_topdir	%nil
+-14: _fixperms	%{__chmod} -c -Rf u+rwX,go-w
+-14: _fixup_method	binconfig pkgconfig libtool desktop
+-14: _fixup_skiplist	%nil
+-14: _fixup_topdir	%nil
+-14: _gamesbindir	%{_prefix}/%{_gamesdir}
+-14: _gamesdatadir	%{_datadir}/%{_gamesdir}
+-14: _gamesdir	games
+-14: _gnu	-gnu
+-14: _gnueabi	-gnu
+-14: _hkp_keyserver	http://pgp.mit.edu
+-14: _hkp_keyserver_query	%{_hkp_keyserver}:11371/pks/lookup?op=get&search=0x
+-14: _host	x86_64-alt-linux-gnu
+-14: _host_alias	x86_64-alt-linux%{nil}
+-14: _host_cpu	x86_64
+-14: _host_os	linux
+-14: _host_vendor	alt
+-14: _iconsdir	%_datadir/icons
+-14: _includedir	/usr/include
+-14: _infodir	/usr/share/info
+-14: _initddir	%_initdir
+-14: _initdir	%{_sysconfdir}/rc.d/init.d
+-14: _initrddir	%_initdir
+-14: _install_file_context_path	%{__file_context_path}
+-14: _install_info	%install_info
+-14: _install_langs	all
+-14: _install_script_path	/sbin:/bin:/usr/sbin:/usr/bin:/usr/X11R6/bin
+-14: _instchangelog	5
+-14: _internal_gpg_path	/usr/lib/alt-gpgkeys
+-14: _lib	lib64
+-14: _libdir	/usr/lib64
+-14: _libexecdir	/usr/lib
+-14: _libsuff	64
+-14: _licensedir	%{_datadir}/license
+-14: _liconsdir	%_iconsdir/hicolor/48x48/apps
+-14: _localstatedir	/var/lib
+-14: _lockdir	%{_var}/lock
+-14: _locksubsysdir	%{_var}/lock/subsys
+-14: _logdir	%{_var}/log
+-14: _logrotatedir	%{_sysconfdir}/logrotate.d
+-14: _make_bin	make
+-14: _makeinstall_target	install
+-14: _man1dir	%_mandir/man1
+-14: _man2dir	%_mandir/man2
+-14: _man3dir	%_mandir/man3
+-14: _man4dir	%_mandir/man4
+-14: _man5dir	%_mandir/man5
+-14: _man6dir	%_mandir/man6
+-14: _man7dir	%_mandir/man7
+-14: _man8dir	%_mandir/man8
+-14: _man9dir	%_mandir/man9
+-14: _mandir	/usr/share/man
+-14: _menudir	%_prefix/lib/menu
+-14: _miconsdir	%_iconsdir/hicolor/16x16/apps
+-14: _modulesloaddir	/lib/modules-load.d
+-14: _niconsdir	%_iconsdir/hicolor/32x32/apps
+-14: _oldincludedir	/usr/include
+-14: _optlevel	2
+-14: _os	linux
+-14: _package_version	30005
+-14: _pgpbin	%{__pgp}
+-14: _pixmapsdir	%_datadir/pixmaps
+-14: _pkgconfigdir	%{_libdir}/pkgconfig
+-14: _prefix	/usr
+-14: _presetdir	/lib/systemd/system-preset
+-14: _priority_distbranch	p10
+-14: _query_all_fmt	%%{nvra}
+-14: _query_selector_match	default
+-14: _remove_install_info	%uninstall_info
+-14: _rpmconfigdir	%{getconfdir}
+-14: _rpmdir	%{_topdir}/RPMS
+-14: _rpmfilename	%{_build_name_fmt}
+-14: _rpmlibdir	%_prefix/lib/rpm
+-14: _rpmlock_path	%{_dbpath}/.rpm.lock
+-14: _rpmmacrosdir	%_rpmlibdir/macros.d
+-14: _runtimedir	%{_var}/run
+-14: _sbindir	/usr/sbin
+-14: _sharedstatedir	%{_var}/lib
+-14: _signature	gpg
+-14: _smp_mflags	-j${NPROCS:-%__nprocs}
+-14: _source_payload	w2.lzdio
+-14: _sourcedir	%{_topsrcdir}/SOURCES
+-14: _specdir	%{_topsrcdir}/SPECS
+-14: _spooldir	%{_var}/spool
+-14: _srcrpmdir	%{_topdir}/SRPMS
+-14: _sysconfdir	/etc
+-14: _sysctldir	/lib/sysctl.d
+-11: _target	x86_64-linux
+-14: _target_alias	%{_host_alias}
+-11= _target_cpu	x86_64
+-14: _target_libdir	%{expand:%%{?_target_libdir_%_target_cpu}%%{!?_target_libdir_%_target_cpu:%%_libdir}}
+-14: _target_libdir_noarch	/usr/lib
+-11= _target_os	linux
+-14: _target_platform	%{_target_cpu}-%{_vendor}-%{_target_os}%{_gnueabi}
+-14: _target_vendor	%{_host_vendor}
+-14: _tmpfilesdir	/lib/tmpfiles.d
+-14: _tmppath	%homedir/tmp
+-14: _topdir	%homedir/RPM
+-14: _topsrcdir	%{_topdir}
+-14: _udevhwdbdir	/lib/udev/hwdb.d
+-14: _udevrulesdir	/lib/udev/rules.d
+-14: _unitdir	/lib/systemd/system
+-14: _unpackaged_files_terminate_build	0
+-14: _update_menus_bin	%_bindir/update-menus
+-14: _urlhelper	%{__urlhelpercmd} %{?__urlhelper_localopts} %{?__urlhelper_proxyopts} %{__urlhelperopts}
+-14: _use_internal_dependency_generator	1
+-14: _usr	/usr
+-14: _usrsrc	%{_usr}/src
+-14: _var	/var
+-14: _vendor	alt
+-14: _verify_elf_method	default
+-14: _verify_elf_skiplist	%nil
+-14: _verify_elf_topdir	%nil
+-14: _verify_info_method	normal
+-14: _vsflags_build	%{__vsflags}
+-14: _vsflags_erase	%{__vsflags}
+-14: _vsflags_install	%{__vsflags}
+-14: _vsflags_query	%{__vsflags}
+-14: _vsflags_rebuilddb	0xc0c00
+-14: _vsflags_verify	%{__vsflags}
+-14: _x11appconfdir	%{_sysconfdir}/X11/app-defaults
+-14: _x11bindir	%{_bindir}
+-14: _x11datadir	%{_datadir}
+-14: _x11dir	%{_prefix}
+-14: _x11drvddir	%{_prefix}/libexec/X11/drv.d
+-14: _x11fontsdir	%{_datadir}/X11/fonts
+-14: _x11includedir	%{_includedir}
+-14: _x11libdir	%{_libdir}
+-14: _x11mandir	%{_mandir}
+-14: _x11modulesdir	%{_libdir}/X11/modules
+-14: _x11sysconfdir	%{_sysconfdir}/X11
+-14: _x11x11dir	%{_datadir}/X11
+-14: _x11x11libdir	%{_libdir}/X11
+-14: add_check_contents_skiplist	%global _check_contents_skiplist %_check_contents_skiplist %*
+-14: add_cleanup_skiplist	%global _cleanup_skiplist %_cleanup_skiplist %*
+-14: add_compress_skiplist	%global _compress_skiplist %_compress_skiplist %*
+-14: add_debuginfo_skiplist	%global _debuginfo_skiplist %_debuginfo_skiplist %*
+-14: add_findpackage_path	%global _findpackage_path %_findpackage_path %*
+-14: add_findprov_lib_path	%global _findprov_lib_path %_findprov_lib_path %*
+-14: add_findprov_skiplist	%global _findprov_skiplist %_findprov_skiplist %*
+-14: add_findreq_skiplist	%global _findreq_skiplist %_findreq_skiplist %*
+-14: add_fixup_skiplist	%global _fixup_skiplist %_fixup_skiplist %*
+-14: add_optflags(a:f:t:p:w:W:d:g:O:A:C:D:E:H:i:M:n:P:U:u:l:s:X:B:I:L:b:V:m:x:c:S:E:o:v:)	
+%global optflags %{optflags} %{**}
+-14: add_serial	%(rpmquery --qf '%%|SERIAL?{Serial: %%{SERIAL}}|' %1 2>/dev/null)
+-14: add_verify_elf_skiplist	%global _verify_elf_skiplist %_verify_elf_skiplist %*
+-14: amd	k6 athlon athlon_xp
+-14: arm	arm armv3l armv4b armv4l armv4tl armv5tl armv5tel armv5tejl armv6l armv6hl armv7l armv7hl armv7hnl armv8l armv8hl armh
+-14: autoreconf	autoreconf -fisv
+-14: brp_strip_debug	%global _brp_strip_debug %{?_brp_strip_debug} %*
+-14: brp_strip_none	%global _brp_strip_none %{?_brp_strip_none} %*
+-14: buildmulti	
+%global	__spec_install_pre	%{___build_pre}
+%build
+%clean_buildroot
+%{__spec_install_custom_pre}
+%nil
+-14: buildroot	%{_tmppath}/%{name}-buildroot
+-14: check_def	%{expand:%%{?_with_%{1}: %%{?_without_%{1}: %%{error: both _with_%{1} and _without_%{1} are defined}}}} 
+	%{expand:%%{?_enable_%{1}: %%{?_disable_%{1}: %%{error: both _enable_%{1} and _disable_%{1} are defined}}}}
+-14: clean_buildroot	%{?buildroot:%([ -n "$(echo %buildroot |tr -d /.)" ] && echo "%__chmod -Rf u+rwX -- %buildroot 2>/dev/null ||:; %__rm -rf -- %buildroot")}
+-14: clean_menus	%{warning %%clean_menus is obsolete and will be removed soon}update_menus_bin='%_update_menus_bin' && [ "$1" = 0 -a -x "$update_menus_bin" ] && "$update_menus_bin" ||:
+-14: cleanup_build	/usr/lib/rpm/brp-cleanup
+-14: compress_docs	/usr/lib/rpm/brp-compress
+-14: configure	
+  CFLAGS="${CFLAGS:-%optflags}"; export CFLAGS; 
+  CXXFLAGS="${CXXFLAGS:-%optflags}"; export CXXFLAGS; 
+  FFLAGS="${FFLAGS:-%optflags}"; export FFLAGS; 
+  [ -n "%{_ASFLAGS-}" ] || ASFLAGS="$(printf %%s '%optflags' |sed -r 's/(^|[[:space:]]+)-[^m][^[:space:]]*//g')"; export ASFLAGS; 
+  %{?_disable_static:export lt_cv_prog_cc_static_works=no ;} 
+  %{?_enable_static:export lt_cv_prog_cc_static_works=yes ;} 
+  export lt_cv_deplibs_check_method=pass_all ; 
+  %{_configure_update_config}; 
+  %{_configure_script} %{?_configure_target:%{_configure_target}} \
+ 	--prefix=%{_prefix} \
+	--exec-prefix=%{_exec_prefix} \
+	--bindir=%{_bindir} \
+	--sbindir=%{_sbindir} \
+	--sysconfdir=%{_sysconfdir} \
+	--datadir=%{_datadir} \
+	--includedir=%{_includedir} \
+	--libdir=%{_libdir} \
+	--libexecdir=%{_libexecdir} \
+	--localstatedir=%{_localstatedir} \
+	--sharedstatedir=%{_sharedstatedir} \
+	--mandir=%{_mandir} \
+	--infodir=%{_infodir} \
+	--disable-dependency-tracking \
+	%{?_configure_gettext:%{_configure_gettext}}
+-14: def_disable	%{expand:%%{!?_enable_%{1}: %%{!?_disable_%{1}: %%global _disable_%{1} --disable-%{1}}}}
+-14: def_enable	%{expand:%%{!?_enable_%{1}: %%{!?_disable_%{1}: %%global _enable_%{1} --enable-%{1}}}}
+-14: def_with	%{expand:%%{!?_with_%{1}: %%{!?_without_%{1}: %%global _with_%{1} --with-%{1}}}}
+-14: def_without	%{expand:%%{!?_with_%{1}: %%{!?_without_%{1}: %%global _without_%{1} --without-%{1}}}}
+-14: defined	%{expand:%%{?%{1}:1}%%{!?%{1}:0}}
+-14: disabled	%{expand:%%{?_disable_%{1}:1}%%{!?_disable_%{1}:0}}
+-14: distribution	ALT
+-14: e2k	e2k e2kv4 e2kv5 e2kv6 e2k4c e2k8c e2k1cp e2k8c2 e2k12c e2k16c e2k2c3
+-14: enabled	%{expand:%%{?_enable_%{1}:1}%%{!?_enable_%{1}:0}}
+-14: filter_from_provides	%global __find_provides_filter %{?!__find_provides_filter:%__sed}%{?__find_provides_filter} -e '%*'
+-14: filter_from_requires	%global __find_requires_filter %{?!__find_requires_filter:%__sed}%{?__find_requires_filter} -e '%*'
+-14: find_lang	/usr/lib/rpm/find-lang
+-14: force_disable	%{expand:%%global _disable_%{1} --disable-%{1}}
+-14: force_enable	%{expand:%%global _enable_%{1} --enable-%{1}}
+-14: force_update_alternatives	[ -x /usr/bin/alternatives-update ] && /usr/bin/alternatives-update ||:
+-14: force_with	%{expand:%%global _with_%{1} --with-%{1}}
+-14: force_without	%{expand:%%global _without_%{1} --without-%{1}}
+-14: get_NSVR	%(rpmquery --qf '%%{NAME}-%%|SERIAL?{%%{SERIAL}:}|%%{VERSION}-%%{RELEASE}' %1 2>/dev/null)
+-14: get_SVR	%(rpmquery --qf '%%|SERIAL?{%%{SERIAL}:}|%%{VERSION}-%%{RELEASE}' %1 2>/dev/null)
+-14: get_dep	%(rpmquery --qf '%%{NAME} >= %%|SERIAL?{%%{SERIAL}:}|%%{VERSION}-%%{RELEASE}' %1 2>/dev/null || echo '%1 >= unknown')
+-14: get_release	%(rpmquery --qf '%%{RELEASE}' %1 2>/dev/null)
+-14: get_serial	%(rpmquery --qf '%%{SERIAL}' %1 2>/dev/null)
+-14: get_version	%(rpmquery --qf '%%{VERSION}' %1 2>/dev/null)
+-14: if_disabled	%if %{expand:%%{?_disable_%{1}:1}%%{!?_disable_%{1}:0}}
+-14: if_enabled	%if %{expand:%%{?_enable_%{1}:1}%%{!?_enable_%{1}:0}}
+-14: if_with	%if %{expand:%%{?_with_%{1}:1}%%{!?_with_%{1}:0}}
+-14: if_without	%if %{expand:%%{?_without_%{1}:1}%%{!?_without_%{1}:0}}
+-14: ifdef	%if %{expand:%%{?%{1}:1}%%{!?%{1}:0}}
+-14: ifndef	%if %{expand:%%{?%{1}:0}%%{!?%{1}:1}}
+-14: install_info	/usr/sbin/install_info
+-14: intel	i386 i486 i586 i686 i786 i886 i986 pentium2 pentium3 pentium4
+-14: ix86	%intel %amd
+-14: make	%_make_bin
+-14: make_build	%_make_bin %_smp_mflags
+-14: make_compile	%make_build
+-14: make_install	%_make_bin INSTALL="%__install -p"
+-14: make_session	%nil
+-14: makeinstall	
+  %__make INSTALL="%__install -p" \
+	prefix=%{?buildroot:%{buildroot}}%{_prefix} \
+	exec_prefix=%{?buildroot:%{buildroot}}%{_exec_prefix} \
+	bindir=%{?buildroot:%{buildroot}}%{_bindir} \
+	sbindir=%{?buildroot:%{buildroot}}%{_sbindir} \
+	sysconfdir=%{?buildroot:%{buildroot}}%{_sysconfdir} \
+	datadir=%{?buildroot:%{buildroot}}%{_datadir} \
+	includedir=%{?buildroot:%{buildroot}}%{_includedir} \
+	libdir=%{?buildroot:%{buildroot}}%{_libdir} \
+	libexecdir=%{?buildroot:%{buildroot}}%{_libexecdir} \
+	localstatedir=%{?buildroot:%{buildroot}}%{_localstatedir} \
+	sharedstatedir=%{?buildroot:%{buildroot}}%{_sharedstatedir} \
+	mandir=%{?buildroot:%{buildroot}}%{_mandir} \
+	infodir=%{?buildroot:%{buildroot}}%{_infodir} \
+  %{?_makeinstall_target:%{_makeinstall_target}}
+-14: makeinstall_std	%make_install %{?_makeinstall_target:%{_makeinstall_target}} DESTDIR=%buildroot
+-14: mips	%{mips32} %{mipsn32} %{mips64}
+-14: mips32	mips mipsel mipsr6 mipsr6el
+-14: mips64	mips64 mips64el mips64r6 mips64r6el
+-14: mipseb	mips mipsr6 mipsn32 mips64 mips64r6
+-14: mipsel	mipsel mipsr6el mipsn32el mips64el mips64r6el
+-14: mipsn32	mipsn32 mipsn32el
+-14: nil	%{!?nil}
+-11: optflags	-O2 -g
+-14: optflags_core	-pipe -frecord-gcc-switches
+-14: optflags_debug	-g
+-14: optflags_default	%optflags_core %optflags_warnings %optflags_debug %{!?_enable_debug:%{optflags_optimization}}
+-14: optflags_fastmath	-ffast-math
+-14: optflags_kernel	%nil
+-14: optflags_nocpp	-fno-exceptions -fno-rtti
+-14: optflags_notraceback	-fomit-frame-pointer
+-14: optflags_optimization	-O%{_optlevel}
+-14: optflags_shared	-fPIC -DPIC
+-14: optflags_strict	-fstrict-aliasing
+-14: optflags_warnings	-Wall%{?_enable_Werror: -Werror}
+-14: packagerAddress	%(echo -E '%packager' |sed -e 's/.*<\([^<>]\+@[^<>]\+\)>.*/\1/')
+-14: packagerName	%(echo -E '%packager' |sed -e 's/[[:space:]]*<.*//')
+-14: post_control(s:)	
+if [ $1 -ge 2 ]; then 
+	/usr/sbin/control-restore %* 
+else 
+	for facility in %*; do 
+		/usr/sbin/control "$facility" %{-s*}%{!-s:public} 
+	done 
+fi 
+%nil
+-14: post_ldconfig	%{warning %%post_ldconfig is obsolete and will be removed soon}/sbin/ldconfig
+-14: post_ldconfig_lib	%{warning %%post_ldconfig_lib is obsolete and will be removed soon}/sbin/ldconfig
+-14: post_ldconfig_sys	%{warning %%post_ldconfig_sys is obsolete and will be removed soon}/sbin/post_ldconfig
+-14: post_service	/usr/sbin/post_service
+-14: postun_ldconfig	%{warning %%postun_ldconfig is obsolete and will be removed soon}/sbin/postun_ldconfig
+-14: pre_control	
+if [ $1 -ge 2 ]; then 
+	/usr/sbin/control-dump %* 
+fi 
+%nil
+-14: prefix	%_prefix
+-14: preun_service	/usr/sbin/preun_service
+-14: remove_optflags(a:f:t:p:w:W:d:g:O:A:C:D:E:H:i:M:n:P:U:u:l:s:X:B:I:L:b:V:m:x:c:S:E:o:v:)	
+%global optflags %(opt="%optflags"; for f in %{**}; do opt="$(echo "$opt"|sed -e "s/ $f//g;s/$f //g")"; done; echo "$opt")
+-14: rpm_check_field(p:)	%(foo=`rpmquery --qf '%%{%1}' %{-p:%{-p*}} 2>/dev/null`; [ "`expr '$foo' '>' '%2'`" -eq 1 ] && echo -n "$foo" || echo -n "%2")
+-14: set_autoconf_version	
+%global _autoconf_version %* 
+%global _buildrequires_build %_buildrequires_build autoconf_%_autoconf_version 
+%nil
+-14: set_automake_version	
+%global _automake_version %* 
+%global _buildrequires_build %_buildrequires_build automake_%_automake_version 
+%nil
+-14: set_check_contents_method	%global _check_contents_method %*
+-14: set_check_contents_skiplist	%global _check_contents_skiplist %*
+-14: set_check_contents_topdir	%global _check_contents_topdir %*
+-14: set_cleanup_method	%global _cleanup_method %*
+-14: set_cleanup_skiplist	%global _cleanup_skiplist %*
+-14: set_cleanup_topdir	%global _cleanup_topdir %*
+-14: set_compress_method	%global _compress_method %*
+-14: set_compress_skiplist	%global _compress_skiplist %*
+-14: set_compress_topdir	%global _compress_topdir %*
+-14: set_debuginfo_skiplist	%global _debuginfo_skiplist %*
+-14: set_findpackage_path	%global _findpackage_path %*
+-14: set_findprov_lib_path	%global _findprov_lib_path %*
+-14: set_findprov_skiplist	%global _findprov_skiplist %*
+-14: set_findprov_topdir	%global _findprov_topdir %*
+-14: set_findreq_skiplist	%global _findreq_skiplist %*
+-14: set_findreq_topdir	%global _findreq_topdir %*
+-14: set_fixup_method	%global _fixup_method %*
+-14: set_fixup_skiplist	%global _fixup_skiplist %*
+-14: set_fixup_topdir	%global _fixup_topdir %*
+-14: set_gcc_version	
+%global _gcc_version %* 
+%global _buildrequires_build %_buildrequires_build gcc%_gcc_version 
+%nil
+-14: set_libtool_version	
+%global _libtool_version %* 
+%global _buildrequires_build %_buildrequires_build libtool_%_libtool_version 
+%nil
+-14: set_verify_elf_method	%global _verify_elf_method %*
+-14: set_verify_elf_skiplist	%global _verify_elf_skiplist %*
+-14: set_verify_elf_topdir	%global _verify_elf_topdir %*
+-14: set_verify_info_method	%global _verify_info_method %*
+-14: subst_enable	%{expand:%%{?_enable_%{1}:%%{_enable_%{1}}}} %{expand:%%{?_disable_%{1}:%%{_disable_%{1}}}}
+-14: subst_with	%{expand:%%{?_with_%{1}:%%{_with_%{1}}}} %{expand:%%{?_without_%{1}:%%{_without_%{1}}}}
+-14: systemd_unitdir	%_unitdir
+-14: undefined	%{expand:%%{?%{1}:0}%%{!?%{1}:1}}
+-14: uninstall_info	/usr/sbin/uninstall_info
+-14: update_menus	%{warning %%update_menus is obsolete and will be removed soon}update_menus_bin='%_update_menus_bin' && [ -x "$update_menus_bin" ] && "$update_menus_bin" ||:
+-14: vendor	ALT Linux Team
+-14: warning	%{warn:WARNING: %*
+}
+-14: with	%{expand:%%{?_with_%{1}:1}%%{!?_with_%{1}:0}}
+-14: without	%{expand:%%{?_without_%{1}:1}%%{!?_without_%{1}:0}}
+======================== active 486 empty 0

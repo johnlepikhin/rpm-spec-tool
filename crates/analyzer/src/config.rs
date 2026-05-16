@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use rpm_spec::printer::PrinterConfig;
+use rpm_spec_profile::ProfileEntry;
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::Severity;
@@ -20,6 +21,15 @@ pub struct Config {
     pub format: FormatConfig,
     #[serde(default)]
     pub shellcheck: ShellcheckConfig,
+    /// Active distribution profile (built-in name or a key from
+    /// [`Self::profiles`]). When unset, the resolver falls back to the
+    /// `generic` built-in. Override-able via the `--profile` CLI flag.
+    #[serde(default)]
+    pub profile: Option<String>,
+    /// User-defined named profiles. See `doc/profiles.md` for the
+    /// semantics of layering (`extends` + `showrc-file` + overrides).
+    #[serde(default)]
+    pub profiles: BTreeMap<String, ProfileEntry>,
 }
 
 /// Configuration for the `shellcheck` umbrella lint (RPM200).
@@ -96,6 +106,21 @@ impl Config {
         toml::from_str(s)
     }
 
+    /// Resolve the active profile against this config.
+    ///
+    /// `base_dir` is the directory `.rpmspec.toml` lives in (used to
+    /// resolve relative `showrc-file` paths). `cli_override` is the
+    /// optional `--profile <name>` flag from the command line.
+    pub fn resolve_profile(
+        &self,
+        base_dir: &std::path::Path,
+        cli_override: Option<&str>,
+    ) -> Result<rpm_spec_profile::Profile, rpm_spec_profile::ResolveError> {
+        let section =
+            rpm_spec_profile::ProfileSection::new(self.profile.clone(), self.profiles.clone());
+        rpm_spec_profile::resolve_profile(&section, base_dir, cli_override)
+    }
+
     /// Resolve the configured severity for a lint by its kebab-case name,
     /// falling back to the rule's default if the user did not override it.
     pub fn severity_for(&self, lint_name: &str, default: Severity) -> Severity {
@@ -117,12 +142,7 @@ impl Config {
     ///   present in both `--allow` and `--deny` ends up at `Deny`.
     /// * **Within one list:** duplicates resolve to last-write-wins
     ///   (e.g. `--deny foo --deny foo` is no different from one flag).
-    pub fn apply_cli_overrides<S: AsRef<str>>(
-        &mut self,
-        allow: &[S],
-        warn: &[S],
-        deny: &[S],
-    ) {
+    pub fn apply_cli_overrides<S: AsRef<str>>(&mut self, allow: &[S], warn: &[S], deny: &[S]) {
         self.apply_overrides(allow, Severity::Allow);
         self.apply_overrides(warn, Severity::Warn);
         self.apply_overrides(deny, Severity::Deny);
@@ -167,7 +187,10 @@ preamble-align-column = 20
 
     #[test]
     fn to_printer_config_zero_means_single_space() {
-        let cfg = FormatConfig { preamble_align_column: 0, ..FormatConfig::default() };
+        let cfg = FormatConfig {
+            preamble_align_column: 0,
+            ..FormatConfig::default()
+        };
         assert!(cfg.to_printer_config().preamble_value_column.is_none());
     }
 

@@ -462,10 +462,21 @@ name = "rpm-spec-analyzer"
 version = "0.1.0"
 dependencies = [
  "rpm-spec",
+ "rpm-spec-profile",
  "serde",
  "serde_json",
  "thiserror",
  "time",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "rpm-spec-profile"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
  "toml",
  "tracing",
 ]

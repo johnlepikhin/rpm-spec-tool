@@ -1,13 +1,17 @@
 //! `lint` subcommand.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 use rpm_spec_analyzer::config::Config;
-use rpm_spec_analyzer::{Diagnostic, Severity, analyze};
+use rpm_spec_analyzer::profile::Profile;
+use rpm_spec_analyzer::{Diagnostic, Severity, analyze_with_profile};
 
 use crate::app::ColorChoice;
 use crate::config as cli_config;
@@ -54,6 +58,11 @@ pub struct Cmd {
     /// Also apply suggestion-grade (maybe-incorrect) fixes when `--fix` is set.
     #[arg(long)]
     pub fix_suggested: bool,
+
+    /// Override the active distribution profile. Wins over the
+    /// `profile = …` key in `.rpmspec.toml`.
+    #[arg(long = "profile", value_name = "NAME")]
+    pub profile: Option<String>,
 }
 
 impl Cmd {
@@ -68,9 +77,16 @@ impl Cmd {
         let has_overrides =
             !self.deny.is_empty() || !self.warn.is_empty() || !self.allow.is_empty();
 
+        // Profile resolution is memoised by `(base_dir, cli_override)`
+        // — profiles depend only on the config and `--profile` flag, not
+        // on the spec source. Resolving once per `(config, base_dir)`
+        // saves N parses of a 700+-entry showrc dump for batches that
+        // share a config.
+        let mut profile_cache: HashMap<PathBuf, Arc<Profile>> = HashMap::new();
+
         for mut source in sources {
-            let Some(cached) =
-                config_cache.load_or_report(&source.path, &mut any_io_error)
+            let Some((cached, base_dir)) =
+                config_cache.load_with_base_dir_or_report(&source.path, &mut any_io_error)
             else {
                 continue;
             };
@@ -97,7 +113,7 @@ impl Cmd {
                 let report = match fixer::fix_in_place(&mut source, config, level) {
                     Ok(r) => r,
                     Err(e) => {
-                        eprintln!("error fixing {}: {e:#}", source.display_name());
+                        eprintln!("error: fix failed for {}: {e:#}", source.display_name());
                         any_io_error = true;
                         continue;
                     }
@@ -124,22 +140,47 @@ impl Cmd {
                                     "broken pipe on stdout; downstream consumer closed early"
                                 );
                             } else {
-                                eprintln!("error writing fixed stdin: {e:#}");
+                                eprintln!("error: failed to write fixed stdin: {e:#}");
                                 any_io_error = true;
                                 continue;
                             }
                         }
-                    } else if let Err(e) =
-                        io::write_atomic(&source.path, &source.contents)
-                    {
-                        eprintln!("error writing {}: {e:#}", source.display_name());
+                    } else if let Err(e) = io::write_atomic(&source.path, &source.contents) {
+                        eprintln!("error: failed to write {}: {e:#}", source.display_name());
                         any_io_error = true;
                         continue;
                     }
                 }
             }
 
-            let (_outcome, diags) = analyze(&source.contents, config);
+            // Resolve the profile relative to the directory the
+            // `.rpmspec.toml` was discovered in, so `showrc-file =
+            // "vendor/..."` paths are interpreted consistently
+            // regardless of where the lint command was launched from.
+            // Memoised per `base_dir` so we don't reparse showrc once
+            // per spec in a batch.
+            let profile = match profile_cache.get(&base_dir) {
+                Some(p) => Arc::clone(p),
+                None => {
+                    let resolved = match config.resolve_profile(&base_dir, self.profile.as_deref())
+                    {
+                        Ok(p) => Arc::new(p),
+                        Err(e) => {
+                            eprintln!(
+                                "error: failed to resolve profile (base_dir={}): {e:#}",
+                                base_dir.display()
+                            );
+                            any_io_error = true;
+                            continue;
+                        }
+                    };
+                    profile_cache.insert(base_dir.clone(), Arc::clone(&resolved));
+                    resolved
+                }
+            };
+
+            let (_outcome, diags) =
+                analyze_with_profile(&source.contents, config, (*profile).clone());
             any_deny |= diags.iter().any(|d| d.severity == Severity::Deny);
             all_diagnostics.push((source, diags));
         }

@@ -1,5 +1,7 @@
 //! Lint trait and metadata.
 
+use rpm_spec_profile::Profile;
+
 use crate::config::Config;
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
 use crate::visit::Visit;
@@ -44,5 +46,15 @@ pub trait Lint: for<'ast> Visit<'ast> + Send {
     /// disable lists) copy the relevant fields here. Default is a no-op.
     fn set_config(&mut self, config: &Config) {
         let _ = config;
+    }
+
+    /// Called once after [`Self::set_config`] with the resolved
+    /// distribution profile (identity, macros, rpmlib features, license
+    /// and group whitelists). Rules that are profile-aware (RPM024,
+    /// RPM025, RPM050, … — to be added in follow-up PRs) copy the
+    /// fields they need from here. Default is a no-op so existing rules
+    /// don't need to opt in.
+    fn set_profile(&mut self, profile: &Profile) {
+        let _ = profile;
     }
 }

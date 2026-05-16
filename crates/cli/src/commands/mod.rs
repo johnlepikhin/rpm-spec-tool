@@ -4,6 +4,7 @@ pub mod format;
 pub mod lint;
 pub mod pretty;
 pub mod printer_config;
+pub mod profile;
 
 /// Upper bound on the per-level conditional indent. The printer
 /// renders the indent literally as `n * level` spaces; without a

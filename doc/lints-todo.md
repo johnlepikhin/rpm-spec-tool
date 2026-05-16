@@ -46,14 +46,34 @@ Phase 2 infrastructure landed in `rules/util.rs`: `PackageView { name, items, he
 
 Также в фазе 3 добавлена инфраструктура **parser-bridge** в `analyzer::session`: parser-эмитируемые диагностики (`rpmspec/E*`, `rpmspec/W*`) переэмиттятся как обычные `Diagnostic` с lint-id вида `parse/<code>`. Мэппинг покрывает 7 кодов (no-progress, unterminated-conditional, stray-percent, line-not-recognized, unterminated-macro, multiple-else, malformed-changelog-header). Severity управляется через `.rpmspec.toml` так же, как у обычных правил.
 
-### Phase 3 — deferred to dedicated PR
+### Phase 3 — distribution profile infrastructure (✅ landed)
 
-**Distribution profile system** (`profile = "fedora" | "opensuse" | "altlinux"` в `.rpmspec.toml`) отложен — это отдельный PR с дизайнерскими развилками: какой формат, какие списки лицензий/групп, как сочетается с per-lint config.
+Каркас профилей дистрибутивов реализован в крейте `rpm-spec-profile`
+(см. `doc/profiles.md`):
 
-С ним же придут:
-- RPM024 invalid-license (требует списка валидных лицензий из профиля),
-- RPM025 non-standard-group (требует списка валидных групп),
-- RPM030 requires-no-version (требует whitelist'а имён через профиль).
+- типы `Profile` / `Identity` / `MacroRegistry` (с provenance),
+  `LicenseList`, `GroupList`, `RpmlibFeatures`, `ArchInfo`;
+- парсер `rpm --showrc` (line-based, сохраняет multiline-тела и lua),
+  тестовая фикстура rhel7 на 733 макроса;
+- auto-detect identity из showrc (vendor / dist-tag / family по фикс.
+  приоритету altlinux > mageia > suse_version > rhel > fedora);
+- builtin-каталог (на старте только `generic` template);
+- секция `.rpmspec.toml`: `profile = "..."` + `[profiles.<name>]` с
+  `extends`, `showrc-file`, `[identity]`, `[macros]`, `[licenses]`,
+  `[groups]`;
+- CLI: глобальный `--profile <name>` для `lint`, новая подкоманда
+  `profile show [NAME] [--full]`;
+- `LintCtx`-аналог: `Lint::set_profile(&Profile)`, default-noop.
+
+Профильно-зависимые ленты (отдельные follow-up PR'ы):
+
+- RPM024 invalid-license — читает `profile.licenses` при `mode != Off`,
+- RPM025 non-standard-group — читает `profile.groups`,
+- RPM030 requires-no-version — whitelist имён через `profile`,
+- RPM050 hardcoded-paths — префиксы из `profile.macros` (`_bindir`, …)
+  вместо текущего захардкоженного списка,
+- RPM117/118 macro propagation — seed `MacroTable` literal-значениями
+  из `profile.macros`.
 
 ## Phase 4 — Style / source-text (✅ implemented)
 

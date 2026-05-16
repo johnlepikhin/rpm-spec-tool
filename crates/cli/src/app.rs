@@ -38,6 +38,8 @@ pub enum Command {
     Ast(commands::ast::Cmd),
     /// Lint and format-check in one invocation (CI shorthand).
     Check(commands::check::Cmd),
+    /// Inspect the resolved distribution profile.
+    Profile(commands::profile::Cmd),
 }
 
 #[derive(Debug, Args)]
@@ -60,6 +62,7 @@ impl Application {
             Command::Pretty(cmd) => cmd.run(color),
             Command::Ast(cmd) => cmd.run(),
             Command::Check(cmd) => cmd.run(color),
+            Command::Profile(cmd) => cmd.run(),
         }
     }
 }

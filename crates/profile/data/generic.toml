@@ -1,0 +1,21 @@
+# Built-in `generic` profile — empty template.
+#
+# A profile with no opinion on the target system. Identity is `Generic`,
+# macro registry is empty, license/group whitelists are off. It exists
+# so the resolver always has a base layer to apply showrc + user
+# overrides on top of.
+#
+# Real per-distribution profiles (fedora, rhel, altlinux, …) will land
+# in follow-up PRs as separate `data/<name>.toml` files.
+
+[identity]
+name = "generic"
+family = "generic"
+
+[licenses]
+mode = "off"
+allow = []
+
+[groups]
+mode = "off"
+allow = []

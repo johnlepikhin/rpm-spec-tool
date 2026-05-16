@@ -85,8 +85,7 @@ fn version_flag_exits_zero() {
 #[test]
 fn lint_default_warn_exits_zero() {
     let spec = write_temp(MISSING_CHANGELOG_SPEC);
-    let (code, _, stderr) =
-        run(&["lint", spec.path().to_str().unwrap()], None);
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0, "warn-only run must succeed; stderr={stderr}");
     assert!(stderr.contains("missing-changelog"));
 }
@@ -151,17 +150,11 @@ fn lint_stdin_pipes_through() {
 fn json_output_is_parseable() {
     let spec = write_temp(MISSING_CHANGELOG_SPEC);
     let (code, stdout, _) = run(
-        &[
-            "lint",
-            "--format",
-            "json",
-            spec.path().to_str().unwrap(),
-        ],
+        &["lint", "--format", "json", spec.path().to_str().unwrap()],
         None,
     );
     assert_eq!(code, 0);
-    let v: serde_json::Value =
-        serde_json::from_str(&stdout).expect("valid JSON");
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     let diags = v["files"][0]["diagnostics"].as_array().expect("array");
     assert!(diags.iter().any(|d| d["lint_id"] == "RPM001"));
 }
@@ -436,7 +429,10 @@ Patch1: missing.patch\n\
     );
     let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
-    assert!(stderr.contains("patch-defined-not-applied"), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("patch-defined-not-applied"),
+        "stderr:\n{stderr}"
+    );
     assert!(stderr.contains("Patch1"), "stderr:\n{stderr}");
 }
 
@@ -444,13 +440,11 @@ Patch1: missing.patch\n\
 // format subcommand — indent override
 // =====================================================================
 
-const SPEC_WITH_IF: &str =
-    "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+const SPEC_WITH_IF: &str = "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
 %if 0%{?rhel}\nRequires: rhel-pkg\n%endif\n\
 %description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n";
 
-const SPEC_NO_IF: &str =
-    "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
+const SPEC_NO_IF: &str = "Name: hello\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\nURL: https://e.org\n\
 %description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n";
 
 #[test]
@@ -459,9 +453,15 @@ fn format_default_keeps_conditionals_flush_left() {
     let (code, stdout, stderr) = run(&["format", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
     // Default indent = 0 → Requires: line is at column 1, no leading spaces.
-    assert!(stdout.contains("\nRequires:"), "expected flush-left Requires:\n{stdout}");
+    assert!(
+        stdout.contains("\nRequires:"),
+        "expected flush-left Requires:\n{stdout}"
+    );
     // No cosmetic warning when indent is not requested.
-    assert!(!stderr.contains("cosmetic"), "stderr should not warn: {stderr}");
+    assert!(
+        !stderr.contains("cosmetic"),
+        "stderr should not warn: {stderr}"
+    );
 }
 
 #[test]
@@ -493,7 +493,10 @@ fn format_indent_zero_no_warning() {
     );
     assert_eq!(code, 0);
     // --indent 0 is a no-op; no warning.
-    assert!(!stderr.contains("cosmetic"), "no warning expected: {stderr}");
+    assert!(
+        !stderr.contains("cosmetic"),
+        "no warning expected: {stderr}"
+    );
 }
 
 #[test]
@@ -503,7 +506,12 @@ fn format_indent_rejects_huge_value() {
     // printer with billions of spaces.
     let spec = write_temp(SPEC_WITH_IF);
     let (code, _, stderr) = run(
-        &["format", "--indent", "9999999", spec.path().to_str().unwrap()],
+        &[
+            "format",
+            "--indent",
+            "9999999",
+            spec.path().to_str().unwrap(),
+        ],
         None,
     );
     assert_ne!(code, 0, "expected non-zero exit for out-of-range --indent");
@@ -523,8 +531,7 @@ fn format_indent_warning_from_config_file() {
     let cfg_path = tmp.path().join("rpmspec.toml");
     // TOML keys use kebab-case (`conditional-indent`) to match the
     // serde rename in `analyzer::config::FormatConfig`.
-    std::fs::write(&cfg_path, "[format]\nconditional-indent = 4\n")
-        .expect("write config");
+    std::fs::write(&cfg_path, "[format]\nconditional-indent = 4\n").expect("write config");
     let spec_path = tmp.path().join("hello.spec");
     std::fs::write(&spec_path, SPEC_WITH_IF).expect("write spec");
 
@@ -565,8 +572,14 @@ fn format_check_with_indent_exits_one() {
         None,
     );
     assert_eq!(code, 1);
-    assert!(stderr.contains("cosmetic only"), "expected warning: {stderr}");
-    assert!(stderr.contains("would reformat"), "expected check-diff: {stderr}");
+    assert!(
+        stderr.contains("cosmetic only"),
+        "expected warning: {stderr}"
+    );
+    assert!(
+        stderr.contains("would reformat"),
+        "expected check-diff: {stderr}"
+    );
 }
 
 // =====================================================================
@@ -583,7 +596,10 @@ fn deep_conditional_nesting_warns() {
     );
     let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
-    assert!(stderr.contains("deep-conditional-nesting"), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("deep-conditional-nesting"),
+        "stderr:\n{stderr}"
+    );
 }
 
 #[test]
@@ -607,7 +623,10 @@ fn empty_conditional_branch_warns() {
     );
     let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
-    assert!(stderr.contains("empty-conditional-branch"), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("empty-conditional-branch"),
+        "stderr:\n{stderr}"
+    );
 }
 
 #[test]
@@ -619,7 +638,10 @@ fn unreachable_elif_warns() {
     );
     let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
-    assert!(stderr.contains("unreachable-elif-branch"), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("unreachable-elif-branch"),
+        "stderr:\n{stderr}"
+    );
 }
 
 // =====================================================================
@@ -647,7 +669,10 @@ fn double_negation_warns() {
     );
     let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
-    assert!(stderr.contains("double-negation-in-expr"), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("double-negation-in-expr"),
+        "stderr:\n{stderr}"
+    );
 }
 
 // =====================================================================
@@ -663,7 +688,10 @@ fn inequality_contradiction_warns() {
     );
     let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
     assert_eq!(code, 0);
-    assert!(stderr.contains("inequality-contradiction"), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("inequality-contradiction"),
+        "stderr:\n{stderr}"
+    );
 }
 
 #[test]
@@ -684,7 +712,10 @@ fn conditional_buildarch_warns_when_enabled() {
         None,
     );
     assert_eq!(code, 0);
-    assert!(stderr.contains("conditional-buildarch"), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("conditional-buildarch"),
+        "stderr:\n{stderr}"
+    );
 }
 
 // =====================================================================
@@ -790,8 +821,7 @@ fn pretty_renders_fixture_without_error() {
         "/../../tests/fixtures/pretty_sample.spec"
     );
     let source = std::fs::read_to_string(fixture).expect("read fixture");
-    let (code, stdout, stderr) =
-        run(&["pretty", "--color", "never", fixture], None);
+    let (code, stdout, stderr) = run(&["pretty", "--color", "never", fixture], None);
     assert_eq!(code, 0, "pretty on fixture must succeed; stderr={stderr}");
     let original = rpm_spec::parser::parse_str(&source).spec;
     let reprinted = rpm_spec::parser::parse_str(&stdout).spec;
@@ -1076,9 +1106,11 @@ fn parser_bridge_surfaces_warnings() {
 Provides: %{\n\
 %description\nb\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
-    let (code, _, stderr) =
-        run(&["lint", spec.path().to_str().unwrap()], None);
-    assert_eq!(code, 0, "warn-level parser diag doesn't fail; stderr={stderr}");
+    let (code, _, stderr) = run(&["lint", spec.path().to_str().unwrap()], None);
+    assert_eq!(
+        code, 0,
+        "warn-level parser diag doesn't fail; stderr={stderr}"
+    );
     assert!(
         stderr.contains("parse-unterminated-macro"),
         "expected parser bridge to surface W0004; got: {stderr}"
@@ -1115,4 +1147,315 @@ fn shellcheck_fixture_emits_rpm200_or_rpm201() {
         stderr.contains("shellcheck") || stderr.contains("RPM200") || stderr.contains("RPM201"),
         "expected shellcheck-related diagnostics; got: {stderr}"
     );
+}
+
+#[test]
+fn profile_show_default_is_generic() {
+    // `profile show` with no config + no args resolves the built-in
+    // `generic` baseline. No error, identifies the family explicitly.
+    let (code, stdout, _) = run(&["profile", "show"], None);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("name:     generic"),
+        "unexpected stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("family:   Generic"),
+        "unexpected stdout: {stdout}"
+    );
+}
+
+#[test]
+fn profile_show_with_inline_overrides() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = dir.path().join(".rpmspec.toml");
+    std::fs::write(
+        &cfg,
+        r#"
+profile = "custom"
+
+[profiles.custom.identity]
+family = "alt"
+vendor = "acme"
+"#,
+    )
+    .expect("write config");
+
+    let (code, stdout, stderr) = run(
+        &["profile", "show", "--config", cfg.to_str().unwrap()],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(stdout.contains("family:   Alt"), "stdout={stdout}");
+    assert!(stdout.contains("vendor:   acme"), "stdout={stdout}");
+    assert!(
+        stdout.contains("override"),
+        "expected override layer; stdout={stdout}"
+    );
+}
+
+#[test]
+fn profile_macros_filter_narrows_output() {
+    // `--filter optflags` keeps only macros whose name contains
+    // "optflags" (case-insensitive). RHEL bundles ~700 macros, so an
+    // unfiltered call would print hundreds of lines — filtered, single
+    // digits.
+    let (code, stdout, stderr) = run(
+        &["profile", "macros", "rhel-9-x86_64", "--filter", "optflags"],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(stdout.contains("optflags"), "stdout={stdout}");
+    assert!(
+        stdout.contains("matching"),
+        "header should mention filter; stdout={stdout}"
+    );
+    // No unrelated macros leaked through the filter.
+    assert!(
+        !stdout.contains("\n  dist "),
+        "filter let through `dist`; stdout={stdout}"
+    );
+}
+
+#[test]
+fn profile_macro_known_prints_value_and_exits_zero() {
+    let (code, stdout, stderr) = run(&["profile", "macro", "dist", "rhel-8-x86_64"], None);
+    assert_eq!(code, 0, "stderr={stderr}");
+    // RHEL 8 has literal `dist = .el8` in showrc.
+    assert!(stdout.starts_with("dist = .el8"), "stdout={stdout}");
+    assert!(stdout.contains("[showrc:"), "stdout={stdout}");
+}
+
+#[test]
+fn profile_macro_unknown_exits_two() {
+    let (code, _stdout, stderr) = run(
+        &[
+            "profile",
+            "macro",
+            "definitely-not-a-real-macro",
+            "rhel-9-x86_64",
+        ],
+        None,
+    );
+    assert_eq!(code, 2, "undefined macro must yield exit code 2");
+    assert!(
+        stderr.contains("not defined") && stderr.contains("rhel-9-x86_64"),
+        "stderr={stderr}"
+    );
+}
+
+#[test]
+fn profile_macro_multi_profile_renders_table() {
+    // Two or more explicit profiles → comparison table.
+    let (code, stdout, stderr) = run(
+        &[
+            "profile",
+            "macro",
+            "dist",
+            "rhel-8-x86_64",
+            "rhel-9-x86_64",
+            "altlinux-10-x86_64",
+        ],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    // Header names the macro and the profile count.
+    assert!(stdout.contains("`dist`"), "stdout={stdout}");
+    assert!(stdout.contains("3 profile"), "stdout={stdout}");
+    // One row per profile.
+    assert!(stdout.contains("rhel-8-x86_64"), "stdout={stdout}");
+    assert!(stdout.contains("rhel-9-x86_64"), "stdout={stdout}");
+    // ALT has no `dist` macro — must be reported as undefined.
+    assert!(
+        stdout.contains("altlinux-10-x86_64") && stdout.contains("(undefined)"),
+        "stdout={stdout}"
+    );
+}
+
+#[test]
+fn profile_common_existence_mode_lists_shared_names() {
+    let (code, stdout, stderr) = run(
+        &["profile", "common", "rhel-8-x86_64", "rhel-9-x86_64"],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stdout.contains("Common macros across 2 profile(s)"),
+        "stdout={stdout}"
+    );
+    // `__7zip` is present in every RHEL showrc — must appear in the
+    // intersection. Output is bare names (no `=`).
+    assert!(stdout.contains("__7zip"), "stdout={stdout}");
+    // Existence mode renders just names — no `=` on the data lines.
+    let data_lines: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.starts_with("  ") && !l.contains("no common"))
+        .collect();
+    assert!(!data_lines.is_empty(), "stdout={stdout}");
+    assert!(
+        data_lines.iter().all(|l| !l.contains('=')),
+        "existence mode must not print `=`; stdout={stdout}"
+    );
+}
+
+#[test]
+fn profile_common_by_value_mode_prints_values() {
+    let (code, stdout, stderr) = run(
+        &[
+            "profile",
+            "common",
+            "--mode",
+            "value",
+            "rhel-8-x86_64",
+            "rhel-9-x86_64",
+        ],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stdout.contains("Macros with identical values across 2 profile(s)"),
+        "stdout={stdout}"
+    );
+    // By-value mode prints `name = value` (no provenance tag).
+    assert!(
+        stdout.contains("__7zip") && stdout.contains("/usr/bin/7za"),
+        "stdout={stdout}"
+    );
+}
+
+#[test]
+fn profile_common_filter_narrows_output() {
+    // Bare invocation gives us the unfiltered total to pin against.
+    let (code_bare, stdout_bare, _) = run(
+        &["profile", "common", "rhel-8-x86_64", "rhel-9-x86_64"],
+        None,
+    );
+    assert_eq!(code_bare, 0);
+    // Header line shape: "# Common macros across 2 profile(s): N"
+    let bare_total: usize = stdout_bare
+        .lines()
+        .next()
+        .and_then(|line| line.rsplit(": ").next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("could not parse bare total from header: {stdout_bare}"));
+    assert!(
+        bare_total > 100,
+        "expected sizable intersection, got {bare_total}"
+    );
+
+    let (code, stdout, stderr) = run(
+        &[
+            "profile",
+            "common",
+            "--filter",
+            "build",
+            "rhel-8-x86_64",
+            "rhel-9-x86_64",
+        ],
+        None,
+    );
+    assert_eq!(code, 0, "stderr={stderr}");
+    // Header now reports `X total, Y matching "build"`. The X must
+    // match the unfiltered count from above — pins the single-pass
+    // intersection guarantee.
+    let header = stdout.lines().next().unwrap();
+    let expected_prefix = format!("# Common macros across 2 profile(s): {bare_total} total, ");
+    assert!(
+        header.starts_with(&expected_prefix),
+        "header `{header}` should start with `{expected_prefix}`"
+    );
+    // Parse the "matching" count and assert it is > 0 (there are
+    // definitely `___build_*` macros shared between RHEL 8/9).
+    let matching: usize = header
+        .rsplit_once(", ")
+        .and_then(|(_, suffix)| suffix.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("could not parse matching count from header: {header}"));
+    assert!(
+        matching > 0 && matching < bare_total,
+        "matching={matching}, bare={bare_total}"
+    );
+    // Body shows actual macro names containing the filter.
+    assert!(stdout.contains("___build_"), "stdout={stdout}");
+}
+
+#[test]
+fn profile_common_single_profile_rejected() {
+    let (code, _stdout, stderr) = run(&["profile", "common", "rhel-9-x86_64"], None);
+    assert_eq!(code, 2, "single-profile intersection should exit 2");
+    assert!(
+        stderr.contains("at least two") && stderr.contains("common"),
+        "stderr={stderr}"
+    );
+}
+
+#[test]
+fn profile_macro_default_shows_all_profiles() {
+    // No profile argument → default to a comparison table across every
+    // available built-in (plus user-defined profiles from the config,
+    // none in this no-config invocation).
+    let (code, stdout, stderr) = run(&["profile", "macro", "dist"], None);
+    assert_eq!(code, 0, "stderr={stderr}");
+    // Header reflects the 24 bundled built-ins.
+    assert!(stdout.contains("`dist`"), "stdout={stdout}");
+    assert!(stdout.contains("profile(s)"), "stdout={stdout}");
+    // Multiple profile rows present.
+    assert!(stdout.contains("rhel-9-x86_64"), "stdout={stdout}");
+    assert!(stdout.contains("altlinux-10-x86_64"), "stdout={stdout}");
+    // generic has no macros — must appear as undefined.
+    assert!(
+        stdout.contains("generic") && stdout.contains("(undefined)"),
+        "stdout={stdout}"
+    );
+}
+
+#[test]
+fn lint_unknown_profile_reports_error() {
+    let spec = write_temp(CLEAN_SPEC);
+    let (code, _, stderr) = run(
+        &[
+            "lint",
+            "--profile",
+            "does-not-exist",
+            spec.path().to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(code, 2, "unknown --profile is an IO/config error");
+    assert!(
+        stderr.contains("does-not-exist") && stderr.contains("not defined"),
+        "expected helpful error in stderr; got: {stderr}"
+    );
+}
+
+#[test]
+fn lint_with_valid_profile_passes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = dir.path().join(".rpmspec.toml");
+    std::fs::write(
+        &cfg,
+        r#"
+[profiles.acme]
+[profiles.acme.identity]
+family = "rhel"
+"#,
+    )
+    .expect("write config");
+
+    let spec_path = dir.path().join("hello.spec");
+    std::fs::write(&spec_path, CLEAN_SPEC).expect("write spec");
+
+    let (code, _, stderr) = run(
+        &[
+            "lint",
+            "--profile",
+            "acme",
+            "--config",
+            cfg.to_str().unwrap(),
+            spec_path.to_str().unwrap(),
+        ],
+        None,
+    );
+    // Clean spec → no diagnostics → exit 0 even with profile flag.
+    assert_eq!(code, 0, "stderr={stderr}");
 }

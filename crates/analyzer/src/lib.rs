@@ -16,11 +16,13 @@ pub mod rules;
 pub mod session;
 pub mod visit;
 
-pub use diagnostic::{
-    Applicability, Diagnostic, Edit, Label, LintCategory, Severity, Suggestion,
-};
+pub use diagnostic::{Applicability, Diagnostic, Edit, Label, LintCategory, Severity, Suggestion};
 pub use lint::{Lint, LintMetadata};
-pub use session::{LintSession, ParseOutcome, ParserDiagnostic, ParserSeverity, analyze, parse};
+pub use session::{
+    LintSession, ParseOutcome, ParserDiagnostic, ParserSeverity, analyze, analyze_with_profile,
+    parse,
+};
 pub use visit::Visit;
 
 pub use rpm_spec::ast::Span;
+pub use rpm_spec_profile as profile;

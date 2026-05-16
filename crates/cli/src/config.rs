@@ -20,9 +20,15 @@ use rpm_spec_analyzer::config::Config;
 pub struct ConfigCache {
     explicit: Option<PathBuf>,
     explicit_cache: Option<Arc<Config>>,
-    by_dir: HashMap<PathBuf, Arc<Config>>,
+    /// Directory the explicit config lives in — used as base for
+    /// relative paths in the config itself (e.g. `showrc-file`).
+    explicit_base_dir: Option<PathBuf>,
+    by_dir: HashMap<PathBuf, (Arc<Config>, PathBuf)>,
     discover_cache: HashMap<PathBuf, Option<PathBuf>>,
     default: Arc<Config>,
+    /// Base directory associated with the default (no-config) case.
+    /// Set once on first use of [`Self::load_for`].
+    default_base_dir: Option<PathBuf>,
 }
 
 impl ConfigCache {
@@ -36,9 +42,11 @@ impl ConfigCache {
         Self {
             explicit,
             explicit_cache: None,
+            explicit_base_dir: None,
             by_dir: HashMap::new(),
             discover_cache: HashMap::new(),
             default: Arc::new(Config::default()),
+            default_base_dir: None,
         }
     }
 
@@ -61,6 +69,25 @@ impl ConfigCache {
         }
     }
 
+    /// Like [`Self::load_or_report`] but also returns the directory the
+    /// config lives in (or the discovery starting directory if no
+    /// config file was found). Used by commands that need to resolve
+    /// paths declared **inside** the config (e.g. `profile.showrc-file`).
+    pub fn load_with_base_dir_or_report(
+        &mut self,
+        source_path: &Path,
+        any_io_error: &mut bool,
+    ) -> Option<(Arc<Config>, PathBuf)> {
+        match self.load_for_with_base_dir(source_path) {
+            Ok(pair) => Some(pair),
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                *any_io_error = true;
+                None
+            }
+        }
+    }
+
     /// Resolve the config for `source_path`. The same explicit `--config` is
     /// reused for every call; otherwise the nearest `.rpmspec.toml` walking
     /// upward from the source is looked up once per starting directory.
@@ -75,26 +102,54 @@ impl ConfigCache {
     /// Returns an error if the chosen `.rpmspec.toml` can't be read or
     /// doesn't deserialize.
     pub fn load_for(&mut self, source_path: &Path) -> Result<Arc<Config>> {
+        self.load_for_with_base_dir(source_path).map(|(c, _)| c)
+    }
+
+    /// Variant of [`Self::load_for`] returning both the config and the
+    /// directory it was found in (or the discovery starting directory
+    /// when the default config is used). Callers needing to interpret
+    /// paths *inside* the config (e.g. `showrc-file = "vendor/..."`)
+    /// use this to anchor those paths correctly.
+    pub fn load_for_with_base_dir(&mut self, source_path: &Path) -> Result<(Arc<Config>, PathBuf)> {
         if let Some(path) = self.explicit.clone() {
-            if let Some(cached) = &self.explicit_cache {
-                return Ok(Arc::clone(cached));
+            if let (Some(cached), Some(base)) = (&self.explicit_cache, &self.explicit_base_dir) {
+                return Ok((Arc::clone(cached), base.clone()));
             }
             let cfg = Arc::new(load_from(&path)?);
+            let base = path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
             self.explicit_cache = Some(Arc::clone(&cfg));
-            return Ok(cfg);
+            self.explicit_base_dir = Some(base.clone());
+            return Ok((cfg, base));
         }
 
         let start_dir = canonicalize_or_keep(&start_dir_for(source_path));
-        if let Some(cached) = self.by_dir.get(&start_dir) {
-            return Ok(Arc::clone(cached));
+        if let Some((cfg, base)) = self.by_dir.get(&start_dir) {
+            return Ok((Arc::clone(cfg), base.clone()));
         }
         let found = self.discover_with_memo(&start_dir);
-        let cfg = match found {
-            Some(path) => Arc::new(load_from(&path)?),
-            None => Arc::clone(&self.default),
+        let (cfg, base) = match found {
+            Some(ref path) => {
+                let cfg = Arc::new(load_from(path)?);
+                let base = path
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| start_dir.clone());
+                (cfg, base)
+            }
+            None => {
+                let base = self
+                    .default_base_dir
+                    .get_or_insert_with(|| start_dir.clone())
+                    .clone();
+                (Arc::clone(&self.default), base)
+            }
         };
-        self.by_dir.insert(start_dir, Arc::clone(&cfg));
-        Ok(cfg)
+        self.by_dir
+            .insert(start_dir, (Arc::clone(&cfg), base.clone()));
+        Ok((cfg, base))
     }
 
     /// Walk upward from `start`, memoizing the answer for every directory

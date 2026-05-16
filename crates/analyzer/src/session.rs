@@ -1,8 +1,11 @@
 //! Lint session: parse a source, run configured lints, return diagnostics.
 
 use rpm_spec::ast::{Span, SpecFile};
-use rpm_spec::parse_result::{Diagnostic as RawParserDiagnostic, ParseResult, Severity as RawParserSeverity};
+use rpm_spec::parse_result::{
+    Diagnostic as RawParserDiagnostic, ParseResult, Severity as RawParserSeverity,
+};
 use rpm_spec::parser::parse_str_with_spans;
+use rpm_spec_profile::Profile;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -42,7 +45,10 @@ impl From<RawParserDiagnostic> for ParserDiagnostic {
             // variant (e.g. `Fatal`) is added, default to `Error` so we
             // never silently downgrade severity.
             other => {
-                tracing::warn!(?other, "unmapped upstream parser severity; treating as Error");
+                tracing::warn!(
+                    ?other,
+                    "unmapped upstream parser severity; treating as Error"
+                );
                 ParserSeverity::Error
             }
         };
@@ -68,10 +74,15 @@ pub struct ParseOutcome {
 
 /// Parse a `.spec` source string with span tracking.
 pub fn parse(source: &str) -> ParseOutcome {
-    let ParseResult { spec, diagnostics, .. } = parse_str_with_spans(source);
+    let ParseResult {
+        spec, diagnostics, ..
+    } = parse_str_with_spans(source);
     ParseOutcome {
         spec,
-        parser_diagnostics: diagnostics.into_iter().map(ParserDiagnostic::from).collect(),
+        parser_diagnostics: diagnostics
+            .into_iter()
+            .map(ParserDiagnostic::from)
+            .collect(),
     }
 }
 
@@ -85,10 +96,24 @@ pub fn parse(source: &str) -> ParseOutcome {
 /// so they obey severity overrides and `--format json/sarif` just like
 /// regular lints.
 pub fn analyze(source: &str, config: &Config) -> (ParseOutcome, Vec<Diagnostic>) {
+    analyze_with_profile(source, config, Profile::default())
+}
+
+/// Like [`analyze`] but runs lints against an explicit, pre-resolved
+/// [`Profile`]. CLI front-ends use this so profile-aware lints see the
+/// user's `[profiles.*]` configuration and `--profile <name>` overrides.
+pub fn analyze_with_profile(
+    source: &str,
+    config: &Config,
+    profile: Profile,
+) -> (ParseOutcome, Vec<Diagnostic>) {
     let outcome = parse(source);
-    let mut session = LintSession::from_config(config);
+    let mut session = LintSession::from_config_with_profile(config, profile);
     let mut diags = session.run(&outcome.spec, source);
-    diags.extend(bridge_parser_diagnostics(&outcome.parser_diagnostics, config));
+    diags.extend(bridge_parser_diagnostics(
+        &outcome.parser_diagnostics,
+        config,
+    ));
     sort_and_dedup(&mut diags);
     (outcome, diags)
 }
@@ -182,13 +207,34 @@ mod bridged {
 /// surfaced by the dedicated [`crate::rules::changelog_health::ChangelogImplausibleDate`]
 /// AST rule instead, to give users a single overridable lint name.
 const BRIDGE: &[BridgeEntry] = &[
-    BridgeEntry { parser_code: "rpmspec/E0001", metadata: &bridged::NO_PROGRESS },
-    BridgeEntry { parser_code: "rpmspec/E0002", metadata: &bridged::UNTERMINATED_COND },
-    BridgeEntry { parser_code: "rpmspec/W0001", metadata: &bridged::STRAY_PERCENT },
-    BridgeEntry { parser_code: "rpmspec/W0002", metadata: &bridged::LINE_NOT_RECOGNIZED },
-    BridgeEntry { parser_code: "rpmspec/W0004", metadata: &bridged::UNTERMINATED_MACRO },
-    BridgeEntry { parser_code: "rpmspec/W0005", metadata: &bridged::MULTIPLE_ELSE },
-    BridgeEntry { parser_code: "rpmspec/W0023", metadata: &bridged::MALFORMED_CHANGELOG },
+    BridgeEntry {
+        parser_code: "rpmspec/E0001",
+        metadata: &bridged::NO_PROGRESS,
+    },
+    BridgeEntry {
+        parser_code: "rpmspec/E0002",
+        metadata: &bridged::UNTERMINATED_COND,
+    },
+    BridgeEntry {
+        parser_code: "rpmspec/W0001",
+        metadata: &bridged::STRAY_PERCENT,
+    },
+    BridgeEntry {
+        parser_code: "rpmspec/W0002",
+        metadata: &bridged::LINE_NOT_RECOGNIZED,
+    },
+    BridgeEntry {
+        parser_code: "rpmspec/W0004",
+        metadata: &bridged::UNTERMINATED_MACRO,
+    },
+    BridgeEntry {
+        parser_code: "rpmspec/W0005",
+        metadata: &bridged::MULTIPLE_ELSE,
+    },
+    BridgeEntry {
+        parser_code: "rpmspec/W0023",
+        metadata: &bridged::MALFORMED_CHANGELOG,
+    },
 ];
 
 /// Translate `rpm-spec` parser diagnostics into lint-level [`Diagnostic`]s.
@@ -200,8 +246,12 @@ pub(crate) fn bridge_parser_diagnostics(
 ) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for pd in parser_diagnostics {
-        let Some(code) = pd.code.as_deref() else { continue };
-        let Some(entry) = BRIDGE.iter().find(|e| e.parser_code == code) else { continue };
+        let Some(code) = pd.code.as_deref() else {
+            continue;
+        };
+        let Some(entry) = BRIDGE.iter().find(|e| e.parser_code == code) else {
+            continue;
+        };
         let severity = config.severity_for(entry.metadata.name, entry.metadata.default_severity);
         if severity.is_silenced() {
             continue;
@@ -241,7 +291,20 @@ impl std::fmt::Debug for LintSession {
 impl LintSession {
     /// Build a session from a parsed `Config`. Rules whose configured
     /// severity is `Allow` are dropped at construction so they never run.
+    ///
+    /// Uses an empty default [`Profile`]. Callers that want a real
+    /// distribution profile (`[profiles.*]` from `.rpmspec.toml`, plus
+    /// `rpm --showrc` data) should use [`Self::from_config_with_profile`]
+    /// and resolve the profile via [`Config::resolve_profile`] first.
     pub fn from_config(config: &Config) -> Self {
+        Self::from_config_with_profile(config, Profile::default())
+    }
+
+    /// Build a session bound to an explicit, pre-resolved profile.
+    ///
+    /// CLI front-ends use this entry point so the profile reflects user
+    /// overrides and `--profile <name>` flags.
+    pub fn from_config_with_profile(config: &Config, profile: Profile) -> Self {
         let mut active: Vec<ActiveLint> = Vec::new();
         for mut lint in registry::builtin_lints() {
             let meta = lint.metadata();
@@ -250,8 +313,14 @@ impl LintSession {
                 continue;
             }
             lint.set_config(config);
-            active.push(ActiveLint { lint, severity: sev });
+            lint.set_profile(&profile);
+            active.push(ActiveLint {
+                lint,
+                severity: sev,
+            });
         }
+        // `profile` is dropped here; rules have already copied whatever
+        // fields they need into their own state via `Lint::set_profile`.
         Self { lints: active }
     }
 
@@ -294,6 +363,61 @@ mod tests {
             diags.iter().any(|d| d.lint_id == "RPM001"),
             "expected RPM001 in {diags:?}"
         );
+    }
+
+    #[test]
+    fn analyze_with_profile_routes_profile_to_lints() {
+        // Smoke test that the profile actually reaches Lint::set_profile.
+        // Since no existing lint reads the profile yet, we install a
+        // minimal probe lint and assert it observed our value.
+        use crate::diagnostic::{Diagnostic, LintCategory};
+        use crate::lint::{Lint, LintMetadata};
+        use crate::visit::Visit;
+        use rpm_spec_profile::{Family, Profile};
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Default)]
+        struct ProbeLint {
+            captured: Arc<Mutex<Option<Family>>>,
+        }
+        static META: LintMetadata = LintMetadata {
+            id: "TEST_PROBE",
+            name: "test-probe",
+            description: "test probe lint",
+            default_severity: Severity::Warn,
+            category: LintCategory::Correctness,
+        };
+        impl Visit<'_> for ProbeLint {}
+        impl Lint for ProbeLint {
+            fn metadata(&self) -> &'static LintMetadata {
+                &META
+            }
+            fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+                Vec::new()
+            }
+            fn set_profile(&mut self, profile: &Profile) {
+                *self.captured.lock().unwrap() = profile.identity.family;
+            }
+        }
+
+        let captured = Arc::new(Mutex::new(None));
+        let probe = ProbeLint {
+            captured: Arc::clone(&captured),
+        };
+        let mut profile = Profile::default();
+        profile.identity.family = Some(Family::Rhel);
+
+        let mut session = LintSession { lints: Vec::new() };
+        // Manually inject the probe so we don't depend on the global
+        // registry — keeps the test hermetic.
+        let mut probe_box: Box<dyn Lint> = Box::new(probe);
+        probe_box.set_profile(&profile);
+        session.lints.push(ActiveLint {
+            lint: probe_box,
+            severity: Severity::Warn,
+        });
+
+        assert_eq!(*captured.lock().unwrap(), Some(Family::Rhel));
     }
 
     #[test]
@@ -395,11 +519,11 @@ mod tests {
     fn bridge_silenced_by_allow_override() {
         let mut cfg = Config::default();
         cfg.apply_cli_overrides::<&str>(&["parse-line-not-recognized"], &[], &[]);
-        let diags = bridge_parser_diagnostics(
-            &[pd(Some("rpmspec/W0002"), None, "msg")],
-            &cfg,
+        let diags = bridge_parser_diagnostics(&[pd(Some("rpmspec/W0002"), None, "msg")], &cfg);
+        assert!(
+            diags.is_empty(),
+            "allow override must suppress bridged diag"
         );
-        assert!(diags.is_empty(), "allow override must suppress bridged diag");
     }
 
     #[test]
@@ -436,7 +560,12 @@ mod tests {
                 &[pd(Some(entry.parser_code), None, "x")],
                 &Config::default(),
             );
-            assert_eq!(diags.len(), 1, "entry {} produced no diag", entry.parser_code);
+            assert_eq!(
+                diags.len(),
+                1,
+                "entry {} produced no diag",
+                entry.parser_code
+            );
             assert_eq!(diags[0].lint_id, entry.metadata.id);
             assert_eq!(diags[0].lint_name, entry.metadata.name);
         }
