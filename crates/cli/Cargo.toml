@@ -27,6 +27,7 @@ toml.workspace       = true
 tracing.workspace    = true
 
 clap               = { version = "4", features = ["derive"] }
+clap_complete      = "4.6"
 codespan-reporting = "0.12"
 serde_yaml_bw      = "2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

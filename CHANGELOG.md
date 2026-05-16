@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `completions <SHELL>` subcommand — emits a `clap_complete`-generated
+  completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish`
+  to stdout.
+
 ### Changed
 
 ### Fixed
