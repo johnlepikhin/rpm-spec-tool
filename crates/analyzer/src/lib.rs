@@ -10,6 +10,7 @@
 
 pub mod config;
 pub mod diagnostic;
+pub mod files;
 pub mod lint;
 pub mod registry;
 pub mod rules;

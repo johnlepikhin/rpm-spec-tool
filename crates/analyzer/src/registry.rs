@@ -156,5 +156,18 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         Box::new(rules::arch_policy::ArchPolicyContradiction::new()),
         Box::new(rules::changelog_health::ChangelogOrderWeekdayEvr::new()),
         Box::new(rules::spec_filename::SpecFilenameMismatch::new()),
+        // Phase 18 — `%files` rules built on FilesClassifier.
+        Box::new(rules::files_config::EtcFileNotConfig::new()),
+        Box::new(rules::files_config::ConfigUnderUsr::new()),
+        Box::new(rules::files_config::PlainConfigWithoutComment::new()),
+        Box::new(rules::files_license::LicenseFileMarkedDoc::new()),
+        Box::new(rules::files_devel::DevelFileInNonDevelPackage::new()),
+        Box::new(rules::files_locale::LocaleFileNotLang::new()),
+        Box::new(rules::files_duplicate::DuplicateFilesInFilesSections::new()),
+        Box::new(rules::files_standard::StandardDirOwned::new()),
+        Box::new(rules::files_standard::BroadFilesGlob::new()),
+        Box::new(rules::files_volatile::VarRunVarLockNotGhost::new()),
+        Box::new(rules::files_attr::SuspiciousAttrPermissions::new()),
+        Box::new(rules::files_debuginfo::DebuginfoPathInMainFiles::new()),
     ]
 }

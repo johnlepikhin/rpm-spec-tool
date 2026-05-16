@@ -103,4 +103,15 @@ pub mod source_version_consistency;
 pub mod spec_filename;
 pub mod subpackage_name_collision;
 
+// Phase 18 — `%files` rules built on `FilesClassifier`.
+pub mod files_attr;
+pub mod files_config;
+pub mod files_debuginfo;
+pub mod files_devel;
+pub mod files_duplicate;
+pub mod files_license;
+pub mod files_locale;
+pub mod files_standard;
+pub mod files_volatile;
+
 mod util;
