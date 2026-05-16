@@ -31,3 +31,47 @@ tempfile           = "3"
 [dev-dependencies]
 tempfile   = "3"
 serde_json = "1"
+
+# Packaging metadata.
+#
+# Asset path resolution differs between the two tools:
+#   * cargo-deb         — sources are relative to THIS manifest (crates/cli/),
+#                         hence the `../../README.md` prefix below.
+#   * cargo-generate-rpm — sources are relative to the workspace root (cwd of
+#                         `cargo generate-rpm -p crates/cli`), so paths are
+#                         bare `README.md` without a prefix.
+# Both tools treat `target/release/<bin>` specially and locate it in the
+# workspace target directory regardless of the manifest position.
+
+[package.metadata.deb]
+maintainer = "Evgenii Lepikhin <johnlepikhin@gmail.com>"
+copyright = "2026, Evgenii Lepikhin <johnlepikhin@gmail.com>"
+license-file = ["../../LICENSE-MIT", "0"]
+extended-description = """
+Pretty-printer and static analyzer CLI for RPM .spec files. Ships with 24
+built-in distribution profiles (generic, RHEL 8/9/10, Fedora-derived families,
+SUSE, ALT Linux variants) and an optional shellcheck integration for shell
+sections (%prep, %build, %install)."""
+section = "devel"
+priority = "optional"
+depends = "$auto"
+recommends = "shellcheck"
+assets = [
+    ["target/release/rpm-spec-tool", "usr/bin/",                                  "755"],
+    ["../../README.md",              "usr/share/doc/rpm-spec-tool/README.md",     "644"],
+    ["../../LICENSE-MIT",            "usr/share/doc/rpm-spec-tool/LICENSE-MIT",   "644"],
+    ["../../LICENSE-APACHE",         "usr/share/doc/rpm-spec-tool/LICENSE-APACHE","644"],
+]
+
+[package.metadata.generate-rpm]
+license = "MIT OR Apache-2.0"
+summary = "Pretty-printer and static analyzer for RPM .spec files"
+assets = [
+    { source = "target/release/rpm-spec-tool", dest = "/usr/bin/rpm-spec-tool",                          mode = "755" },
+    { source = "README.md",                    dest = "/usr/share/doc/rpm-spec-tool/README.md",         mode = "644", doc = true },
+    { source = "LICENSE-MIT",                  dest = "/usr/share/doc/rpm-spec-tool/LICENSE-MIT",       mode = "644", doc = true },
+    { source = "LICENSE-APACHE",               dest = "/usr/share/doc/rpm-spec-tool/LICENSE-APACHE",    mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.recommends]
+shellcheck = "*"
