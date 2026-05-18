@@ -29,6 +29,7 @@ pub mod autodetect;
 pub mod builtin;
 pub mod config_layer;
 pub mod macro_lexer;
+pub mod macro_variants;
 pub mod merge;
 pub mod overrides;
 pub mod resolve;
@@ -39,6 +40,7 @@ pub use config_layer::{
     ListOverride, MacroOverride, ProfileEntry, ProfileIdentityOverride, ProfileSection,
     TargetEntry, TargetProfileOverride,
 };
+pub use macro_variants::MacroVariants;
 pub use overrides::{CliDefine, DefineParseError, parse_define};
 pub use resolve::{ResolveError, ResolveOptions, resolve as resolve_profile, resolve_target_set};
 pub use types::{

@@ -81,6 +81,13 @@ pub(super) fn run(opts: CoverageOpts, config_override: Option<&Path>) -> Result<
         Err(e) => return e.into_exit(),
     };
     let resolved = ctx.resolved;
+    // `matrix coverage` is the only `matrix` subcommand that surfaces
+    // the variant-conditional vs. dead distinction. Pull the declared
+    // variants out of the config once and feed them to every spec's
+    // CoverageReport computation. Other matrix commands keep the
+    // variant-blind `compute()` shape — variants only refine the
+    // dead-vs-conditional classification, which is coverage-specific.
+    let macro_variants = ctx.config.macros.clone();
 
     let sources = io::read_sources(&opts.input.paths)?;
     let mut any_dead = false;
@@ -89,7 +96,12 @@ pub(super) fn run(opts: CoverageOpts, config_override: Option<&Path>) -> Result<
 
     for source in sources {
         let parsed = parse(&source.contents);
-        let report = CoverageReport::compute(&parsed.spec, &resolved, &opts.bcond.to_overrides());
+        let report = CoverageReport::compute_with_variants(
+            &parsed.spec,
+            &resolved,
+            &opts.bcond.to_overrides(),
+            &macro_variants,
+        );
         if report.dead_branches() > 0 {
             any_dead = true;
         }
@@ -175,11 +187,13 @@ fn write_branch<W: std::io::Write>(
     total_profiles: usize,
 ) -> Result<()> {
     let tag = if b.is_dead() {
-        " [DEAD]"
+        " [DEAD]".to_string()
     } else if b.is_universally_active() {
-        " [ALWAYS]"
+        " [ALWAYS]".to_string()
+    } else if b.is_conditional() {
+        format!(" [CONDITIONAL: {}]", format_reachable_under(&b.reachable_under))
     } else {
-        ""
+        String::new()
     };
     writeln!(
         out,
@@ -196,6 +210,14 @@ fn write_branch<W: std::io::Write>(
         "    inactive: {}",
         format_profile_list(&b.inactive_on, total_profiles)
     )?;
+    if !b.conditional_on.is_empty() {
+        writeln!(
+            out,
+            "    reachable when ({}): {}",
+            format_reachable_under(&b.reachable_under),
+            format_profile_list(&b.conditional_on, total_profiles)
+        )?;
+    }
     if !b.indeterminate_on.is_empty() {
         // Group profiles by their indeterminate reason so each reason
         // is printed once with the profile list that triggered it,
@@ -271,6 +293,22 @@ fn format_profile_list<S: AsRef<str>>(ids: &[S], total_profiles: usize) -> Strin
         .join(", ")
 }
 
+/// Render `macro → {values}` as `macro=v1,v2; macro2=v3`. Stable
+/// across runs because the underlying map is a `BTreeMap` (sorted by
+/// macro name) and the inner set is a `BTreeSet` (sorted by value).
+fn format_reachable_under(
+    reachable: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+) -> String {
+    reachable
+        .iter()
+        .map(|(name, values)| {
+            let joined: Vec<&str> = values.iter().map(String::as_str).collect();
+            format!("{name}={}", joined.join(","))
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn render_json(
     reports: &[(io::Source, CoverageReport)],
     target_set: &ResolvedTargetSet,
@@ -303,11 +341,14 @@ fn render_json(
                                 display: b.branch.display.as_str(),
                                 is_dead: b.is_dead(),
                                 is_universally_active: b.is_universally_active(),
+                                is_conditional: b.is_conditional(),
                                 active_on: &b.active_on,
                                 inactive_on: &b.inactive_on,
                                 indeterminate_on: &b.indeterminate_on,
                                 indeterminate_reasons: &b.indeterminate_reasons,
                                 indeterminate_groups: build_indeterminate_groups(b),
+                                conditional_on: &b.conditional_on,
+                                reachable_under: &b.reachable_under,
                             })
                             .collect(),
                     })
@@ -352,6 +393,11 @@ struct CoverageJsonBranch<'a> {
     display: &'a str,
     is_dead: bool,
     is_universally_active: bool,
+    /// True iff the branch is inactive under the current build but
+    /// reachable under at least one declared macro-variant value. See
+    /// the parallel `conditional_on` / `reachable_under` fields for
+    /// detail. Mutually exclusive with `is_dead`.
+    is_conditional: bool,
     active_on: &'a [String],
     inactive_on: &'a [String],
     indeterminate_on: &'a [String],
@@ -369,6 +415,18 @@ struct CoverageJsonBranch<'a> {
     /// share one reason. Omitted when no profile is indeterminate.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     indeterminate_groups: Vec<IndeterminateGroup>,
+    /// Sorted profile IDs where the branch is build-conditional —
+    /// inactive under the current `Profile.macros` but reachable
+    /// under at least one declared variant value. Omitted when no
+    /// `[macros.*]` variants are loaded or none apply.
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    conditional_on: &'a [String],
+    /// `macro → values` recording which variant values contribute to
+    /// reachability on at least one profile. Empty when
+    /// `conditional_on` is empty. Sorted by macro name (BTreeMap) and
+    /// by value (BTreeSet) for snapshot stability.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    reachable_under: &'a std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
 }
 
 #[derive(Debug, Serialize)]

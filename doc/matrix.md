@@ -427,6 +427,99 @@ from profile id to a human-readable explanation of why evaluation
 could not produce a definite verdict; it is populated only for
 profiles listed in `indeterminate_on`.
 
+### Macro variants
+
+Real-world specs select between *build editions* via macros the user
+sets at build time (`-D edition ent`, `-D pgsql_major 15`). Coverage
+without context can't distinguish:
+
+* **Genuinely dead code** — a branch no plausible build configuration
+  activates. Worth deleting.
+* **Build-conditional code** — a branch inactive under the current
+  build but reachable under another declared edition. Worth keeping.
+
+Declaring the allowed value set of a macro in `.rpmspec.toml` lets
+coverage tell those apart:
+
+```toml
+[macros.edition]
+values = ["ent", "std", "1c"]
+description = "Build edition selector"
+
+[macros.pgsql_major]
+values = ["13", "14", "15", "16", "17", "18"]
+```
+
+Each `[macros.<name>]` entry declares the value set for one macro.
+The schema is intentionally identical-shape to `[profiles.<name>]`
+and `[targets.<name>]` — same `name → table` model — so configs grow
+uniformly.
+
+When variants are declared, `matrix coverage` runs every branch that
+is inactive on every profile through a *cartesian product* of the
+declared variant values. A branch reachable on profile P under at
+least one variant combination is tagged `[CONDITIONAL: macro=value]`
+instead of `[DEAD]`, and a `reachable when` line lists the
+contributing (macro, value) pairs.
+
+```text
+line 30: %if "%{edition}" == "1c" [CONDITIONAL: edition=1c]
+  active: (none)
+  inactive: (all 23 profiles)
+  reachable when (edition=1c): (all 23 profiles)
+
+line 491: %if 0%{?obsolete_distro_macro} [DEAD]
+  active: (none)
+  inactive: (all 23 profiles)
+```
+
+The first branch is build-conditional (some `-D edition` value
+activates it). The second is genuinely dead — no declared variant
+references `obsolete_distro_macro`, so the tool has no evidence it's
+reachable.
+
+#### Interaction with `-D`
+
+* Without `-D` for a variant macro, coverage analyses every declared
+  variant value of that macro.
+* With `-D NAME VALUE` for a variant macro, the explicit value wins
+  for the current build's verdict (`active_on` / `inactive_on`); the
+  variant set still applies to the cartesian product for the
+  reachability check.
+* Values supplied via `-D` that are NOT in the declared variants
+  produce a warning but are not rejected — operators always have the
+  final word.
+
+#### Cartesian-product cap
+
+The cartesian product is bounded at 64 combinations per branch
+(`MAX_VARIANT_COMBINATIONS`). Configurations exceeding the cap log a
+`tracing::warn` and skip variant analysis for the affected branch
+(keeping the pre-variant verdict). Operators who hit the cap can:
+
+* Trim the variant value set for one macro.
+* Split the analysis into separate target sets with narrower variant
+  declarations.
+* Treat the cap as a sign the spec deserves a refactor (genuinely
+  needing 8⁴ combinations is rare).
+
+#### JSON shape
+
+Two additive fields land in each branch object:
+
+```json
+{
+  "is_conditional": true,
+  "conditional_on": ["rhel-9-x86_64"],
+  "reachable_under": { "edition": ["1c"] }
+}
+```
+
+`is_conditional` is `false` and the other two are omitted (via
+`#[serde(skip_serializing_if)]`) when no variant analysis fired —
+existing JSON consumers see no shape change unless they opt into the
+new fields.
+
 ## Explain mode
 
 `matrix explain` answers the focused question "why is this line / macro

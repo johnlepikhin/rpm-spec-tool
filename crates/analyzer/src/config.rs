@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use rpm_spec::printer::PrinterConfig;
-use rpm_spec_profile::{ProfileEntry, TargetEntry};
+use rpm_spec_profile::{MacroVariants, ProfileEntry, TargetEntry};
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::Severity;
@@ -100,6 +100,15 @@ pub struct Config {
     /// ignore this map. See `doc/matrix.md` for the resolution model.
     #[serde(default)]
     pub targets: BTreeMap<String, TargetEntry>,
+    /// Declared variant value sets for macros. `matrix coverage` uses
+    /// these to mark branches `[CONDITIONAL: macro=value]` when they
+    /// activate under at least one declared variant value, even if
+    /// the current build's macro definitions inactivate them. Macros
+    /// absent from this map have no variant information and are
+    /// classified purely by the current build's evaluation. See
+    /// `doc/matrix.md` § "Macro variants".
+    #[serde(default)]
+    pub macros: BTreeMap<String, MacroVariants>,
     /// "Warnings-as-errors" toggle — when `true`, any rule that
     /// resolves to [`Severity::Warn`] is promoted to [`Severity::Deny`]
     /// at runtime. Triggered from the CLI by `--deny warnings`
@@ -466,7 +475,10 @@ use_jit = "0"
             .get("product-2026q2")
             .expect("target set parsed");
         assert_eq!(target.profiles.len(), 2);
-        assert_eq!(target.defines.get("product_build").map(String::as_str), Some("1"));
+        assert_eq!(
+            target.defines.get("product_build").map(String::as_str),
+            Some("1")
+        );
         let e2k = target
             .profile_overrides
             .get("altlinux-10-e2k")

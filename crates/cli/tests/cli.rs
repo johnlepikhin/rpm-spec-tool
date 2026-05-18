@@ -3424,6 +3424,122 @@ defines = { foo_macro = "1" }
             "expected collapsed profile-count summary; got:\n{stdout}"
         );
     }
+
+    #[test]
+    fn coverage_macros_variants_tag_conditional_branches() {
+        // End-to-end exercise of `[macros.NAME]` variant declaration:
+        // a `%if "%{flavour}" == "1c"` branch is DEAD under the
+        // default build, but the declared variants {ent, std, 1c}
+        // tell the analyser that flavour=1c is a possible target,
+        // so the branch becomes [CONDITIONAL: flavour=1c]. Pins
+        // both the tag format and the new `reachable when` line.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let configdir = dir.path();
+        std::fs::write(
+            configdir.join(".rpmspec.toml"),
+            r#"
+[macros.flavour]
+values = ["ent", "std", "1c"]
+description = "Build edition selector"
+"#,
+        )
+        .expect("write config");
+        let spec = configdir.join("foo.spec");
+        std::fs::write(
+            &spec,
+            "Name: foo\nVersion: 1\nRelease: 1\nSummary: t\nLicense: MIT\n\
+             \n\
+             %if \"%{?flavour}\" == \"1c\"\n%global one_c 1\n%endif\n\
+             \n\
+             %description\nB\n\
+             \n\
+             %changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+        )
+        .expect("write spec");
+        let config_path = configdir.join(".rpmspec.toml");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "--config",
+                config_path.to_str().unwrap(),
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        assert!(
+            stdout.contains("[CONDITIONAL: flavour=1c]"),
+            "expected CONDITIONAL tag with flavour=1c; got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("reachable when (flavour=1c)"),
+            "expected `reachable when` annotation line; got:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains("[DEAD]"),
+            "branch must not be tagged DEAD when a variant activates it; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn coverage_json_surfaces_conditional_and_reachable_under() {
+        // JSON consumers see `is_conditional: true`, the
+        // `conditional_on` profile list, and the `reachable_under`
+        // map. Empty for branches that don't fire under any variant.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let configdir = dir.path();
+        std::fs::write(
+            configdir.join(".rpmspec.toml"),
+            r#"
+[macros.flavour]
+values = ["ent", "1c"]
+"#,
+        )
+        .expect("write config");
+        let spec = configdir.join("foo.spec");
+        std::fs::write(
+            &spec,
+            "Name: foo\nVersion: 1\nRelease: 1\nSummary: t\nLicense: MIT\n\
+             \n\
+             %if \"%{?flavour}\" == \"1c\"\n%global one_c 1\n%endif\n\
+             \n\
+             %description\nB\n\
+             \n\
+             %changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+        )
+        .expect("write spec");
+        let config_path = configdir.join(".rpmspec.toml");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "--config",
+                config_path.to_str().unwrap(),
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
+        let b = &v["files"][0]["conditionals"][0]["branches"][0];
+        assert_eq!(b["is_conditional"], true, "expected is_conditional=true in {b:?}");
+        assert_eq!(b["is_dead"], false, "must not be dead when conditional");
+        let cond_on = b["conditional_on"].as_array().expect("conditional_on");
+        assert_eq!(cond_on.len(), 1);
+        let values = b["reachable_under"]["flavour"]
+            .as_array()
+            .expect("reachable_under.flavour");
+        let values: Vec<&str> = values.iter().filter_map(|v| v.as_str()).collect();
+        assert!(values.contains(&"1c"), "expected 1c in {values:?}");
+    }
 }
 
 // ---------------------------------------------------------------------------

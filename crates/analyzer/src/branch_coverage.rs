@@ -27,7 +27,7 @@
 //! load-bearing — it tells the user "this needs human review", not
 //! "this branch is dead".
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rpm_spec::ast::{
     CondBranch, CondExpr, CondKind, Conditional, ExprAst, FilesContent, MacroRef, PreambleContent,
@@ -176,14 +176,37 @@ pub struct BranchCoverage {
     /// the variant rather than parsing the Display string. Empty
     /// when no profile produced an indeterminate verdict.
     pub indeterminate_reasons: BTreeMap<String, EvalError>,
+    /// Sorted profile IDs where the branch is inactive under the
+    /// current build but becomes active under at least one declared
+    /// macro-variant value combination. See `doc/matrix.md` § "Macro
+    /// variants". Empty when no `[macros.*]` config is loaded or
+    /// when the branch's condition doesn't reference any declared
+    /// variant macros. Profiles listed here are NOT also in
+    /// [`Self::active_on`] — that's the whole point: they're
+    /// conditional on a different build configuration.
+    pub conditional_on: Vec<String>,
+    /// `macro_name → set of values` recording which variant values
+    /// contributed to making the branch reachable on at least one
+    /// profile. Surfaced in the `[CONDITIONAL: macro=v1,v2]` tag and
+    /// the `reachable when` line of the human renderer. Only
+    /// populated when [`Self::conditional_on`] is non-empty.
+    pub reachable_under: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl BranchCoverage {
-    /// True iff no profile activates the branch and no profile is
+    /// True iff no profile activates the branch (under the current
+    /// build or any declared variant) and no profile is
     /// indeterminate — the branch is dead across the whole target
-    /// set. This is the most actionable signal for cleanup.
+    /// set. The most actionable signal for cleanup.
+    ///
+    /// Branches reachable only under a non-current variant value
+    /// (e.g. `%if "%{edition}" == "1c"` while building with
+    /// `-D edition ent`) are NOT dead: they fire in another build
+    /// configuration the project explicitly declared.
     pub fn is_dead(&self) -> bool {
-        self.active_on.is_empty() && self.indeterminate_on.is_empty()
+        self.active_on.is_empty()
+            && self.indeterminate_on.is_empty()
+            && self.conditional_on.is_empty()
     }
 
     /// True iff every profile activates the branch. Such branches
@@ -196,6 +219,14 @@ impl BranchCoverage {
         !self.active_on.is_empty()
             && self.inactive_on.is_empty()
             && self.indeterminate_on.is_empty()
+    }
+
+    /// True iff the branch is reachable under at least one declared
+    /// variant value combination but inactive under the current
+    /// build. Mutually exclusive with [`Self::is_dead`] — a branch
+    /// is either genuinely dead or build-conditional, never both.
+    pub fn is_conditional(&self) -> bool {
+        !self.conditional_on.is_empty()
     }
 }
 
@@ -214,6 +245,17 @@ pub struct CoverageEntry {
     pub branches: Vec<BranchCoverage>,
 }
 
+/// Cap on the cartesian-product combination count any single branch
+/// is allowed to enumerate when classifying it against declared macro
+/// variants. Branches whose declared variants exceed this product are
+/// left at the current-build verdict rather than spinning the analyser
+/// for minutes — operators see a single `tracing::warn` line and can
+/// trim the variant set if they really need the broader analysis.
+///
+/// 64 covers the realistic shapes (≤4 variant macros × ≤4 values each;
+/// 2⁶) without making CI hosts pay for exponential blow-up.
+pub const MAX_VARIANT_COMBINATIONS: usize = 64;
+
 impl CoverageReport {
     /// Compute coverage for `spec` against `target_set`. One pass to
     /// collect conditionals, then per-branch × per-profile evaluation.
@@ -222,20 +264,56 @@ impl CoverageReport {
     /// from their `%bcond_with` / `%bcond_without` defaults — pass
     /// [`crate::bcond::BcondOverrides::default()`] when the CLI did
     /// not supply any `--with` / `--without` arguments.
+    ///
+    /// Equivalent to [`Self::compute_with_variants`] with an empty
+    /// variant map — preserved as the existing surface so callers that
+    /// don't care about variant-aware classification stay unchanged.
     pub fn compute(
         spec: &SpecFile<Span>,
         target_set: &ResolvedTargetSet,
         overrides: &crate::bcond::BcondOverrides,
     ) -> Self {
+        let empty: BTreeMap<String, rpm_spec_profile::MacroVariants> = BTreeMap::new();
+        Self::compute_with_variants(spec, target_set, overrides, &empty)
+    }
+
+    /// Variant-aware [`Self::compute`]. After the standard
+    /// active/inactive/indeterminate classification, any branch that
+    /// is currently inactive on every profile is re-evaluated against
+    /// every cartesian combination of the declared `macros` variants
+    /// that appear in its condition. A combination that activates the
+    /// branch on at least one profile promotes that profile into
+    /// `BranchCoverage::conditional_on` (and records the contributing
+    /// variant values in `reachable_under`), preventing the renderer
+    /// from tagging it `[DEAD]`.
+    ///
+    /// The variant search is bounded by [`MAX_VARIANT_COMBINATIONS`].
+    /// When the declared variant set for a branch exceeds the cap the
+    /// branch keeps its non-variant verdict and a `tracing::warn`
+    /// surfaces the skipped condition.
+    pub fn compute_with_variants(
+        spec: &SpecFile<Span>,
+        target_set: &ResolvedTargetSet,
+        overrides: &crate::bcond::BcondOverrides,
+        macro_variants: &BTreeMap<String, rpm_spec_profile::MacroVariants>,
+    ) -> Self {
         let bcond = crate::bcond::BcondMap::from_spec(spec, overrides);
         let mut collector = ConditionalCollector::default();
         collector.visit_spec(spec);
 
-        let conditionals = collector
+        let mut conditionals: Vec<CoverageEntry> = collector
             .collected
             .into_iter()
             .map(|c| evaluate_conditional(c, target_set, &bcond))
             .collect();
+
+        if !macro_variants.is_empty() {
+            for c in &mut conditionals {
+                for b in &mut c.branches {
+                    augment_with_variants(b, target_set, &bcond, macro_variants);
+                }
+            }
+        }
 
         Self { conditionals }
     }
@@ -309,6 +387,8 @@ fn evaluate_conditional(
                 inactive_on: inactive,
                 indeterminate_on: indeterminate,
                 indeterminate_reasons: reasons,
+                conditional_on: Vec::new(),
+                reachable_under: BTreeMap::new(),
             }
         })
         .collect();
@@ -317,6 +397,159 @@ fn evaluate_conditional(
         has_else: c.has_else,
         branches,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Variant-aware augmentation
+// ---------------------------------------------------------------------------
+
+/// Re-evaluate `b` under each cartesian combination of the declared
+/// variant values that appear in its condition, then promote profiles
+/// into `conditional_on` / `reachable_under` if any combination flips
+/// them from inactive to active.
+///
+/// Short-circuits when:
+/// * the branch is already active or indeterminate everywhere — no
+///   point asking "could it activate?" when the answer is already yes
+///   or unknowable;
+/// * no variant macros from `macro_variants` appear in the condition —
+///   variants can't influence the verdict;
+/// * the cartesian product exceeds [`MAX_VARIANT_COMBINATIONS`] — we
+///   refuse to spin the analyser on exponential input.
+fn augment_with_variants(
+    b: &mut BranchCoverage,
+    target_set: &ResolvedTargetSet,
+    bcond: &crate::bcond::BcondMap,
+    macro_variants: &BTreeMap<String, rpm_spec_profile::MacroVariants>,
+) {
+    // No outer short-circuit on `b.active_on` — mixed branches (e.g.
+    // `%if 0%{?rhel} || "%{edition}" == "1c"`) can be ACTIVE on rhel
+    // profiles under the current build *and* CONDITIONAL on
+    // non-rhel profiles via the variant `edition=1c`. The inner
+    // loop skips already-active profile IDs.
+    let referenced = scan_macro_names(&b.branch.display);
+    let applicable: Vec<(&String, &Vec<String>)> = macro_variants
+        .iter()
+        .filter(|(name, mv)| referenced.contains(name.as_str()) && !mv.values.is_empty())
+        .map(|(name, mv)| (name, &mv.values))
+        .collect();
+    if applicable.is_empty() {
+        return;
+    }
+    let total: usize = applicable.iter().map(|(_, vs)| vs.len()).product();
+    if total > MAX_VARIANT_COMBINATIONS {
+        tracing::warn!(
+            condition = %b.branch.display,
+            combinations = total,
+            cap = MAX_VARIANT_COMBINATIONS,
+            "skipping variant analysis: cartesian product over capped limit"
+        );
+        return;
+    }
+
+    let mut conditional: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
+    let indices_total: usize = applicable.len();
+    for combo_idx in 0..total {
+        // Lay the cartesian product out flat — each index picks one
+        // value per applicable macro. Skip pre-allocating a Vec of
+        // combos to keep memory bounded for the cap-128 cases.
+        let mut combo: Vec<(&String, &String)> = Vec::with_capacity(indices_total);
+        let mut rem = combo_idx;
+        for (name, values) in &applicable {
+            let stride = values.len();
+            let pick = rem % stride;
+            rem /= stride;
+            combo.push((name, &values[pick]));
+        }
+        for rt in &target_set.targets {
+            if b.active_on.contains(&rt.profile_id) || conditional.contains_key(&rt.profile_id) {
+                // Already active under current build (skipped via the
+                // global short-circuit above) or already promoted by
+                // an earlier combo — recording the same profile twice
+                // adds no information.
+                continue;
+            }
+            // Indeterminate profiles (typically "macro X not defined")
+            // are eligible: a declared variant for X effectively
+            // supplies a value, so re-evaluation can resolve to
+            // active. That's the whole point of `[macros.*]` —
+            // promote indeterminate-due-to-undefined-macro into
+            // CONDITIONAL when the project has told the tool which
+            // values that macro can take.
+            let mut profile = rt.profile.clone();
+            for (mname, mvalue) in &combo {
+                profile.macros.insert(
+                    mname.as_str(),
+                    rpm_spec_profile::MacroEntry::literal(
+                        mvalue.as_str(),
+                        rpm_spec_profile::Provenance::Override,
+                    ),
+                );
+            }
+            if let Ok(true) = evaluate_branch(b.branch.kind, &b.branch.expr, &profile, bcond) {
+                let per_macro = conditional.entry(rt.profile_id.clone()).or_default();
+                for (mname, mvalue) in &combo {
+                    per_macro
+                        .entry((*mname).clone())
+                        .or_default()
+                        .insert((*mvalue).clone());
+                }
+            }
+        }
+    }
+
+    if conditional.is_empty() {
+        return;
+    }
+
+    // Collapse per-profile records into the branch-level shape: the
+    // sorted profile id list, plus a union over which (macro, value)
+    // pairs ever contributed. Both `inactive_on` and `conditional_on`
+    // can list the same profile id (the branch is inactive under the
+    // current build AND reachable under a variant), so we don't
+    // remove anything from `inactive_on` here — the two fields are
+    // additive views on the same profile rather than partitions.
+    let mut profiles: Vec<String> = conditional.keys().cloned().collect();
+    profiles.sort();
+    let mut union: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for per_macro in conditional.values() {
+        for (mname, values) in per_macro {
+            union.entry(mname.clone()).or_default().extend(values.iter().cloned());
+        }
+    }
+    b.conditional_on = profiles;
+    b.reachable_under = union;
+}
+
+/// Collect every macro NAME referenced by a condition's display
+/// rendering. The display string is the canonical post-render form
+/// `CollectedBranch` carries (built by `render_condition`), so this
+/// avoids rebuilding the original `CondExpr`'s scan path twice and
+/// keeps the variant matcher cheap even for large specs.
+///
+/// Returns an empty set when the display has no macro references —
+/// callers short-circuit on that to skip the variant work entirely.
+fn scan_macro_names(display: &str) -> HashSet<String> {
+    use rpm_spec_profile::macro_lexer::scan_macro_ref;
+    let mut names = HashSet::new();
+    let bytes = display.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'%' {
+            i += 1;
+            continue;
+        }
+        match scan_macro_ref(bytes, i) {
+            Some(r) => {
+                names.insert(r.name.to_string());
+                i = r.full_range.end;
+            }
+            None => {
+                i += 1;
+            }
+        }
+    }
+    names
 }
 
 // ---------------------------------------------------------------------------
@@ -1562,6 +1795,170 @@ B\n\
         // `%ifarch x86_64` is indeterminate on `generic` (no
         // build_arch). Both contribute.
         assert_eq!(report.indeterminate_branches(), 2);
+    }
+
+    // -----------------------------------------------------------------
+    // Macro variants (Phase B) — `compute_with_variants` exercises the
+    // CONDITIONAL classification on declared `[macros.NAME]` value sets.
+    // -----------------------------------------------------------------
+
+    fn variants(pairs: &[(&str, &[&str])]) -> BTreeMap<String, rpm_spec_profile::MacroVariants> {
+        pairs
+            .iter()
+            .map(|(name, values)| {
+                (
+                    (*name).to_string(),
+                    rpm_spec_profile::MacroVariants::new(values.iter().copied().map(String::from)),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn conditional_when_some_variant_value_activates_branch() {
+        // `%if "%{flavour}" == "1c"` is inactive on every profile
+        // under the default macro registry (no `flavour` defined).
+        // Declaring `flavour ∈ {ent, std, 1c}` lets the analyzer
+        // re-evaluate with `flavour=1c` and mark the branch
+        // CONDITIONAL — not DEAD — because the project explicitly
+        // declared 1c as a buildable variant.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional(r#"%if "%{flavour}" == "1c""#);
+        let vmap = variants(&[("flavour", &["ent", "std", "1c"])]);
+        let report = CoverageReport::compute_with_variants(
+            &spec,
+            &set,
+            &crate::bcond::BcondOverrides::default(),
+            &vmap,
+        );
+        let b = &report.conditionals[0].branches[0];
+        assert!(!b.is_dead(), "must not be DEAD when a variant activates");
+        assert!(b.is_conditional(), "should classify as conditional");
+        assert_eq!(b.conditional_on, vec!["rhel-9-x86_64"]);
+        let flavour_values = b.reachable_under.get("flavour").expect("flavour key");
+        assert!(
+            flavour_values.contains("1c"),
+            "expected 1c in reachable_under; got {flavour_values:?}"
+        );
+    }
+
+    #[test]
+    fn dead_when_no_declared_variant_activates_branch() {
+        // `%if "%{?flavour}" == "spices"` is inactive under every
+        // declared variant value (ent/std/1c, no "spices") AND
+        // inactive under the base profile (the `?` form makes
+        // undefined flavour expand to empty string). Verifies the
+        // analyzer doesn't promote every unrecognised branch to
+        // CONDITIONAL — only those that ACTUALLY activate under
+        // some declared variant.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional(r#"%if "%{?flavour}" == "spices""#);
+        let vmap = variants(&[("flavour", &["ent", "std", "1c"])]);
+        let report = CoverageReport::compute_with_variants(
+            &spec,
+            &set,
+            &crate::bcond::BcondOverrides::default(),
+            &vmap,
+        );
+        let b = &report.conditionals[0].branches[0];
+        assert!(b.is_dead(), "must stay DEAD: no variant value activates `spices`");
+        assert!(!b.is_conditional());
+        assert!(b.conditional_on.is_empty());
+    }
+
+    #[test]
+    fn conditional_rescues_indeterminate_undefined_macro() {
+        // `%if %{pgsql_major} == 13` is indeterminate under a profile
+        // where `pgsql_major` is undefined. Declaring variants for
+        // it (effectively saying "the project builds for pgsql_major
+        // ∈ {13, 14, 15}") promotes the branch to CONDITIONAL with
+        // value 13 — without variants, operators would see
+        // "indeterminate" forever and not know whether the spec is
+        // healthy or broken.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional("%if %{pgsql_major} == 13");
+        let vmap = variants(&[("pgsql_major", &["13", "14", "15"])]);
+        let report = CoverageReport::compute_with_variants(
+            &spec,
+            &set,
+            &crate::bcond::BcondOverrides::default(),
+            &vmap,
+        );
+        let b = &report.conditionals[0].branches[0];
+        assert!(b.is_conditional(), "indeterminate → conditional with variants");
+        let values = b.reachable_under.get("pgsql_major").expect("pgsql_major key");
+        assert!(values.contains("13"), "expected 13 in values; got {values:?}");
+    }
+
+    #[test]
+    fn no_variants_loaded_means_classic_dead_classification() {
+        // Empty variant map → no augmentation. Verifies the
+        // augmentation is opt-in (consumers that don't care about
+        // CONDITIONAL pay nothing for it) and the existing dead-code
+        // semantics still hold. Use `%{?flavour}` (conditional-defined)
+        // so the base evaluator produces a clean Inactive verdict
+        // (empty string) rather than Indeterminate (UndefinedMacro).
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional(r#"%if "%{?flavour}" == "1c""#);
+        let empty = variants(&[]);
+        let report = CoverageReport::compute_with_variants(
+            &spec,
+            &set,
+            &crate::bcond::BcondOverrides::default(),
+            &empty,
+        );
+        let b = &report.conditionals[0].branches[0];
+        assert!(b.is_dead());
+        assert!(!b.is_conditional());
+    }
+
+    #[test]
+    fn variant_cartesian_product_respects_cap() {
+        // Declare more variant combinations than MAX_VARIANT_COMBINATIONS
+        // and confirm the augmenter bails (leaving classic DEAD)
+        // rather than spinning. 4 macros × 4 values each = 256 > 64.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional(
+            r#"%if "%{a}" == "x" || "%{b}" == "x" || "%{c}" == "x" || "%{d}" == "x""#,
+        );
+        let values: &[&str] = &["1", "2", "3", "4"];
+        let vmap = variants(&[("a", values), ("b", values), ("c", values), ("d", values)]);
+        let report = CoverageReport::compute_with_variants(
+            &spec,
+            &set,
+            &crate::bcond::BcondOverrides::default(),
+            &vmap,
+        );
+        let b = &report.conditionals[0].branches[0];
+        assert!(
+            !b.is_conditional(),
+            "cartesian cap must prevent variant augmentation; got conditional with {:?}",
+            b.reachable_under
+        );
+    }
+
+    #[test]
+    fn variant_irrelevant_to_condition_is_ignored() {
+        // Declaring variants for a macro NOT referenced by the
+        // branch's condition must not trigger augmentation — keeps
+        // the cartesian product scoped to the relevant variables and
+        // prevents output noise. `flavour` is declared; the branch
+        // tests `other_macro`.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional(r#"%if "%{other_macro}" == "x""#);
+        let vmap = variants(&[("flavour", &["ent", "std", "1c"])]);
+        let report = CoverageReport::compute_with_variants(
+            &spec,
+            &set,
+            &crate::bcond::BcondOverrides::default(),
+            &vmap,
+        );
+        let b = &report.conditionals[0].branches[0];
+        assert!(
+            !b.is_conditional(),
+            "irrelevant variant must not augment; got {:?}",
+            b.reachable_under
+        );
     }
 
     // -----------------------------------------------------------------
