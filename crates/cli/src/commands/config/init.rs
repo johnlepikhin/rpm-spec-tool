@@ -180,6 +180,43 @@ const SECTION_EXAMPLES: &[(&str, &str)] = &[
 # Examples — name a collection of profiles for `rpm-spec-tool matrix`:
 # [targets.release-2026]
 # profiles = [\"fedora-40\", \"fedora-41\", \"rhel-10\"]
+#
+# Optional uniform `-D NAME VALUE` overrides applied to every profile
+# in the set (layered between the profile's own macros and any CLI
+# `--define`):
+# [targets.release-2026]
+# profiles = [\"fedora-40\", \"fedora-41\"]
+# defines  = { product_build = \"1\", debug = \"0\" }
+#
+# Outlier per-profile overrides inside the same target:
+# [targets.release-2026.profile-overrides.\"fedora-40\"]
+# defines = { use_jit = \"0\" }   # only this profile sees use_jit=0
+",
+    ),
+    (
+        "macros",
+        "\
+# Examples — declare allowed values for a build-time macro.
+# `matrix coverage` uses these to mark a branch
+# `[CONDITIONAL: macro=value]` when it activates under at least
+# one declared variant value, instead of `[DEAD]`. Without
+# variants the analyser can't tell genuinely-dead code apart from
+# code that's just inactive under the current build's `-D`.
+#
+# [macros.edition]
+# values      = [\"community\", \"premium\", \"oem\"]
+# description = \"Build edition selector\"
+#
+# [macros.major_version]
+# values = [\"13\", \"14\", \"15\", \"16\", \"17\"]
+#
+# Cartesian-product cap: branches whose declared variants exceed
+# 64 combinations are skipped (a `tracing::warn` surfaces the
+# branch). Keep value sets reasonably small per macro.
+#
+# Interaction with `-D NAME VALUE`: CLI `-D` wins for the current
+# build's verdict (active/inactive); the variant set still applies
+# to the reachability check that produces `[CONDITIONAL]`.
 ",
     ),
 ];
