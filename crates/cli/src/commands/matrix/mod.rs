@@ -1,9 +1,10 @@
 //! `matrix` subcommand — multi-profile (release matrix) analysis.
 //!
 //! Phase 1 shipped `matrix check` + `matrix baseline create`. Phase 2
-//! added `matrix portability` and `matrix coverage`. Phase 3 adds
-//! `matrix explain` for line-specific and macro-specific introspection.
-//! diff / impact remain follow-ups (see `doc/matrix.md` "Limitations").
+//! added `matrix portability` and `matrix coverage`. Phase 3 added
+//! `matrix explain`. Phase 13 closes the diff-quartet with
+//! `matrix impact` (per-profile delta between two git revisions of
+//! one spec).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -22,6 +23,7 @@ pub mod coverage;
 pub mod diff;
 pub mod expand;
 pub mod explain;
+pub mod impact;
 pub mod portability;
 pub mod verify_contract;
 
@@ -213,6 +215,10 @@ pub enum Action {
     /// surfaces a minimal "representative build set" when many
     /// profiles collapse to the same BuildRequires/Requires.
     Classes(classes::ClassesOpts),
+    /// Per-profile dependency delta between two git revisions of a
+    /// single spec. PR-review workflow: "this commit touches
+    /// foo.spec — which platforms moved and how?".
+    Impact(impact::ImpactOpts),
 }
 
 impl Cmd {
@@ -227,6 +233,7 @@ impl Cmd {
             Action::Expand(opts) => expand::run(opts, self.config.as_deref()),
             Action::Diff(opts) => diff::run(opts, self.config.as_deref()),
             Action::Classes(opts) => classes::run(opts, self.config.as_deref()),
+            Action::Impact(opts) => impact::run(opts, self.config.as_deref()),
         }
     }
 }

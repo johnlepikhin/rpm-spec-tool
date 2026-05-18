@@ -715,6 +715,112 @@ in parentheses for quick scanning.
 * Skip policy hides indeterminate branches. Use `matrix coverage`
   on the same target set to identify which branches were dropped.
 
+## Impact mode
+
+Where `matrix diff` compares two **profiles** at one revision,
+`matrix impact` compares two **revisions** of one spec across every
+profile in a target set. The PR-review use case: *"this commit
+touches `foo.spec` — which platforms are materially affected and
+which deps moved?"*.
+
+```bash
+rpm-spec-tool matrix impact \
+  --target-set product-2026q2 \
+  --from origin/main --to HEAD \
+  product.spec
+```
+
+`--from` and `--to` accept anything `git show REV:path` accepts:
+commit SHAs, branches, tags, `HEAD~3`. `--to` defaults to `HEAD` so
+the common case "what's about to ship?" is a one-flag invocation.
+
+### Mechanics
+
+1. Resolve the spec's git repository root via
+   `git -C <spec_dir> rev-parse --show-toplevel`.
+2. Verify both `--from` and `--to` resolve to commits via
+   `git rev-parse --verify REV^{commit}`. A typo'd SHA exits 2
+   here rather than producing a misleading "deps added from scratch"
+   diff later — git's error message is identical for "unknown rev"
+   and "file missing at rev", so disambiguating up-front is the only
+   safe option.
+3. Fetch each side's spec body via `git show REV:relpath`.
+4. Parse both and compute per-profile [`ProfileSignature`] dep sets
+   with `IndeterminatePolicy::Skip` (same policy as `matrix diff`).
+5. Set-diff per (profile, tag) pair into `added` / `removed` /
+   `unchanged` buckets.
+
+### File-missing semantics
+
+If the spec doesn't exist at the `from` rev (a common PR-adds-new-spec
+case), the CLI treats it as an empty document — every dep at `to`
+surfaces as `added`. The file-missing detection covers all wordings
+git has used: `"does not exist"`, `"exists on disk, but not in"`.
+
+### Human output
+
+```text
+# Matrix impact: <from-sha> → <to-sha>, target set `product-2026q2` (3/5 profile(s) affected)
+## product.spec
+
+  rhel-9-x86_64: +1 -0
+    BuildRequires
+      added (1): cmake
+  altlinux-10-x86_64: (no change)
+  …
+```
+
+### JSON shape
+
+```json
+{
+  "from": "<from-sha>",
+  "to":   "<to-sha>",
+  "target_set": "product-2026q2",
+  "profiles": ["rhel-9-x86_64", "..."],
+  "path": "product.spec",
+  "affected_profile_count": 3,
+  "per_profile": [
+    {
+      "profile_id": "rhel-9-x86_64",
+      "tags": [
+        {
+          "tag_label": "BuildRequires",
+          "changes": {
+            "added": ["cmake"],
+            "removed": [],
+            "unchanged": ["gcc", "make"]
+          }
+        },
+        { "tag_label": "Requires", "changes": { … } }
+      ]
+    }
+  ]
+}
+```
+
+### Exit codes
+
+* `0` — always (informational; impact mode never gates CI directly —
+  use `matrix check --fail-on new` for gating).
+* `2` — usage error: stdin input, multiple spec paths, spec outside
+  any git repo, unresolvable `--from`/`--to`, non-canonicalisable
+  spec path.
+
+### Limitations of Phase 1 impact
+
+* Same tag set as `matrix diff`: only `BuildRequires` / `Requires`.
+* Same skip-on-indeterminate policy. A branch that's
+  indeterminate on one side but resolvable on the other still
+  contributes — `matrix coverage` is the right tool to audit what
+  was dropped on either side.
+* Spec must be tracked in git. Reading two arbitrary on-disk files
+  is not currently supported (deferred — the PR-review workflow
+  always uses git).
+* Reads stdout of `git show` — paths with control characters
+  intermixed in the *file content* are fine (bytes pass through),
+  but the dependency walker only surfaces UTF-8 stretches.
+
 ## Equivalence classes
 
 `matrix classes` collapses a target set into distinct dependency

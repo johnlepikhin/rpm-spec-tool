@@ -5845,3 +5845,328 @@ must_have_buildrequires = ["gcc"]
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// matrix impact
+// ---------------------------------------------------------------------------
+
+mod matrix_impact {
+    use super::*;
+    use std::process::Command;
+
+    /// Initialise a fresh git repo at `dir` with sane user identity so
+    /// commits succeed in CI sandboxes that don't have a global config.
+    /// Disables GPG signing for the same reason.
+    fn git_init(dir: &std::path::Path) {
+        for args in [
+            &["init", "--quiet", "-b", "main"][..],
+            &["config", "user.email", "test@example.invalid"][..],
+            &["config", "user.name", "Test"][..],
+            &["config", "commit.gpgsign", "false"][..],
+        ] {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .status()
+                .expect("spawn git");
+            assert!(status.success(), "git {args:?} failed");
+        }
+    }
+
+    fn git_commit_all(dir: &std::path::Path, msg: &str) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["add", "-A"])
+            .status()
+            .expect("git add");
+        assert!(status.success(), "git add failed");
+        // --allow-empty so "two identical revisions" tests (no-change
+        // case) still produce two distinct SHAs.
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "commit",
+                "--quiet",
+                "--no-verify",
+                "--allow-empty",
+                "-m",
+                msg,
+            ])
+            .status()
+            .expect("git commit");
+        assert!(status.success(), "git commit failed");
+    }
+
+    fn head_sha(dir: &std::path::Path) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("rev-parse");
+        assert!(out.status.success(), "rev-parse failed");
+        String::from_utf8(out.stdout).expect("utf8 sha").trim().to_string()
+    }
+
+    /// Set up a repo with two commits of `foo.spec`. Returns
+    /// `(dir, spec_path, from_sha, to_sha)`.
+    fn two_commit_repo(
+        from_body: &str,
+        to_body: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf, String, String) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_init(dir.path());
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, from_body).expect("write from spec");
+        git_commit_all(dir.path(), "initial");
+        let from_sha = head_sha(dir.path());
+        std::fs::write(&spec, to_body).expect("write to spec");
+        git_commit_all(dir.path(), "bump deps");
+        let to_sha = head_sha(dir.path());
+        (dir, spec, from_sha, to_sha)
+    }
+
+    const BASE_SPEC: &str = "\
+Name:           foo
+Version:        1.0
+Release:        1
+Summary:        Test
+License:        MIT
+
+BuildRequires:  gcc
+BuildRequires:  make
+
+%description
+B
+
+%files
+
+%changelog
+* Mon May 18 2026 t <t@e.invalid> - 1.0-1
+- init
+";
+
+    #[test]
+    fn impact_human_reports_added_and_removed_per_profile() {
+        let to_spec = BASE_SPEC.replace(
+            "BuildRequires:  make\n",
+            "BuildRequires:  make\nBuildRequires:  cmake\n",
+        );
+        let (_dir, spec, from, to) = two_commit_repo(BASE_SPEC, &to_spec);
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--from",
+                &from,
+                "--to",
+                &to,
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}\nstdout={stdout}");
+        assert!(
+            stdout.contains("cmake"),
+            "expected added dep to surface; got {stdout}"
+        );
+        assert!(
+            stdout.contains("added") || stdout.contains("+1"),
+            "expected added marker; got {stdout}"
+        );
+    }
+
+    #[test]
+    fn impact_json_shape_has_expected_top_level_keys() {
+        let to_spec = BASE_SPEC.replace(
+            "BuildRequires:  make\n",
+            "BuildRequires:  make\nBuildRequires:  cmake\n",
+        );
+        let (_dir, spec, from, to) = two_commit_repo(BASE_SPEC, &to_spec);
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                &from,
+                "--to",
+                &to,
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}\nstdout={stdout}");
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
+        assert_eq!(v["from"], from.as_str());
+        assert_eq!(v["to"], to.as_str());
+        assert!(v["target_set"].is_string());
+        assert!(v["profiles"].is_array());
+        assert!(v["affected_profile_count"].is_number());
+        assert!(v["per_profile"].is_array());
+    }
+
+    #[test]
+    fn impact_no_change_reports_clean() {
+        // Identical from/to -> no movement on any profile. The human
+        // renderer's "(no change on any profile)" line is the
+        // contract; pin it so a refactor of the renderer can't quietly
+        // hide a passing diff.
+        let (_dir, spec, from, to) = two_commit_repo(BASE_SPEC, BASE_SPEC);
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--from",
+                &from,
+                "--to",
+                &to,
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        assert!(
+            stdout.contains("no change"),
+            "expected no-change message; got {stdout}"
+        );
+    }
+
+    #[test]
+    fn impact_unknown_rev_exits_2() {
+        let (_dir, spec, _from, _to) = two_commit_repo(BASE_SPEC, BASE_SPEC);
+        let (rc, _stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2, "unknown rev must exit 2; stderr={stderr}");
+        assert!(
+            stderr.contains("git show")
+                || stderr.contains("unknown")
+                || stderr.contains("deadbeef"),
+            "expected diagnostic mentioning git/rev; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn impact_file_missing_at_from_rev_treats_as_empty() {
+        // PR adds a new spec file: it doesn't exist at the `from` rev.
+        // The CLI maps "file does not exist at REV" to an empty
+        // baseline so every dep surfaces as `added` -- natural
+        // semantics for "new file in this PR".
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_init(dir.path());
+        std::fs::write(dir.path().join("README"), "placeholder").expect("write readme");
+        git_commit_all(dir.path(), "init");
+        let from_sha = head_sha(dir.path());
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BASE_SPEC).expect("write spec");
+        git_commit_all(dir.path(), "add foo.spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                &from_sha,
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        assert!(
+            stdout.contains("gcc") && stdout.contains("make"),
+            "expected gcc/make as added deps; got {stdout}"
+        );
+    }
+
+    #[test]
+    fn impact_rejects_stdin() {
+        let (rc, _stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                "HEAD",
+                "-",
+            ],
+            Some(BASE_SPEC),
+        );
+        assert_eq!(rc, 2);
+        assert!(
+            stderr.contains("stdin"),
+            "expected stdin rejection; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn impact_spec_outside_git_repo_exits_2() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BASE_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                "HEAD",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2);
+        assert!(
+            stderr.contains("not a git repository") || stderr.contains("git"),
+            "expected git-repo error; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn impact_multiple_specs_rejected() {
+        let (_dir, spec, from, _to) = two_commit_repo(BASE_SPEC, BASE_SPEC);
+        let second = spec.parent().unwrap().join("bar.spec");
+        std::fs::write(&second, BASE_SPEC).expect("write second");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                &from,
+                spec.to_str().unwrap(),
+                second.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2);
+        assert!(
+            stderr.contains("exactly one") || stderr.contains("one spec"),
+            "expected single-spec error; got {stderr}"
+        );
+    }
+}
