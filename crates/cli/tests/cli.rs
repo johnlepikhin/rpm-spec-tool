@@ -2965,6 +2965,90 @@ profiles = ["generic", "rhel-9-x86_64"]
         assert_eq!(rc, 0, "stderr={stderr}");
         assert!(stdout.contains("`smoke`"));
     }
+
+    #[test]
+    fn portability_excludes_spec_local_globals() {
+        // The user-reported correctness regression: a `%global foo
+        // 1` line in the spec used to surface `foo` as
+        // "missing on all N profiles" in portability, even though
+        // the spec itself supplies the macro. After the
+        // MacroUsageCollector filter, spec-local definitions are
+        // excluded from the reference set so they don't pollute
+        // the report.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(
+            &spec,
+            "%global spec_local_thing 42\n\
+             %{!?with_default:%global with_default 0}\n\
+             Name: foo\nVersion: 1\nRelease: 1\nSummary: t\nLicense: MIT\n\
+             \n\
+             Requires: somepkg-%{spec_local_thing}\n\
+             Requires: another-%{with_default}\n\
+             \n\
+             %description\nB\n\
+             \n\
+             %changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+        )
+        .expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "portability",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        // Neither `spec_local_thing` nor `with_default` may
+        // surface as missing — both are spec-local.
+        assert!(
+            !stdout.contains("spec_local_thing"),
+            "spec-local %global must be filtered; got:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains("with_default"),
+            "conditional-define idiom must be filtered; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn portability_folds_all_profiles_missing_to_compact_form() {
+        // Pin the renderer detail: when a macro is missing on all
+        // N profiles, the column collapses to `(all N)` instead of
+        // listing every profile ID. Saves screens of horizontal
+        // wrap on 20+ profile target sets.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(
+            &spec,
+            "Name: foo\nVersion: 1\nRelease: 1\nSummary: t\nLicense: MIT\n\
+             \n\
+             Requires: x-%{genuinely_missing_macro}\n\
+             \n\
+             %description\nB\n\
+             \n\
+             %changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+        )
+        .expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "portability",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        assert!(
+            stdout.contains("(all 2)"),
+            "expected `(all 2)` collapse; got:\n{stdout}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

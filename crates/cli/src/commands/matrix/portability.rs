@@ -6,9 +6,11 @@ use std::process::ExitCode;
 use anyhow::Result;
 use clap::{ArgGroup, Args, ValueEnum};
 use rpm_spec_analyzer::profile::ResolvedTargetSet;
-use rpm_spec_analyzer::{PortabilityReport, session::parse};
+use rpm_spec_analyzer::{PortabilityReport, PortabilityStatus, session::parse};
 use serde::Serialize;
 
+use super::coverage_style::Style;
+use crate::app::ColorChoice;
 use crate::io;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -64,7 +66,11 @@ pub enum FailOn {
     Partial,
 }
 
-pub(super) fn run(opts: PortabilityOpts, config_override: Option<&Path>) -> Result<ExitCode> {
+pub(super) fn run(
+    opts: PortabilityOpts,
+    config_override: Option<&Path>,
+    color: ColorChoice,
+) -> Result<ExitCode> {
     let ctx = match super::prepare_matrix(
         config_override,
         opts.target_set.as_deref(),
@@ -107,7 +113,10 @@ pub(super) fn run(opts: PortabilityOpts, config_override: Option<&Path>) -> Resu
     }
 
     match opts.format {
-        OutputFormat::Human => render_human(&reports, &resolved)?,
+        OutputFormat::Human => {
+            let style = Style::new(color);
+            render_human(&reports, &resolved, &style)?;
+        }
         OutputFormat::Json => render_json(&reports, &resolved)?,
     }
 
@@ -126,15 +135,19 @@ pub(super) fn run(opts: PortabilityOpts, config_override: Option<&Path>) -> Resu
 fn render_human(
     reports: &[(io::Source, PortabilityReport)],
     target_set: &ResolvedTargetSet,
+    style: &Style,
 ) -> Result<()> {
     use std::io::Write;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     writeln!(
         out,
-        "# Matrix portability: target set `{}` ({} profiles)",
-        target_set.id,
-        target_set.targets.len()
+        "{}",
+        style.header(&format!(
+            "Matrix portability: target set `{}` ({} profiles)",
+            target_set.id,
+            target_set.targets.len()
+        ))
     )?;
     writeln!(out)?;
 
@@ -144,42 +157,60 @@ fn render_human(
     }
 
     for (source, report) in reports {
-        writeln!(out, "## {}", source.display_name())?;
+        writeln!(out, "{} {}", style.header("==>"), source.display_name())?;
         let counts = report.counts();
         writeln!(
             out,
-            "  {} macros referenced — {} missing, {} partial, {} portable",
+            "    {} macros referenced: {} missing · {} partial · {} portable",
             report.total_used(),
-            counts.missing,
-            counts.partial,
-            counts.portable
+            style.dead_tag(&counts.missing.to_string()),
+            style.conditional_tag(&counts.partial.to_string()),
+            style.always_tag(&counts.portable.to_string()),
         )?;
         if report.entries.is_empty() {
-            writeln!(out, "  (no macro references)")?;
+            writeln!(out, "    (no macro references)")?;
             writeln!(out)?;
             continue;
         }
         writeln!(out)?;
+        // Pre-colour the column header to keep alignment math
+        // sane (ANSI escapes are zero-width but count toward
+        // `&str::len()` — pad bare strings first, then style).
         writeln!(
             out,
-            "  {:<10} {:<28} {:>6}/{:<6} MISSING ON",
-            "STATUS", "MACRO", "DEF", "TOTAL"
+            "  {}",
+            style.header(&format!(
+                "{:<10} {:<28} {:>6}/{:<6} MISSING ON",
+                "STATUS", "MACRO", "DEF", "TOTAL"
+            ))
         )?;
         let total = target_set.targets.len();
         for e in &report.entries {
+            // Collapse the MISSING ON column when it carries no
+            // signal: an all-`(all N)` list for a missing-on-all
+            // row, or `-` when nothing is missing. Verbose only
+            // for the `partial` case where the operator needs to
+            // see WHICH profiles lack the macro.
             let missing = if e.missing_in.is_empty() {
                 String::from("-")
+            } else if e.missing_in.len() == total {
+                format!("(all {total})")
             } else {
                 e.missing_in.join(", ")
             };
+            let label = format!("{:<10}", e.status.as_label());
+            let styled_label = match e.status {
+                PortabilityStatus::Missing => style.dead_tag(&label),
+                PortabilityStatus::Partial => style.conditional_tag(&label),
+                PortabilityStatus::Portable => style.always_tag(&label),
+                // `#[non_exhaustive]` upstream — fall through.
+                _ => label,
+            };
             writeln!(
                 out,
-                "  {:<10} {:<28} {:>6}/{:<6} {}",
-                e.status.as_label(),
-                e.name,
-                e.defined_in.len(),
-                total,
-                missing
+                "  {styled_label} {name:<28} {def:>6}/{total:<6} {missing}",
+                name = e.name,
+                def = e.defined_in.len(),
             )?;
         }
         writeln!(out)?;

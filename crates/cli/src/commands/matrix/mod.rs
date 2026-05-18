@@ -326,7 +326,7 @@ impl Cmd {
         match self.action {
             Action::Check(opts) => check::run(opts, self.config.as_deref(), color),
             Action::Baseline(cmd) => cmd.run(self.config.as_deref()),
-            Action::Portability(opts) => portability::run(opts, self.config.as_deref()),
+            Action::Portability(opts) => portability::run(opts, self.config.as_deref(), color),
             Action::Coverage(opts) => coverage::run(opts, self.config.as_deref(), color),
             Action::Explain(opts) => explain::run(opts, self.config.as_deref()),
             Action::VerifyContract(opts) => verify_contract::run(opts, self.config.as_deref()),

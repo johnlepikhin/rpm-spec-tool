@@ -27,13 +27,58 @@
 use std::collections::BTreeSet;
 
 use rpm_spec::ast::{
-    CondExpr, Conditional, ExprAst, FilesContent, MacroKind, MacroRef, PreambleContent, Span,
-    SpecFile, SpecItem,
+    CondExpr, Conditional, ConditionalMacro, ExprAst, FilesContent, MacroKind, MacroRef,
+    PreambleContent, Span, SpecFile, SpecItem,
 };
 
 use crate::visit::{
     Visit, walk_files_conditional, walk_macro_ref, walk_preamble_conditional, walk_top_conditional,
 };
+
+/// RPM control-flow and section-marker keywords that the parser may
+/// surface as `MacroRef` nodes in some grammar contexts (`%if`,
+/// `%else`, `%endif`, `%files`, …). They are not user-defined macros
+/// — no profile registry can resolve them — so a `matrix portability`
+/// report flagging them as `missing on all profiles` is noise, not
+/// signal. Filter at the collector boundary.
+///
+/// The proper fix is parser-side (the rpm-spec crate should not
+/// emit `MacroRef` for these tokens), but a name-based filter here
+/// is contained to one crate and unblocks operator-facing output
+/// today.
+const RESERVED_KEYWORDS: &[&str] = &[
+    // Conditional directives
+    "if", "elif", "else", "endif", "ifarch", "ifnarch", "ifos", "ifnos",
+    // Section markers
+    "package", "description", "prep", "setup", "patch", "autopatch",
+    "build", "install", "check", "files", "changelog", "clean",
+    // Scriptlet sections
+    "post", "postun", "pre", "preun", "pretrans", "posttrans",
+    "preuntrans", "postuntrans", "verifyscript",
+    // Trigger / filetrigger family
+    "triggerin", "triggerun", "triggerpostun", "triggerprein", "trigger",
+    "filetriggerin", "filetriggerun", "filetriggerpostun", "filetriggerprein",
+    "transfiletriggerin", "transfiletriggerun", "transfiletriggerpostun",
+    "transfiletriggerprein",
+    // Definition keywords (the directive itself, not the name being defined)
+    "define", "global", "undefine", "bcond", "bcond_with", "bcond_without",
+    "include", "load",
+];
+
+/// RPM auto-defines from the preamble: the build process injects
+/// these without any showrc declaration, so no profile registry has
+/// them either. Reporting `%{name}` / `%{version}` / `%{SOURCE0}` as
+/// `missing on all 23 profiles` is doubly wrong — they're defined,
+/// just not in a place this analyzer can see.
+///
+/// `SOURCE\d+`, `PATCH\d+`, `NOSOURCE\d+`, `NOPATCH\d+` are matched
+/// by prefix-and-tail-digits in [`is_rpm_auto_macro`] so the list
+/// stays manageable.
+const RPM_AUTO_MACROS: &[&str] = &[
+    "name", "version", "release", "epoch", "arch", "os",
+    "vendor", "packager", "license", "summary", "description",
+    "buildroot", "buildsubdir",
+];
 
 /// Visitor that records every user-meaningful macro name referenced
 /// in a spec. Names are stored in a [`BTreeSet`] so the output is
@@ -41,6 +86,12 @@ use crate::visit::{
 #[derive(Debug, Default)]
 pub struct MacroUsageCollector {
     names: BTreeSet<String>,
+    /// Names defined locally in the spec via `%global` / `%define` /
+    /// `%bcond_*`. Tracked separately because portability classifies
+    /// them very differently from external references: the spec
+    /// itself provides the macro, so no profile-level "missing"
+    /// finding makes sense.
+    local_defs: BTreeSet<String>,
 }
 
 impl MacroUsageCollector {
@@ -49,12 +100,109 @@ impl MacroUsageCollector {
     }
 
     /// Walk `spec` and return the set of macro names it references.
-    /// One-shot convenience for callers that don't need to inspect
-    /// the visitor state.
+    /// References to spec-local `%global`/`%define` names are
+    /// excluded — they're defined by the spec itself and would
+    /// pollute portability reports as false-positive "missing"
+    /// entries. Callers that need the unfiltered set, or the
+    /// local-defs set in parallel, should use
+    /// [`Self::collect_with_local_defs`] instead.
     pub fn collect(spec: &SpecFile<Span>) -> BTreeSet<String> {
+        let (refs, _) = Self::collect_with_local_defs(spec);
+        refs
+    }
+
+    /// Walk `spec` and return `(references, local_defs)`. References
+    /// is the cleaned, portability-relevant set: it excludes
+    /// reserved keywords ([`RESERVED_KEYWORDS`]), RPM auto-defines
+    /// ([`RPM_AUTO_MACROS`] plus `SOURCE\d+` / `PATCH\d+`), and
+    /// names that the spec itself defines locally. `local_defs` is
+    /// the raw set of names introduced by `%global` / `%define` /
+    /// `%bcond_*` — exposed so renderers can show a "spec-local
+    /// macros: N" rollup if useful.
+    pub fn collect_with_local_defs(
+        spec: &SpecFile<Span>,
+    ) -> (BTreeSet<String>, BTreeSet<String>) {
         let mut me = Self::new();
+        me.collect_local_defs(spec);
         me.visit_spec(spec);
-        me.into_names()
+        let mut refs = me.names;
+        // Subtract spec-local definitions: the spec is its own
+        // authority for those names.
+        for n in &me.local_defs {
+            refs.remove(n);
+        }
+        (refs, me.local_defs)
+    }
+
+    /// Pre-scan top-level items for `%global` / `%define` / `%bcond_*`
+    /// definitions. Two-pass design keeps the existing `Visit`
+    /// traversal unchanged and avoids reordering pitfalls (a `%global
+    /// foo` after `%{?foo}` still cancels the reference).
+    fn collect_local_defs(&mut self, spec: &SpecFile<Span>) {
+        for item in &spec.items {
+            self.scan_item_for_local_defs(item);
+        }
+    }
+
+    fn scan_item_for_local_defs(&mut self, item: &SpecItem<Span>) {
+        match item {
+            SpecItem::MacroDef(def) => {
+                if !def.name.is_empty() {
+                    self.local_defs.insert(def.name.clone());
+                }
+            }
+            SpecItem::BuildCondition(bc) => {
+                // `%bcond_with foo` registers `%{with foo}` /
+                // `%{without foo}` (handled by builtin path) AND
+                // the bare name `foo` becomes a referenceable
+                // macro in some setups. Be generous — record it.
+                if !bc.name.is_empty() {
+                    self.local_defs.insert(bc.name.clone());
+                }
+            }
+            SpecItem::Statement(mr) => {
+                // `%{!?name:%global name 1}` — conditional-define
+                // idiom. The outer ref reads as
+                // `name` (IfNotDefined) and the `with_value` body
+                // contains a `%global NAME` invocation. Either way,
+                // after this top-level Statement runs, NAME is
+                // registered. Record both `name` (the outer ref's
+                // own name) and any names registered by nested
+                // MacroDef-shaped text inside `with_value`.
+                self.scan_macro_ref_for_self_defines(mr);
+            }
+            SpecItem::Conditional(c) => {
+                // Definitions inside a top-level `%if`/`%ifarch`
+                // count — operators often guard `%global foo` on
+                // a profile-specific branch. Even if the branch
+                // is inactive under the current build, the spec
+                // author's intent is "this is my name".
+                for branch in &c.branches {
+                    for nested in &branch.body {
+                        self.scan_item_for_local_defs(nested);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Recognise the `%{!?name:%global name VALUE}` /
+    /// `%{?name:%global name VALUE}` conditional-define idiom: when
+    /// the outer ref has a non-empty `with_value`, the spec author
+    /// has accepted that the name may need a fallback definition.
+    /// Register the outer name as a local definition so the
+    /// portability report stops claiming it's "missing on all 23
+    /// profiles" — the spec is self-sufficient for it.
+    fn scan_macro_ref_for_self_defines(&mut self, mr: &MacroRef) {
+        if matches!(
+            mr.conditional,
+            ConditionalMacro::IfDefined | ConditionalMacro::IfNotDefined
+        ) && mr.with_value.is_some()
+            && !mr.name.is_empty()
+        {
+            self.local_defs.insert(mr.name.clone());
+        }
     }
 
     /// Consume the visitor and return the accumulated names.
@@ -93,7 +241,13 @@ impl MacroUsageCollector {
         match expr {
             ExprAst::Macro { text, .. } => {
                 if let Some(name) = macro_name_from_verbatim(text) {
-                    self.names.insert(name);
+                    // Apply the same reserved-keyword and
+                    // RPM-auto-macro filters as `is_user_macro` so
+                    // condition-side references aren't a backdoor
+                    // for noise.
+                    if !is_reserved_keyword(&name) && !is_rpm_auto_macro(&name) {
+                        self.names.insert(name);
+                    }
                 }
             }
             ExprAst::Paren { inner, .. } | ExprAst::Not { inner, .. } => {
@@ -190,7 +344,9 @@ pub(crate) fn macro_name_from_verbatim(text: &str) -> Option<String> {
 
 /// True for macro references whose resolvability depends on the
 /// profile's macro registry. False for positional/flag/builtin —
-/// those are language constructs, not registered macros.
+/// those are language constructs, not registered macros — plus
+/// reserved control-flow / section keywords and RPM auto-defines
+/// from the preamble.
 fn is_user_macro(m: &MacroRef) -> bool {
     if matches!(
         m.kind,
@@ -206,7 +362,66 @@ fn is_user_macro(m: &MacroRef) -> bool {
     {
         return false;
     }
-    !m.name.is_empty()
+    if m.name.is_empty() {
+        return false;
+    }
+    if is_reserved_keyword(&m.name) {
+        return false;
+    }
+    if is_rpm_auto_macro(&m.name) {
+        return false;
+    }
+    // `%{?name}` / `%{!?name}` (with or without a `:default`) is
+    // the idiom where the operator explicitly handles the macro
+    // being undefined: expand-when-defined / expand-when-undefined,
+    // with a fallback body for the `:default` form. From a
+    // portability standpoint the operator has already accepted
+    // that the name may not exist, so flagging it as "missing on
+    // N profiles" is noise — the `?` / `!?` prefix is the
+    // operator's signed acknowledgement.
+    //
+    // Cross-profile detection of "some define, some don't" still
+    // works via [`record_expr_ast`], which collects names from
+    // `%if` condition bodies regardless of `?` prefix: that's
+    // exactly where operators express deliberate portability
+    // dependencies (`%if 0%{?suse_version}` etc.).
+    if matches!(
+        m.conditional,
+        ConditionalMacro::IfDefined | ConditionalMacro::IfNotDefined
+    ) {
+        return false;
+    }
+    true
+}
+
+/// True when `name` matches a hardcoded RPM control-flow directive
+/// or section marker. The parser surfaces some of these as
+/// `MacroRef` in specific grammar contexts (notably the body of
+/// `Raw` `CondExpr` and certain text fall-throughs); filter them
+/// here so the portability report doesn't claim `%if` is "missing
+/// on all 23 profiles".
+fn is_reserved_keyword(name: &str) -> bool {
+    RESERVED_KEYWORDS.contains(&name)
+}
+
+/// True when `name` is an RPM auto-defined macro: either listed
+/// verbatim in [`RPM_AUTO_MACROS`] or matching `SOURCE\d+` /
+/// `PATCH\d+` / `NOSOURCE\d+` / `NOPATCH\d+`. These are injected by
+/// the RPM build process from the preamble, so no profile registry
+/// declares them — but they're not portability concerns, they're
+/// always present at build time.
+fn is_rpm_auto_macro(name: &str) -> bool {
+    if RPM_AUTO_MACROS.contains(&name) {
+        return true;
+    }
+    for prefix in ["SOURCE", "PATCH", "NOSOURCE", "NOPATCH"] {
+        if let Some(tail) = name.strip_prefix(prefix) {
+            if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -224,7 +439,7 @@ mod tests {
 Name:    foo
 Version: %{ver}
 Release: 1
-Summary: %name
+Summary: %my_summary
 License: MIT
 
 %description
@@ -236,8 +451,15 @@ License: MIT
 ",
         );
         assert!(names.contains("ver"));
-        assert!(names.contains("name"));
-        assert!(names.contains("desc"));
+        assert!(names.contains("my_summary"));
+        // `%{?desc}` is a conditional reference — operator
+        // explicitly handles the macro being undefined, so it's
+        // not flagged. See `excludes_conditional_question_refs`.
+        assert!(!names.contains("desc"));
+        // `%name` would have been collected here pre-filter; it's
+        // now classified as an RPM auto-define (preamble injects
+        // it) so the collector excludes it.
+        assert!(!names.contains("name"));
     }
 
     #[test]
@@ -304,7 +526,9 @@ License: MIT
 
     #[test]
     fn records_conditional_default_value_body() {
-        // `%{?foo:%bar}` — both foo and bar are user macros.
+        // `%{?foo:%bar}` — outer `%{?foo}` is operator-handled
+        // (suppressed), but the default body `%bar` is a hard
+        // reference and must still be collected.
         let names = names_of(
             "\
 Name:    foo
@@ -321,8 +545,37 @@ B
 - init
 ",
         );
-        assert!(names.contains("foo"));
+        // Suppressed by the conditional-reference filter.
+        assert!(!names.contains("foo"));
+        // Inside the `:default` body — hard reference, kept.
         assert!(names.contains("bar"));
+    }
+
+    #[test]
+    fn excludes_conditional_question_refs() {
+        // `%{?name}` / `%{!?name}` are operator-handled forms:
+        // the `?` / `!?` prefix is an explicit acknowledgement
+        // that the macro may not be defined. Portability noise
+        // would otherwise dominate the `missing` bucket on every
+        // realistic spec.
+        let names = names_of(
+            "\
+Name:    foo
+Version: 1%{?distver}
+Release: 1
+Summary: %{!?my_summary:default text}
+License: MIT
+
+%description
+B
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1-1
+- init
+",
+        );
+        assert!(!names.contains("distver"));
+        assert!(!names.contains("my_summary"));
     }
 
     #[test]
