@@ -2130,3 +2130,551 @@ fn lints_invalid_severity_value_exits_nonzero_with_clap_diag() {
         "expected clap rejection in stderr, got:\n{stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// matrix subcommand
+// ---------------------------------------------------------------------------
+
+mod matrix {
+    use super::*;
+
+    /// Spec that triggers a profile-specific rule (RPM125 requires the
+    /// rhel family; generic stays silent on it). Used to verify that
+    /// aggregation correctly attributes findings to the right subset
+    /// of profiles.
+    const PROFILE_DIFF_SPEC: &str = "\
+Name:           foo
+Version:        1.0
+Release:        1%{?dist}
+Summary:        Test package
+License:        MIT
+URL:            https://example.invalid/foo
+Source0:        foo-1.0.tar.gz
+
+%description
+A test package.
+
+%prep
+%setup -q
+
+%build
+%configure
+make %{?_smp_mflags}
+
+%install
+%make_install
+
+%files
+%license LICENSE
+%{_bindir}/foo
+
+%changelog
+* Mon May 18 2026 Test <test@example.invalid> - 1.0-1
+- init
+";
+
+    #[test]
+    fn matrix_check_ad_hoc_profiles_lists_each_in_table() {
+        // The matrix table renders one row per declared profile; the
+        // order must match the --profiles CLI argument order. This
+        // catches regressions where the resolver shuffles profiles
+        // (alphabetical sort, hash-map iteration, …).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let (code, stdout, stderr) = run(
+            &[
+                "matrix",
+                "check",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(code, 0, "stderr={stderr}\nstdout={stdout}");
+        assert!(stdout.contains("`<ad-hoc>`"), "ad-hoc label missing");
+        let generic_pos = stdout.find("\n  generic").expect("generic row");
+        let rhel_pos = stdout.find("\n  rhel-9-x86_64").expect("rhel row");
+        assert!(
+            generic_pos < rhel_pos,
+            "rows must follow --profiles order; got stdout=\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn matrix_check_aggregates_profile_specific_finding() {
+        // RPM125 (source-without-url) requires a Source0 entry that
+        // isn't a URL. It's only flagged on the rhel family; generic
+        // stays silent. The aggregated section must mark it as
+        // affecting only rhel-9-x86_64, not generic.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let (code, stdout, _) = run(
+            &[
+                "matrix",
+                "check",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(code, 0);
+        let pos = stdout
+            .find("RPM125 source-without-url")
+            .expect("RPM125 in output");
+        let chunk = &stdout[pos..pos.min(stdout.len()).saturating_add(200).min(stdout.len())];
+        assert!(
+            chunk.contains("affected: rhel-9-x86_64"),
+            "RPM125 must be attributed only to rhel; got chunk={chunk}"
+        );
+        assert!(
+            !chunk.contains("affected: generic"),
+            "generic must not be in the affected set for RPM125; got chunk={chunk}"
+        );
+    }
+
+    #[test]
+    fn matrix_check_from_target_set_in_config() {
+        // Round-trip through `.rpmspec.toml`: target set declared in
+        // the config is picked up by --target-set and produces the
+        // same matrix view as the ad-hoc form.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = dir.path().join(".rpmspec.toml");
+        std::fs::write(
+            &cfg,
+            r#"
+[targets.smoke]
+profiles = ["generic", "rhel-9-x86_64"]
+"#,
+        )
+        .expect("write config");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let (code, stdout, stderr) = run(
+            &[
+                "matrix",
+                "check",
+                "--config",
+                cfg.to_str().unwrap(),
+                "--target-set",
+                "smoke",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(code, 0, "stderr={stderr}");
+        assert!(stdout.contains("`smoke`"), "target set label missing");
+        assert!(stdout.contains("rhel-9-x86_64"));
+        assert!(stdout.contains("generic"));
+    }
+
+    #[test]
+    fn matrix_check_unknown_target_set_exits_2() {
+        // Missing config-defined target → friendly error to stderr,
+        // exit 2 so CI distinguishes user error from lint failures.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let (code, _, stderr) = run(
+            &[
+                "matrix",
+                "check",
+                "--target-set",
+                "no-such-target",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(code, 2, "stderr={stderr}");
+        assert!(
+            stderr.contains("no-such-target") && stderr.contains("not defined"),
+            "expected friendly error mentioning the target name; got stderr={stderr}"
+        );
+    }
+
+    #[test]
+    fn matrix_check_requires_target_or_profiles_flag() {
+        // ArgGroup contract: at least one of --target-set / --profiles
+        // is required. clap returns non-zero with a usage message.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let (code, _, stderr) = run(
+            &["matrix", "check", spec.to_str().unwrap()],
+            None,
+        );
+        assert_ne!(code, 0, "expected clap rejection; stderr={stderr}");
+        assert!(
+            stderr.contains("--target-set") || stderr.contains("--profiles"),
+            "expected clap to mention the required flags; got stderr={stderr}"
+        );
+    }
+
+    #[test]
+    fn matrix_check_json_output_has_aggregated_and_profile_section() {
+        // The JSON shape is part of the public contract; downstream
+        // tooling keys off the `target_set`, `per_profile`, and
+        // `aggregated` fields plus `affected_profiles` arrays.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let (code, stdout, stderr) = run(
+            &[
+                "matrix",
+                "check",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(code, 0, "stderr={stderr}");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
+        assert_eq!(parsed["target_set"], "<ad-hoc>");
+        let profiles = parsed["profiles"].as_array().expect("profiles array");
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0], "generic");
+        let files = parsed["files"].as_array().expect("files array");
+        assert_eq!(files.len(), 1);
+        assert!(files[0]["per_profile"].is_array());
+        let aggregated = files[0]["aggregated"].as_array().expect("aggregated array");
+        // RPM125 finding present with affected_profiles = [rhel-9-x86_64].
+        let r125 = aggregated
+            .iter()
+            .find(|a| a["lint_id"] == "RPM125")
+            .expect("RPM125 in aggregated");
+        let affected = r125["affected_profiles"].as_array().unwrap();
+        assert_eq!(affected.len(), 1);
+        assert_eq!(affected[0], "rhel-9-x86_64");
+        // matrix_signature is the 16-hex-char form documented for Phase 1.
+        let sig = r125["matrix_signature"].as_str().expect("sig string");
+        assert_eq!(sig.len(), 16);
+        assert!(sig.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn matrix_check_reads_from_stdin() {
+        // matrix check should accept stdin the same way `lint` does
+        // (path "-" reads stdin). The display name in output must be
+        // `<stdin>` so consumers can tell sources apart.
+        let (code, stdout, stderr) = run(
+            &[
+                "matrix",
+                "check",
+                "--profiles",
+                "generic",
+                "-",
+            ],
+            Some(PROFILE_DIFF_SPEC),
+        );
+        assert_eq!(code, 0, "stderr={stderr}\nstdout={stdout}");
+        assert!(stdout.contains("<stdin>"), "expected <stdin> in output, got:\n{stdout}");
+    }
+
+    #[test]
+    fn matrix_baseline_create_emits_versioned_json_to_stdout() {
+        // `matrix baseline create` without --out writes JSON to
+        // stdout. The structure (baseline_version: 1, entries: [...])
+        // is part of the public contract — pin it here.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let (code, stdout, stderr) = run(
+            &[
+                "matrix",
+                "baseline",
+                "create",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(code, 0, "stderr={stderr}\nstdout={stdout}");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
+        assert_eq!(parsed["baseline_version"], 1);
+        let entries = parsed["entries"].as_array().expect("entries");
+        assert!(!entries.is_empty(), "expected non-empty baseline");
+        let first = &entries[0];
+        assert!(first["matrix_signature"].is_string());
+        assert!(first["lint_id"].is_string());
+        assert!(first["message"].is_string());
+        assert!(first["affected_profile_count"].is_number());
+    }
+
+    #[test]
+    fn matrix_check_marks_baseline_entries_and_fail_on_new_passes() {
+        // End-to-end baseline cycle: record current findings, then
+        // re-check with the baseline — every aggregated entry must
+        // be marked "[baseline]" and `--fail-on new` must exit 0.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let baseline = dir.path().join("base.json");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "baseline",
+                "create",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--out",
+                baseline.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "baseline create failed: stderr={stderr}");
+
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "check",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--baseline",
+                baseline.to_str().unwrap(),
+                "--fail-on",
+                "new",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "--fail-on new must pass when no new findings");
+        // Every finding from the baseline cycle should be tagged.
+        assert!(
+            stdout.contains("[baseline]"),
+            "expected [baseline] tags in output, got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn matrix_check_fail_on_new_detects_regression() {
+        // The core baseline gating contract: record a baseline on a
+        // narrower spec, then introduce a new finding by adding a
+        // spec line that fires a different rule. The added rule's
+        // signature isn't in the baseline → --fail-on=new must exit 1.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        let baseline = dir.path().join("base.json");
+
+        // Baseline spec — minimal valid form, fires RPM303 only
+        // (missing `%{?dist}`). No Source line → no RPM125 on rhel.
+        let baseline_spec = "\
+Name:           foo
+Version:        1.0
+Release:        1
+Summary:        Test package
+License:        MIT
+URL:            https://example.invalid/foo
+
+%description
+A test package.
+
+%files
+%license LICENSE
+
+%changelog
+* Mon May 18 2026 Test <test@example.invalid> - 1.0-1
+- init
+";
+        std::fs::write(&spec, baseline_spec).expect("write baseline spec");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "baseline",
+                "create",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--out",
+                baseline.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "baseline create failed: stderr={stderr}");
+
+        // Regression spec adds a Source: line whose value isn't a
+        // URL — fires RPM125 on rhel, which was NOT in the baseline.
+        let regressed_spec = baseline_spec.replace(
+            "URL:            https://example.invalid/foo\n",
+            "URL:            https://example.invalid/foo\nSource0:        foo-1.0.tar.gz\n",
+        );
+        std::fs::write(&spec, &regressed_spec).expect("rewrite spec");
+
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "check",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--deny",
+                "warnings",
+                "--baseline",
+                baseline.to_str().unwrap(),
+                "--fail-on",
+                "new",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(
+            rc, 1,
+            "expected exit 1 for new deny finding; stdout={stdout}\nstderr={stderr}"
+        );
+        // The new finding must be visible without the [baseline] tag.
+        let r125_pos = stdout
+            .find("RPM125")
+            .unwrap_or_else(|| panic!("expected RPM125 in output:\n{stdout}"));
+        let line_end = stdout[r125_pos..]
+            .find('\n')
+            .map(|n| r125_pos + n)
+            .unwrap_or(stdout.len());
+        assert!(
+            !stdout[r125_pos..line_end].contains("[baseline]"),
+            "new RPM125 finding must NOT be tagged [baseline]:\n{}",
+            &stdout[r125_pos..line_end]
+        );
+    }
+
+    #[test]
+    fn matrix_check_baseline_with_invalid_signature_is_rejected() {
+        // Hand-crafted baseline with a non-hex matrix_signature must
+        // be rejected at load time — silently treating it as "no
+        // entry matches" would break --fail-on new.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let baseline = dir.path().join("bad.json");
+        std::fs::write(
+            &baseline,
+            r#"{
+                "baseline_version": 1,
+                "entries": [
+                    {
+                        "matrix_signature": "NOT-HEX",
+                        "lint_id": "RPM055",
+                        "message": "msg",
+                        "affected_profile_count": 1
+                    }
+                ]
+            }"#,
+        )
+        .expect("write baseline");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "check",
+                "--profiles",
+                "generic",
+                "--baseline",
+                baseline.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_ne!(rc, 0, "must reject malformed baseline");
+        assert!(
+            stderr.contains("invalid matrix signature"),
+            "expected validation error in stderr; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn matrix_check_baseline_with_unsupported_version_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let baseline = dir.path().join("future.json");
+        std::fs::write(
+            &baseline,
+            r#"{ "baseline_version": 99, "entries": [] }"#,
+        )
+        .expect("write baseline");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "check",
+                "--profiles",
+                "generic",
+                "--baseline",
+                baseline.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_ne!(rc, 0, "must reject future version baseline");
+        assert!(
+            stderr.contains("version 99") && stderr.contains("supports version 1"),
+            "expected actionable version error; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn matrix_check_fail_on_new_without_baseline_exits_2() {
+        // --fail-on new without --baseline is a user-error: would
+        // silently degrade to "every deny is new" otherwise.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "check",
+                "--profiles",
+                "generic",
+                "--fail-on",
+                "new",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2);
+        assert!(
+            stderr.contains("--fail-on new") && stderr.contains("--baseline"),
+            "expected friendly error mentioning both flags; got stderr={stderr}"
+        );
+    }
+
+    #[test]
+    fn matrix_check_lint_and_lint_exit_codes_align_on_single_profile() {
+        // Sanity contract: matrix check against a single profile must
+        // not report deny when single-profile lint against the same
+        // profile reports no deny. Catches accidental severity drift.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let (lint_code, _, _) = run(
+            &[
+                "lint",
+                "--profile",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        let (matrix_code, _, _) = run(
+            &[
+                "matrix",
+                "check",
+                "--profiles",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        // Both should agree on "no deny" / "deny" — exit 0 in either
+        // case for this spec, but the assertion checks the parity.
+        assert_eq!(
+            lint_code, matrix_code,
+            "lint and matrix exit codes must agree on the same single-profile run"
+        );
+    }
+}

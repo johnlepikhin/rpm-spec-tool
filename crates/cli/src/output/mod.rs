@@ -1,5 +1,6 @@
 pub mod human;
 pub mod json;
+pub mod matrix;
 pub mod pretty;
 pub mod sarif;
 

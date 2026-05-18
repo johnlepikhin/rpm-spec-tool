@@ -34,7 +34,7 @@ impl Cmd {
     pub fn run(self, color: ColorChoice) -> Result<ExitCode> {
         // Same fail-fast contract as `lint`: bad `--define` shouldn't
         // print one error per spec in a batch.
-        if let Err(e) = validate_cli_defines(&self.defines.raw) {
+        if let Err(e) = self.defines.validate() {
             eprintln!("error: {e}");
             return Ok(ExitCode::from(2));
         }
@@ -120,15 +120,3 @@ impl Cmd {
     }
 }
 
-/// Walk every raw `--define` argument through the parser, returning
-/// the first failure. See [`crate::commands::lint`] for the rationale —
-/// both subcommands fail-fast on bad CLI defines instead of repeating
-/// the same error N times across a batch.
-fn validate_cli_defines(
-    raws: &[String],
-) -> Result<(), rpm_spec_analyzer::profile::DefineParseError> {
-    for raw in raws {
-        rpm_spec_analyzer::profile::parse_define(raw)?;
-    }
-    Ok(())
-}

@@ -131,7 +131,7 @@ pub fn parse_define(raw: &str) -> Result<CliDefine, DefineParseError> {
 /// colons (`foo(x)`, `foo:default` — reserved by parameterised and
 /// defaulting macro syntax), and non-ASCII (`café` — rpm scanner is
 /// ASCII-only). All now rejected with a precise reason.
-fn validate_name(name: &str) -> Result<(), DefineParseError> {
+pub(crate) fn validate_name(name: &str) -> Result<(), DefineParseError> {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return Err(DefineParseError::InvalidName {

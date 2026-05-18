@@ -38,6 +38,10 @@ visitor-based analyzer that ships with 24 built-in distribution profiles
 - **Distribution profiles** — 24 built-in profiles select the right macro
   registry, rpmlib feature set, and family-gated lints. Pick one with
   `--profile <name>` or via `.rpmspec.toml`.
+- **Release matrix** — `matrix check` runs every active lint against a
+  set of profiles in one invocation and aggregates findings by affected
+  profiles, so the same root cause across N platforms shows up once.
+  See [`doc/matrix.md`](doc/matrix.md).
 - **`--define` like `rpmbuild`** — `-D 'NAME VALUE'` injects macros at lint
   time; CLI defines outrank profile / config defaults. Repeatable.
 - **Shellcheck integration** — optional. The analyzer invokes
@@ -103,6 +107,9 @@ rpm-spec-tool profile list
 
 # Compare a macro across profiles (note: macro name without `%`):
 rpm-spec-tool profile macro dist rhel-9-x86_64 rhel-10-x86_64
+
+# Multi-profile (release matrix) check — aggregates findings across profiles:
+rpm-spec-tool matrix check --profiles rhel-8-x86_64,rhel-9-x86_64,altlinux-10-x86_64 my-package.spec
 ```
 
 Every spec-taking subcommand reads from stdin when the path is `-` or omitted.

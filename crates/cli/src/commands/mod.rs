@@ -1,12 +1,15 @@
 pub mod ast;
 pub mod check;
 pub mod completions;
+pub mod config_loader;
 pub mod format;
 pub mod lint;
 pub mod lints;
+pub mod matrix;
 pub mod pretty;
 pub mod printer_config;
 pub mod profile;
+pub mod target;
 
 /// Upper bound on the per-level conditional indent. The printer
 /// renders the indent literally as `n * level` spaces; without a

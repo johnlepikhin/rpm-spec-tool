@@ -40,6 +40,10 @@ pub enum Command {
     Check(commands::check::Cmd),
     /// Inspect the resolved distribution profile.
     Profile(commands::profile::Cmd),
+    /// Inspect release target sets — collections of profiles used by `matrix`.
+    Target(commands::target::Cmd),
+    /// Multi-profile (release matrix) analysis.
+    Matrix(commands::matrix::Cmd),
     /// List every built-in lint rule with a short description.
     Lints(commands::lints::Cmd),
     /// Emit a shell completion script for the given shell on stdout.
@@ -79,6 +83,22 @@ pub struct MacroDefinesArg {
     pub raw: Vec<String>,
 }
 
+impl MacroDefinesArg {
+    /// Validate every raw `--define` argument up-front, before any
+    /// per-source loop runs. The resolver re-parses these inside its
+    /// own pipeline, so the early check exists only to fail-fast
+    /// with a stable exit code (2 — soft user error) and to avoid
+    /// repeating the same error per spec in a batch.
+    pub fn validate(
+        &self,
+    ) -> Result<(), rpm_spec_analyzer::profile::DefineParseError> {
+        for raw in &self.raw {
+            rpm_spec_analyzer::profile::parse_define(raw)?;
+        }
+        Ok(())
+    }
+}
+
 impl Application {
     pub fn run(self) -> anyhow::Result<ExitCode> {
         let color = self.color;
@@ -89,6 +109,8 @@ impl Application {
             Command::Ast(cmd) => cmd.run(),
             Command::Check(cmd) => cmd.run(color),
             Command::Profile(cmd) => cmd.run(color),
+            Command::Target(cmd) => cmd.run(color),
+            Command::Matrix(cmd) => cmd.run(color),
             Command::Lints(cmd) => cmd.run(color),
             Command::Completions(cmd) => cmd.run(),
         }

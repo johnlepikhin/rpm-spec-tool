@@ -26,14 +26,14 @@ use crate::app::ColorChoice;
 /// Painter for plain-`Write` profile renderers. Cheap (`Copy`-ish, only
 /// a bool); construct once at dispatch and pass `&Style` down.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct Style {
+pub(crate) struct Style {
     enabled: bool,
 }
 
 impl Style {
     /// Resolve `auto` against stdout TTY status. `always` and `never`
     /// are passed through.
-    pub(super) fn new(choice: ColorChoice) -> Self {
+    pub(crate) fn new(choice: ColorChoice) -> Self {
         let enabled = match choice {
             ColorChoice::Always => true,
             ColorChoice::Never => false,
@@ -46,7 +46,7 @@ impl Style {
     /// assertions (`output.contains("dist = .el9")`) keep working
     /// against the formatted output unchanged.
     #[cfg(test)]
-    pub(super) fn plain() -> Self {
+    pub(crate) fn plain() -> Self {
         Self { enabled: false }
     }
 
@@ -58,19 +58,19 @@ impl Style {
         }
     }
 
-    pub(super) fn bold(&self, s: &str) -> String {
+    pub(crate) fn bold(&self, s: &str) -> String {
         self.wrap("1", s)
     }
-    pub(super) fn dim(&self, s: &str) -> String {
+    pub(crate) fn dim(&self, s: &str) -> String {
         self.wrap("2", s)
     }
-    pub(super) fn bold_cyan(&self, s: &str) -> String {
+    pub(crate) fn bold_cyan(&self, s: &str) -> String {
         self.wrap("1;36", s)
     }
-    pub(super) fn bold_green(&self, s: &str) -> String {
+    pub(crate) fn bold_green(&self, s: &str) -> String {
         self.wrap("1;32", s)
     }
-    pub(super) fn dim_red(&self, s: &str) -> String {
+    pub(crate) fn dim_red(&self, s: &str) -> String {
         self.wrap("2;31", s)
     }
 }

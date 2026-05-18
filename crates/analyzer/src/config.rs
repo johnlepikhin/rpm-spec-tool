@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use rpm_spec::printer::PrinterConfig;
-use rpm_spec_profile::ProfileEntry;
+use rpm_spec_profile::{ProfileEntry, TargetEntry};
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::Severity;
@@ -94,6 +94,12 @@ pub struct Config {
     /// semantics of layering (`extends` + `showrc-file` + overrides).
     #[serde(default)]
     pub profiles: BTreeMap<String, ProfileEntry>,
+    /// Named release target sets — collections of profiles the same
+    /// `.spec` is expected to build under. Consumed by the `matrix`
+    /// and `target` CLI groups; the lint/check single-profile paths
+    /// ignore this map. See `doc/matrix.md` for the resolution model.
+    #[serde(default)]
+    pub targets: BTreeMap<String, TargetEntry>,
     /// "Warnings-as-errors" toggle — when `true`, any rule that
     /// resolves to [`Severity::Warn`] is promoted to [`Severity::Deny`]
     /// at runtime. Triggered from the CLI by `--deny warnings`
@@ -436,6 +442,36 @@ preamble-align-column = 20
             cfg.lints.is_empty(),
             "meta-name must not leak as a lint key"
         );
+    }
+
+    #[test]
+    fn parses_target_section() {
+        // The `[targets.<name>]` table is the matrix-mode entry point.
+        // Parsing here is a structural smoke check — resolution
+        // semantics live in the profile crate's resolver tests.
+        let toml_str = r#"
+[targets.product-2026q2]
+profiles = ["rhel-9-x86_64", "altlinux-10-x86_64"]
+
+[targets.product-2026q2.defines]
+product_build = "1"
+
+[targets.product-2026q2.profile-overrides."altlinux-10-e2k"]
+[targets.product-2026q2.profile-overrides."altlinux-10-e2k".defines]
+use_jit = "0"
+"#;
+        let cfg = Config::from_toml_str(toml_str).unwrap();
+        let target = cfg
+            .targets
+            .get("product-2026q2")
+            .expect("target set parsed");
+        assert_eq!(target.profiles.len(), 2);
+        assert_eq!(target.defines.get("product_build").map(String::as_str), Some("1"));
+        let e2k = target
+            .profile_overrides
+            .get("altlinux-10-e2k")
+            .expect("per-profile override present");
+        assert_eq!(e2k.defines.get("use_jit").map(String::as_str), Some("0"));
     }
 
     #[test]

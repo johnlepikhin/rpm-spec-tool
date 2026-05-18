@@ -16,12 +16,14 @@
     reason = "pre-1.0: 537 items lack /// — track and reduce; expect form fires loudly when the backlog reaches zero"
 )]
 
+pub mod baseline;
 pub mod config;
 pub mod config_cache;
 pub mod diagnostic;
 pub mod error_format;
 pub(crate) mod files;
 pub mod lint;
+pub mod matrix;
 pub(crate) mod policy;
 pub mod registry;
 pub mod rules;
@@ -29,8 +31,13 @@ pub mod session;
 pub(crate) mod shell;
 pub mod visit;
 
+pub use baseline::{Baseline, BaselineEntry, BaselineError};
 pub use diagnostic::{Applicability, Diagnostic, Edit, Label, LintCategory, Severity, Suggestion};
 pub use lint::{Lint, LintMetadata};
+pub use matrix::{
+    AggregatedDiagnostic, MatrixResult, MatrixSignature, MatrixSignatureParseError, ProfileResult,
+    SIGNATURE_HEX_LEN, run_matrix,
+};
 pub use session::{
     LintSession, ParseOutcome, ParserDiagnostic, ParserSeverity, analyze, analyze_with_profile,
     analyze_with_profile_at, parse,

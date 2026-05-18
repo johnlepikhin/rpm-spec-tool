@@ -79,7 +79,7 @@ impl Cmd {
         // would be repeated per spec in a batch (resolve happens
         // inside the per-source loop), drowning the user in noise and
         // delaying the fix-the-typo signal.
-        if let Err(e) = validate_cli_defines(&self.defines.raw) {
+        if let Err(e) = self.defines.validate() {
             eprintln!("error: {e}");
             return Ok(ExitCode::from(2));
         }
@@ -228,20 +228,3 @@ impl Cmd {
     }
 }
 
-/// Walk every raw `--define` argument through the parser, returning
-/// the first failure. Lets `Cmd::run` fail-fast before the per-source
-/// loop instead of repeating the same error N times.
-///
-/// We discard the parsed [`CliDefine`] vector — the resolver will
-/// re-parse internally. The N×2 parse cost is negligible (typical N
-/// ≤ 10), and the alternative — threading a parsed cache into
-/// [`rpm_spec_analyzer::profile::ResolveOptions`] — would widen the
-/// crate's public surface for a microsecond saving.
-fn validate_cli_defines(
-    raws: &[String],
-) -> Result<(), rpm_spec_analyzer::profile::DefineParseError> {
-    for raw in raws {
-        rpm_spec_analyzer::profile::parse_define(raw)?;
-    }
-    Ok(())
-}

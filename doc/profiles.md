@@ -347,3 +347,10 @@ dist-tag = ".mc1"
 [profiles.ourbuild.macros]
 _vendor = "mycompany"
 ```
+
+## Multi-platform matrix
+
+A *target set* groups multiple profiles so the same spec can be checked
+across an entire release matrix in one invocation, with findings
+aggregated by affected profiles. See [`matrix.md`](matrix.md) for the
+`[targets.<name>]` schema and the `matrix check` command.

@@ -32,12 +32,12 @@ use rpm_spec_analyzer::config::Config;
 use rpm_spec_analyzer::profile::{Profile, ResolveOptions, builtin};
 
 mod common;
-mod fmt;
+pub(crate) mod fmt;
 mod list;
 mod macro_lookup;
 mod macros;
 mod show;
-mod style;
+pub(crate) mod style;
 
 // Re-export Opts so `Action` variants resolve them without paths and
 // so external consumers (`commands/mod.rs`, integration tests) keep a
@@ -86,7 +86,7 @@ pub enum Action {
 
 impl Cmd {
     pub fn run(self, color: crate::app::ColorChoice) -> Result<ExitCode> {
-        let (config, base_dir) = load_config(self.config.as_deref())?;
+        let (config, base_dir) = crate::commands::config_loader::load_config(self.config.as_deref())?;
         let style = style::Style::new(color);
         let stdout = std::io::stdout();
         let mut out = stdout.lock();
@@ -179,44 +179,6 @@ pub(super) fn resolve_many(
             Ok((name.clone(), p))
         })
         .collect()
-}
-
-/// Load the config and return both it and the directory it was found in
-/// (used as the base for relative `showrc-file` paths during resolution).
-fn load_config(explicit: Option<&Path>) -> Result<(Config, PathBuf)> {
-    if let Some(path) = explicit {
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let cfg =
-            Config::from_toml_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-        let base = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        return Ok((cfg, base));
-    }
-    // Discovery: walk upward from CWD looking for `.rpmspec.toml`.
-    let cwd = std::env::current_dir().context("getting current directory")?;
-    let mut dir = cwd.clone();
-    loop {
-        let candidate = dir.join(".rpmspec.toml");
-        if candidate.is_file() {
-            tracing::debug!(path = %candidate.display(), "found .rpmspec.toml");
-            let text = std::fs::read_to_string(&candidate)
-                .with_context(|| format!("reading {}", candidate.display()))?;
-            let cfg = Config::from_toml_str(&text)
-                .with_context(|| format!("parsing {}", candidate.display()))?;
-            return Ok((cfg, dir));
-        }
-        if !dir.pop() {
-            // No config found — fall back to defaults, anchored at CWD.
-            tracing::debug!(
-                cwd = %cwd.display(),
-                "no .rpmspec.toml found while walking up; using Config::default()"
-            );
-            return Ok((Config::default(), cwd));
-        }
-    }
 }
 
 #[cfg(test)]

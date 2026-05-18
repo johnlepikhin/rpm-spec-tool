@@ -125,6 +125,64 @@ pub struct ListOverride {
     pub replace: bool,
 }
 
+/// One entry of `[targets.<name>]` — a release target set.
+///
+/// A target set names a collection of distribution profiles that the
+/// same `.spec` is expected to build under, plus optional shared
+/// `--define` values applied uniformly and per-profile overrides for
+/// outlier platforms.
+///
+/// Profiles named here must either be a built-in (see
+/// [`crate::builtin::names`]) or a key from
+/// [`ProfileSection::profiles`]. Resolution failures (unknown profile
+/// name, etc.) are caught by the resolver rather than at TOML parse
+/// time — `[targets.*]` is just data here.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+#[non_exhaustive]
+pub struct TargetEntry {
+    /// Ordered list of profile names. Duplicates are preserved here
+    /// but the resolver collapses them — keeping the order lets users
+    /// drive deterministic output (table column order, JSON array
+    /// order).
+    pub profiles: Vec<String>,
+    /// `NAME = "VALUE"` pairs applied as `--define`-style overrides to
+    /// every profile in this target. Layered between the profile's own
+    /// `[profiles.X.macros]` and any CLI-supplied `--define` — CLI
+    /// always wins.
+    pub defines: BTreeMap<String, String>,
+    /// Outlier overrides for individual profiles inside this target.
+    /// Keys must appear in [`Self::profiles`]; resolver rejects
+    /// unknown keys so a typo can't silently no-op.
+    pub profile_overrides: BTreeMap<String, TargetProfileOverride>,
+}
+
+/// Per-profile override block inside a `[targets.<name>.profile-overrides.<profile>]`
+/// section. Only `defines` for now — future extensions (per-profile
+/// severity tweaks, conditional inclusion) land here.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+#[non_exhaustive]
+pub struct TargetProfileOverride {
+    /// Extra `--define`-style overrides applied only when resolving
+    /// this profile within this target. Layered after the target-wide
+    /// `defines` and still before any CLI `--define`.
+    pub defines: BTreeMap<String, String>,
+}
+
+impl TargetEntry {
+    /// Construct an ad-hoc target entry from a profile list. Used by
+    /// `matrix check --profiles a,b,c` so the CLI can avoid struct
+    /// expressions on this `#[non_exhaustive]` type from outside the
+    /// crate.
+    pub fn from_profiles(profiles: Vec<String>) -> Self {
+        Self {
+            profiles,
+            ..Self::default()
+        }
+    }
+}
+
 impl ProfileEntry {
     /// Build the user-override [`ProfilePatch`] that the resolver applies
     /// after the showrc layer. Identity defaults (including the human
@@ -292,5 +350,60 @@ random-key = 1
         };
         let entry = ov.into_entry();
         assert!(matches!(entry.value, MacroValue::Raw { .. }));
+    }
+
+    #[test]
+    fn parses_minimal_target_entry() {
+        let s = r#"
+profiles = ["rhel-9-x86_64", "altlinux-10-x86_64"]
+"#;
+        let entry: TargetEntry = toml::from_str(s).unwrap();
+        assert_eq!(entry.profiles, vec!["rhel-9-x86_64", "altlinux-10-x86_64"]);
+        assert!(entry.defines.is_empty());
+        assert!(entry.profile_overrides.is_empty());
+    }
+
+    #[test]
+    fn parses_target_with_defines_and_overrides() {
+        // Verifies the nested `profile-overrides` shape — the
+        // documented kebab-case form drives `rename_all`.
+        let s = r#"
+profiles = ["rhel-9-x86_64", "altlinux-10-e2k"]
+
+[defines]
+product_build = "1"
+
+[profile-overrides."altlinux-10-e2k"]
+[profile-overrides."altlinux-10-e2k".defines]
+use_jit = "0"
+"#;
+        let entry: TargetEntry = toml::from_str(s).unwrap();
+        assert_eq!(entry.defines.get("product_build").map(String::as_str), Some("1"));
+        let override_block = entry
+            .profile_overrides
+            .get("altlinux-10-e2k")
+            .expect("override for e2k");
+        assert_eq!(
+            override_block.defines.get("use_jit").map(String::as_str),
+            Some("0")
+        );
+    }
+
+    #[test]
+    fn target_entry_rejects_unknown_field() {
+        let s = r#"
+profiles = ["rhel-9-x86_64"]
+random-key = "nope"
+"#;
+        let err = toml::from_str::<TargetEntry>(s).unwrap_err();
+        assert!(err.to_string().contains("unknown"));
+    }
+
+    #[test]
+    fn target_entry_default_has_empty_collections() {
+        let entry = TargetEntry::default();
+        assert!(entry.profiles.is_empty());
+        assert!(entry.defines.is_empty());
+        assert!(entry.profile_overrides.is_empty());
     }
 }

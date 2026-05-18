@@ -37,10 +37,12 @@ pub mod types;
 
 pub use config_layer::{
     ListOverride, MacroOverride, ProfileEntry, ProfileIdentityOverride, ProfileSection,
+    TargetEntry, TargetProfileOverride,
 };
 pub use overrides::{CliDefine, DefineParseError, parse_define};
-pub use resolve::{ResolveError, ResolveOptions, resolve as resolve_profile};
+pub use resolve::{ResolveError, ResolveOptions, resolve as resolve_profile, resolve_target_set};
 pub use types::{
     ArchInfo, Family, GroupList, Identity, LayerInfo, LicenseList, MacroEntry, MacroRegistry,
-    MacroValue, Profile, Provenance, RpmlibFeatures, ValidationMode,
+    MacroValue, Profile, Provenance, ResolvedTarget, ResolvedTargetSet, RpmlibFeatures,
+    ValidationMode,
 };

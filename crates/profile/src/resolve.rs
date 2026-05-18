@@ -22,11 +22,11 @@ use std::path::{Path, PathBuf};
 
 use crate::autodetect;
 use crate::builtin::{self, BuiltinSnapshot, DEFAULT_BUILTIN};
-use crate::config_layer::{ProfileEntry, ProfileIdentityOverride, ProfileSection};
+use crate::config_layer::{ProfileEntry, ProfileIdentityOverride, ProfileSection, TargetEntry};
 use crate::merge::{IdentityPatch, ProfilePatch};
 use crate::overrides::{self, DefineParseError};
 use crate::showrc;
-use crate::types::{LayerInfo, Profile};
+use crate::types::{LayerInfo, Profile, ResolvedTarget, ResolvedTargetSet};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
@@ -54,6 +54,34 @@ pub enum ResolveError {
     /// not a `.rpmspec.toml` or showrc problem.
     #[error("invalid --define argument: {0}")]
     BadDefine(#[from] DefineParseError),
+    /// A target set's `profile-overrides` table referenced a profile
+    /// name that is not in the target's `profiles` list. Almost
+    /// always a typo — silently ignoring the override would mask a
+    /// real misconfiguration.
+    #[error(
+        "target set `{target}` has a profile-overrides entry for `{profile}` \
+         which is not in its `profiles` list"
+    )]
+    UnknownProfileInTarget { target: String, profile: String },
+    /// A target set has an empty `profiles` list. The matrix consumer
+    /// has nothing to run against — fail explicitly rather than
+    /// produce an empty result the caller has to special-case.
+    #[error("target set `{target}` has an empty `profiles` list")]
+    EmptyTargetSet { target: String },
+    /// A `[targets.X.defines]` or `[targets.X.profile-overrides.Y.defines]`
+    /// entry has a value that can't safely round-trip through the
+    /// `"NAME VALUE"` format the resolver uses internally. Currently
+    /// triggers on newline / carriage-return — those silently parse as
+    /// part of the value but produce a macro body that rpmbuild can
+    /// never reproduce from a CLI flag.
+    #[error(
+        "target set `{target}`: defines entry `{key}` has an invalid value ({reason})"
+    )]
+    InvalidTargetDefine {
+        target: String,
+        key: String,
+        reason: &'static str,
+    },
 }
 
 /// Caller-supplied knobs for [`resolve`]. Carries CLI-time inputs that
@@ -86,7 +114,7 @@ pub struct ResolveOptions<'a> {
 impl<'a> ResolveOptions<'a> {
     /// Convenience constructor for the common "only `--profile`"
     /// shape. Lets call sites that don't care about defines avoid the
-    /// struct literal: `ResolveOptions::with_override(Some("rhel-9"))`.
+    /// struct literal: `ResolveOptions::with_override(Some("rhel-9-x86_64"))`.
     ///
     /// Returns a fresh `Self` rather than `&mut Self` so callers can
     /// chain [`Self::with_defines`] without naming the intermediate
@@ -351,6 +379,180 @@ fn has_identity_changes(p: &IdentityPatch) -> bool {
     p.family.is_some() || p.vendor.is_some() || p.dist_tag.is_some()
 }
 
+/// Validate one TOML-supplied define before it's stringified into the
+/// resolver's `"NAME VALUE"` channel. Catches:
+///
+/// * keys that aren't valid rpm macro names (would silently round-trip
+///   wrong: `"foo bar" = "1"` → parse_define sees name="foo" value="bar 1"),
+/// * values containing newlines / carriage returns (silently absorbed
+///   by parse_define but can't be reproduced from any CLI flag).
+fn validate_target_define(
+    target_id: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), ResolveError> {
+    // Validate the key directly through the shared name validator —
+    // a probe like `format!("{key} _")` + parse_define silently
+    // accepts keys with embedded whitespace (`"foo bar"` → name="foo"),
+    // missing the very class of misconfiguration this check is for.
+    overrides::validate_name(key).map_err(ResolveError::BadDefine)?;
+    if value.contains('\n') || value.contains('\r') {
+        return Err(ResolveError::InvalidTargetDefine {
+            target: target_id.to_string(),
+            key: key.to_string(),
+            reason: "value contains a newline / carriage return",
+        });
+    }
+    Ok(())
+}
+
+/// Resolve a target set (a release matrix) into one fully-merged
+/// [`Profile`] per member.
+///
+/// `target_id` is the `[targets.<id>]` TOML key (or any synthetic
+/// label for ad-hoc target sets built from `--profiles a,b,c` on the
+/// CLI). Validation order is fail-fast:
+///
+/// 1. The `profiles` list must not be empty.
+/// 2. Every key in `profile_overrides` must appear in `profiles`
+///    (catches typos).
+/// 3. CLI `--define` args parse before any profile is resolved
+///    (matches [`resolve`]'s contract).
+/// 4. Each profile is resolved sequentially in declared order via
+///    the existing single-profile [`resolve`]; the first failure
+///    aborts the whole set so callers never see a partially-built
+///    [`ResolvedTargetSet`].
+///
+/// Defines precedence inside one profile resolution:
+///
+/// ```text
+/// extends → showrc → autodetect → [profiles.X.macros]
+///   → target.defines (low)
+///   → target.profile_overrides[X].defines (mid)
+///   → opts.cli_defines (high — user's --define)
+/// ```
+///
+/// The target-level and per-profile defines are stacked into the
+/// same `cli_defines` slice as the user's `--define`, in this order,
+/// so the resolver's existing last-wins semantics give the documented
+/// precedence. They land on a single [`LayerInfo::CliDefine`] layer —
+/// distinguishing them at the layer-trail level is a follow-up
+/// (`doc/matrix.md` notes this).
+///
+/// Duplicate profile names in `target.profiles` are collapsed to
+/// first occurrence so the result preserves the user's declared
+/// column order without surprising the matrix renderer with
+/// duplicated columns.
+pub fn resolve_target_set(
+    section: &ProfileSection,
+    target_id: &str,
+    target: &TargetEntry,
+    base_dir: &Path,
+    opts: ResolveOptions<'_>,
+) -> Result<ResolvedTargetSet, ResolveError> {
+    let _span = tracing::info_span!(
+        "resolve_target_set",
+        target = target_id,
+        profiles = target.profiles.len(),
+        defines = target.defines.len(),
+        overrides = target.profile_overrides.len(),
+    )
+    .entered();
+    if target.profiles.is_empty() {
+        return Err(ResolveError::EmptyTargetSet {
+            target: target_id.to_string(),
+        });
+    }
+    // Validate per-profile overrides reference declared profiles —
+    // catches `[targets.X.profile-overrides.rhel-8]` typos when
+    // the actual list says `rhel-9`. Cheap up-front check.
+    for override_key in target.profile_overrides.keys() {
+        if !target.profiles.iter().any(|p| p == override_key) {
+            return Err(ResolveError::UnknownProfileInTarget {
+                target: target_id.to_string(),
+                profile: override_key.clone(),
+            });
+        }
+    }
+
+    // Validate target-wide defines once up-front so a bad key/value
+    // doesn't surface as a confusing inner BadDefine on the first
+    // profile resolution. Reuses parse_define for name validation.
+    for (k, v) in &target.defines {
+        validate_target_define(target_id, k, v)?;
+    }
+    for (profile_key, po) in &target.profile_overrides {
+        for (k, v) in &po.defines {
+            validate_target_define(
+                &format!("{target_id} / profile-overrides.{profile_key}"),
+                k,
+                v,
+            )?;
+        }
+    }
+
+    let mut seen = std::collections::BTreeSet::<&str>::new();
+    let mut resolved = Vec::with_capacity(target.profiles.len());
+
+    // Target-wide defines are identical for every member; stringify
+    // them once instead of per-profile inside the loop.
+    let mut target_define_strings: Vec<String> = Vec::with_capacity(target.defines.len());
+    for (k, v) in &target.defines {
+        target_define_strings.push(format!("{k} {v}"));
+    }
+
+    for profile_id in &target.profiles {
+        // First occurrence wins; later duplicates are silently
+        // collapsed. Logged for observability since duplicates in
+        // hand-written TOML are usually a copy-paste mistake.
+        if !seen.insert(profile_id.as_str()) {
+            tracing::info!(
+                target = target_id,
+                profile = %profile_id,
+                "duplicate profile in target set — collapsing to first occurrence"
+            );
+            continue;
+        }
+
+        // Stack defines: target-wide first, per-profile override
+        // second, user --define last (highest precedence). All three
+        // sit in one cli_defines slice — resolve()'s last-write-wins
+        // does the right thing. Target-wide part is shared across
+        // members and prepared above.
+        let per_profile_override_count = target
+            .profile_overrides
+            .get(profile_id)
+            .map_or(0, |po| po.defines.len());
+        let mut combined_defines: Vec<String> = Vec::with_capacity(
+            target_define_strings.len() + per_profile_override_count + opts.cli_defines.len(),
+        );
+        combined_defines.extend(target_define_strings.iter().cloned());
+        if let Some(po) = target.profile_overrides.get(profile_id) {
+            for (k, v) in &po.defines {
+                combined_defines.push(format!("{k} {v}"));
+            }
+        }
+        for d in opts.cli_defines {
+            combined_defines.push(d.clone());
+        }
+
+        let per_profile_opts = ResolveOptions {
+            cli_override: Some(profile_id.as_str()),
+            cli_defines: &combined_defines,
+        };
+        let profile = resolve(section, base_dir, per_profile_opts)?;
+        resolved.push(ResolvedTarget {
+            profile_id: profile_id.clone(),
+            profile,
+        });
+    }
+
+    Ok(ResolvedTargetSet {
+        id: target_id.to_string(),
+        targets: resolved,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,9 +620,9 @@ mod tests {
     #[test]
     fn showrc_layer_auto_detects_identity() {
         let mut section = empty_section();
-        section.profile = Some("rhel-9".into());
+        section.profile = Some("rhel-9-x86_64".into());
         section.profiles.insert(
-            "rhel-9".into(),
+            "rhel-9-x86_64".into(),
             ProfileEntry {
                 showrc_file: Some(PathBuf::from("tests/fixtures/rhel7-showrc.txt")),
                 ..Default::default()
@@ -662,5 +864,323 @@ mod tests {
             dist.provenance,
             crate::types::Provenance::Showrc { .. }
         ));
+    }
+
+    // -- resolve_target_set --
+
+    fn target_with(profiles: &[&str]) -> TargetEntry {
+        TargetEntry {
+            profiles: profiles.iter().map(|s| (*s).to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn target_set_resolves_each_profile_in_declared_order() {
+        // Order matters for matrix renderers — columns line up with
+        // the user's declared profile list.
+        let section = empty_section();
+        let target = target_with(&["generic", "rhel-9-x86_64"]);
+        let set = resolve_target_set(
+            &section,
+            "smoke",
+            &target,
+            Path::new("."),
+            ResolveOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(set.id, "smoke");
+        assert_eq!(set.targets.len(), 2);
+        assert_eq!(set.targets[0].profile_id, "generic");
+        assert_eq!(set.targets[1].profile_id, "rhel-9-x86_64");
+        // Each entry's profile must have been built from the matching
+        // built-in (proves resolve() was called with the right
+        // cli_override). identity.name itself is a human label from
+        // the built-in TOML, not the profile key.
+        assert!(set.targets[0]
+            .profile
+            .layers
+            .iter()
+            .any(|l| matches!(l, LayerInfo::Builtin { name } if name.as_ref() == "generic")));
+        assert!(set.targets[1].profile.layers.iter().any(|l| {
+            matches!(l, LayerInfo::Builtin { name } if name.as_ref() == "rhel-9-x86_64")
+        }));
+    }
+
+    #[test]
+    fn target_set_empty_profiles_is_rejected() {
+        // Empty matrix is almost certainly a misconfiguration; the
+        // matrix CLI would otherwise print a header and zero rows
+        // with exit 0.
+        let section = empty_section();
+        let target = TargetEntry::default();
+        let err = resolve_target_set(
+            &section,
+            "empty",
+            &target,
+            Path::new("."),
+            ResolveOptions::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ResolveError::EmptyTargetSet { ref target } if target == "empty"));
+    }
+
+    #[test]
+    fn target_set_unknown_override_key_is_rejected() {
+        // Per-profile override referencing a profile not in `profiles`
+        // is treated as a typo (rather than silently no-op).
+        let section = empty_section();
+        let mut target = target_with(&["generic"]);
+        target.profile_overrides.insert(
+            "rhel-9-x86_64".into(),
+            crate::config_layer::TargetProfileOverride::default(),
+        );
+        let err = resolve_target_set(
+            &section,
+            "T",
+            &target,
+            Path::new("."),
+            ResolveOptions::default(),
+        )
+        .unwrap_err();
+        match err {
+            ResolveError::UnknownProfileInTarget { target, profile } => {
+                assert_eq!(target, "T");
+                assert_eq!(profile, "rhel-9-x86_64");
+            }
+            other => panic!("expected UnknownProfileInTarget, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn target_set_defines_layer_on_every_profile() {
+        // Target-level defines must reach every member profile,
+        // through the existing CliDefine layer mechanism.
+        let section = empty_section();
+        let mut target = target_with(&["generic", "rhel-9-x86_64"]);
+        target.defines.insert("product_build".into(), "1".into());
+
+        let set = resolve_target_set(
+            &section,
+            "T",
+            &target,
+            Path::new("."),
+            ResolveOptions::default(),
+        )
+        .unwrap();
+        for rt in &set.targets {
+            let m = rt
+                .profile
+                .macros
+                .get("product_build")
+                .expect("define landed on profile");
+            assert_eq!(m.as_literal(), Some("1"));
+        }
+    }
+
+    #[test]
+    fn target_set_per_profile_override_wins_over_target_defines() {
+        // Same key set at target level and at per-profile level —
+        // per-profile override must win for that one profile, target
+        // value applies to the rest.
+        let section = empty_section();
+        let mut target = target_with(&["generic", "rhel-9-x86_64"]);
+        target.defines.insert("use_jit".into(), "1".into());
+        let mut e2k_override = crate::config_layer::TargetProfileOverride::default();
+        e2k_override.defines.insert("use_jit".into(), "0".into());
+        target.profile_overrides.insert("rhel-9-x86_64".into(), e2k_override);
+
+        let set = resolve_target_set(
+            &section,
+            "T",
+            &target,
+            Path::new("."),
+            ResolveOptions::default(),
+        )
+        .unwrap();
+        let generic = set
+            .targets
+            .iter()
+            .find(|t| t.profile_id == "generic")
+            .unwrap();
+        let rhel = set
+            .targets
+            .iter()
+            .find(|t| t.profile_id == "rhel-9-x86_64")
+            .unwrap();
+        assert_eq!(generic.profile.macros.get("use_jit").unwrap().as_literal(), Some("1"));
+        assert_eq!(rhel.profile.macros.get("use_jit").unwrap().as_literal(), Some("0"));
+    }
+
+    #[test]
+    fn target_set_cli_define_wins_over_target_defines() {
+        // User-supplied --define beats both target-level and
+        // per-profile-level defines — matches the documented
+        // precedence chain.
+        let section = empty_section();
+        let mut target = target_with(&["generic"]);
+        target.defines.insert("product_build".into(), "from-target".into());
+        let cli_defines = vec!["product_build from-cli".to_string()];
+        let opts = ResolveOptions {
+            cli_defines: &cli_defines,
+            ..Default::default()
+        };
+        let set = resolve_target_set(&section, "T", &target, Path::new("."), opts).unwrap();
+        assert_eq!(
+            set.targets[0]
+                .profile
+                .macros
+                .get("product_build")
+                .unwrap()
+                .as_literal(),
+            Some("from-cli")
+        );
+    }
+
+    #[test]
+    fn target_set_duplicate_profile_is_collapsed() {
+        // `profiles = ["generic", "generic"]` resolves once.
+        let section = empty_section();
+        let target = target_with(&["generic", "generic", "rhel-9-x86_64"]);
+        let set = resolve_target_set(
+            &section,
+            "T",
+            &target,
+            Path::new("."),
+            ResolveOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(set.targets.len(), 2);
+        assert_eq!(set.targets[0].profile_id, "generic");
+        assert_eq!(set.targets[1].profile_id, "rhel-9-x86_64");
+    }
+
+    #[test]
+    fn validate_target_define_accepts_simple_pair() {
+        assert!(validate_target_define("T", "_vendor", "acme").is_ok());
+    }
+
+    #[test]
+    fn validate_target_define_rejects_key_with_whitespace() {
+        // Bug fixture: a TOML quoted key like `"foo bar" = "1"` would
+        // silently pass the old probe-based check (parse_define split
+        // on whitespace gave name="foo"). validate_name is strict.
+        let err = validate_target_define("T", "foo bar", "1").unwrap_err();
+        assert!(matches!(err, ResolveError::BadDefine(_)));
+    }
+
+    #[test]
+    fn validate_target_define_rejects_digit_leading_key() {
+        let err = validate_target_define("T", "9foo", "1").unwrap_err();
+        assert!(matches!(err, ResolveError::BadDefine(_)));
+    }
+
+    #[test]
+    fn validate_target_define_rejects_value_with_newline() {
+        let err = validate_target_define("T", "foo", "line1\nline2").unwrap_err();
+        match err {
+            ResolveError::InvalidTargetDefine { target, key, .. } => {
+                assert_eq!(target, "T");
+                assert_eq!(key, "foo");
+            }
+            other => panic!("expected InvalidTargetDefine, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_target_define_rejects_value_with_cr() {
+        let err = validate_target_define("T", "foo", "a\rb").unwrap_err();
+        assert!(matches!(err, ResolveError::InvalidTargetDefine { .. }));
+    }
+
+    #[test]
+    fn target_set_resolves_when_define_is_valid() {
+        // End-to-end: well-formed target-wide define still lands on
+        // the resolved profile — the new validator must not block
+        // the happy path.
+        let section = empty_section();
+        let mut target = target_with(&["generic"]);
+        target.defines.insert("_vendor".into(), "acme".into());
+        let set = resolve_target_set(
+            &section,
+            "T",
+            &target,
+            Path::new("."),
+            ResolveOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            set.targets[0]
+                .profile
+                .macros
+                .get("_vendor")
+                .unwrap()
+                .as_literal(),
+            Some("acme")
+        );
+    }
+
+    #[test]
+    fn target_set_rejects_bad_target_define_at_resolution() {
+        // The validator is invoked through resolve_target_set, so a
+        // bad key surfaces as a resolve error before any profile is
+        // loaded.
+        let section = empty_section();
+        let mut target = target_with(&["generic"]);
+        target.defines.insert("foo bar".into(), "1".into());
+        let err = resolve_target_set(
+            &section,
+            "T",
+            &target,
+            Path::new("."),
+            ResolveOptions::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ResolveError::BadDefine(_)));
+    }
+
+    #[test]
+    fn target_set_rejects_bad_profile_override_define() {
+        // Same validator runs against per-profile overrides. The
+        // target_id passed to InvalidTargetDefine carries the
+        // "T / profile-overrides.X" prefix so the user can see
+        // which block was rejected.
+        let section = empty_section();
+        let mut target = target_with(&["generic"]);
+        let mut po = crate::config_layer::TargetProfileOverride::default();
+        po.defines.insert("foo".into(), "first\nsecond".into());
+        target.profile_overrides.insert("generic".into(), po);
+        let err = resolve_target_set(
+            &section,
+            "T",
+            &target,
+            Path::new("."),
+            ResolveOptions::default(),
+        )
+        .unwrap_err();
+        match err {
+            ResolveError::InvalidTargetDefine { target, key, .. } => {
+                assert!(target.contains("profile-overrides.generic"));
+                assert_eq!(key, "foo");
+            }
+            other => panic!("expected InvalidTargetDefine, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn target_set_unknown_profile_propagates_resolve_error() {
+        // Listing a non-existent profile in `profiles` surfaces
+        // through the inner resolve() — no special-cased error.
+        let section = empty_section();
+        let target = target_with(&["does-not-exist"]);
+        let err = resolve_target_set(
+            &section,
+            "T",
+            &target,
+            Path::new("."),
+            ResolveOptions::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ResolveError::UnknownProfile { .. }));
     }
 }

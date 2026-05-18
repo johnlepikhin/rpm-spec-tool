@@ -479,6 +479,34 @@ pub enum LayerInfo {
     },
 }
 
+/// A target set resolved to its fully-merged member profiles.
+///
+/// Produced by [`crate::resolve::resolve_target_set`]. The `id` is the
+/// `[targets.<id>]` key the user wrote, kept for diagnostic and output
+/// formatting. `targets` preserves the declared profile order — the
+/// matrix renderer relies on it for stable column ordering.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ResolvedTargetSet {
+    pub id: String,
+    pub targets: Vec<ResolvedTarget>,
+}
+
+/// One profile entry inside a resolved target set.
+///
+/// `profile_id` is the name the user listed under
+/// `[targets.<set>.profiles]`. `profile` is the fully-merged
+/// [`Profile`] with the target's `defines` and any per-profile
+/// override already layered on (the resolver records those via the
+/// existing `LayerInfo::CliDefine` mechanism so `profile show`
+/// continues to work).
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ResolvedTarget {
+    pub profile_id: String,
+    pub profile: Profile,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

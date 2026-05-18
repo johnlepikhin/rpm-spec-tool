@@ -65,7 +65,7 @@ pub(super) fn compact_value(value: &MacroValue) -> String {
 
 /// Human-friendly family label — `Debug` rendering of `Family` capitalises
 /// the variant name (e.g. `Rhel`), `-` when no family is set.
-pub(super) fn family_label(p: &Profile) -> String {
+pub(crate) fn family_label(p: &Profile) -> String {
     p.identity
         .family
         .map(|f| format!("{f:?}"))
