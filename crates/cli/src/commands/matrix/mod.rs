@@ -21,6 +21,7 @@ pub mod baseline;
 pub mod check;
 pub mod classes;
 pub mod coverage;
+pub(crate) mod coverage_style;
 pub mod diff;
 pub mod expand;
 pub mod explain;
@@ -326,7 +327,7 @@ impl Cmd {
             Action::Check(opts) => check::run(opts, self.config.as_deref(), color),
             Action::Baseline(cmd) => cmd.run(self.config.as_deref()),
             Action::Portability(opts) => portability::run(opts, self.config.as_deref()),
-            Action::Coverage(opts) => coverage::run(opts, self.config.as_deref()),
+            Action::Coverage(opts) => coverage::run(opts, self.config.as_deref(), color),
             Action::Explain(opts) => explain::run(opts, self.config.as_deref()),
             Action::VerifyContract(opts) => verify_contract::run(opts, self.config.as_deref()),
             Action::Expand(opts) => expand::run(opts, self.config.as_deref()),

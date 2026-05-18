@@ -13,6 +13,8 @@ use rpm_spec_analyzer::{
 };
 use serde::Serialize;
 
+use super::coverage_style::Style;
+use crate::app::ColorChoice;
 use crate::io;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -111,7 +113,11 @@ pub enum FailOn {
     Indeterminate,
 }
 
-pub(super) fn run(opts: CoverageOpts, config_override: Option<&Path>) -> Result<ExitCode> {
+pub(super) fn run(
+    opts: CoverageOpts,
+    config_override: Option<&Path>,
+    color: ColorChoice,
+) -> Result<ExitCode> {
     let ctx = match super::prepare_matrix(
         config_override,
         opts.target_set.as_deref(),
@@ -160,7 +166,10 @@ pub(super) fn run(opts: CoverageOpts, config_override: Option<&Path>) -> Result<
     }
 
     match opts.format {
-        OutputFormat::Human => render_human(&reports, &resolved, opts.only, opts.summary)?,
+        OutputFormat::Human => {
+            let style = Style::new(color);
+            render_human(&reports, &resolved, opts.only, opts.summary, &style)?;
+        }
         OutputFormat::Json => render_json(&reports, &resolved)?,
     }
 
@@ -281,6 +290,7 @@ fn render_human(
     target_set: &ResolvedTargetSet,
     only: Option<OnlyFilter>,
     summary_only: bool,
+    style: &Style,
 ) -> Result<()> {
     use std::io::IsTerminal;
     use std::io::Write;
@@ -293,22 +303,29 @@ fn render_human(
     let mut out = stdout.lock();
     writeln!(
         out,
-        "Matrix coverage: target set `{}` ({} profiles)",
-        target_set.id,
-        target_set.targets.len()
+        "{}",
+        style.header(&format!(
+            "Matrix coverage: target set `{}` ({} profiles)",
+            target_set.id,
+            target_set.targets.len()
+        ))
     )?;
     if interactive {
         writeln!(
             out,
-            "  tags:  [ALWAYS] every profile activates  ·  [DEAD] no profile activates under any variant"
+            "  tags:  {} every profile activates  ·  {} no profile activates under any variant",
+            style.always_tag("[ALWAYS]"),
+            style.dead_tag("[DEAD]")
         )?;
         writeln!(
             out,
-            "         [CONDITIONAL: M=V] inactive under current build but reachable under declared [macros.M]"
+            "         {} inactive under current build but reachable under declared [macros.M]",
+            style.conditional_tag("[CONDITIONAL: M=V]")
         )?;
         writeln!(
             out,
-            "         [INDET] evaluator couldn't decide (see indeterminate-reason rollup below)"
+            "         {} evaluator couldn't decide (see indeterminate-reason rollup below)",
+            style.indet_tag("[INDET]")
         )?;
         writeln!(
             out,
@@ -325,18 +342,18 @@ fn render_human(
     let total_profiles = target_set.targets.len();
     for (source, report) in reports {
         let summary = ReportSummary::from_report(report);
-        writeln!(out, "==> {}", source.display_name())?;
+        writeln!(out, "{} {}", style.header("==>"), source.display_name())?;
         writeln!(
             out,
             "    {} branches: {} always · {} conditional · {} dead · {} indeterminate · {} mixed",
             summary.total,
-            summary.always,
-            summary.conditional,
-            summary.dead,
-            summary.indeterminate,
+            style.always_tag(&summary.always.to_string()),
+            style.conditional_tag(&summary.conditional.to_string()),
+            style.dead_tag(&summary.dead.to_string()),
+            style.indet_tag(&summary.indeterminate.to_string()),
             summary.mixed,
         )?;
-        write_reason_rollup(&mut out, &summary)?;
+        write_reason_rollup(&mut out, &summary, style)?;
         if report.conditionals.is_empty() {
             writeln!(out, "    (no conditionals — spec has no %if / %ifarch blocks)")?;
             writeln!(out)?;
@@ -358,7 +375,7 @@ fn render_human(
                 if !class_passes_filter(cls, only) {
                     continue;
                 }
-                write_branch(&mut out, b, cls, total_profiles)?;
+                write_branch(&mut out, b, cls, total_profiles, style)?;
                 printed += 1;
             }
         }
@@ -391,20 +408,33 @@ fn only_filter_label(f: OnlyFilter) -> &'static str {
 /// 100+ indeterminate branches can scan this once to know which
 /// macros to declare (`[config]` rows) and which evaluator gaps need
 /// a tool fix (`[tool]` rows) before reading any branch detail.
-fn write_reason_rollup<W: std::io::Write>(out: &mut W, summary: &ReportSummary) -> Result<()> {
+fn write_reason_rollup<W: std::io::Write>(
+    out: &mut W,
+    summary: &ReportSummary,
+    style: &Style,
+) -> Result<()> {
     if summary.reason_counts.is_empty() {
         return Ok(());
     }
     for ((category, code), count) in &summary.reason_counts {
-        let prefix = category_short(*category);
+        let prefix = match category {
+            EvalErrorCategory::Config => style.config_cat("[config]"),
+            EvalErrorCategory::Tool => style.tool_cat("[tool]  "),
+            _ => style.tool_cat("[tool]  "),
+        };
         let sample = summary
             .reason_sample
             .get(&(*category, code))
             .map(String::as_str)
             .unwrap_or(*code);
+        // Pad the code BEFORE colouring — ANSI escapes count toward
+        // `&str::len()` but render at zero width, so colouring a
+        // pre-padded string is the correct order.
+        let padded_code = format!("{code:<22}");
         writeln!(
             out,
-            "    {prefix} {code:<22} ({count} branches)  {sample}"
+            "    {prefix} {dim_code} ({count} branches)  {sample}",
+            dim_code = style.dim(&padded_code)
         )?;
     }
     Ok(())
@@ -415,15 +445,19 @@ fn write_branch<W: std::io::Write>(
     b: &BranchCoverage,
     cls: BranchClass,
     total_profiles: usize,
+    style: &Style,
 ) -> Result<()> {
     let tag = match cls {
-        BranchClass::Always => " [ALWAYS]".to_string(),
-        BranchClass::Dead => " [DEAD]".to_string(),
+        BranchClass::Always => format!(" {}", style.always_tag("[ALWAYS]")),
+        BranchClass::Dead => format!(" {}", style.dead_tag("[DEAD]")),
         BranchClass::Conditional => format!(
-            " [CONDITIONAL: {}]",
-            format_reachable_under(&b.reachable_under)
+            " {}",
+            style.conditional_tag(&format!(
+                "[CONDITIONAL: {}]",
+                format_reachable_under(&b.reachable_under)
+            ))
         ),
-        BranchClass::Indeterminate => " [INDET]".to_string(),
+        BranchClass::Indeterminate => format!(" {}", style.indet_tag("[INDET]")),
         BranchClass::Mixed => String::new(),
     };
     writeln!(
@@ -457,7 +491,7 @@ fn write_branch<W: std::io::Write>(
         && b.inactive_on.is_empty()
         && !b.indeterminate_on.is_empty()
     {
-        write_indeterminate_reasons(out, b, total_profiles, IndetIndent::Compact)?;
+        write_indeterminate_reasons(out, b, total_profiles, IndetIndent::Compact, style)?;
         writeln!(out)?;
         return Ok(());
     }
@@ -475,7 +509,7 @@ fn write_branch<W: std::io::Write>(
     let has_under_current_build =
         !b.active_on.is_empty() || !b.inactive_on.is_empty() || !b.indeterminate_on.is_empty();
     if has_under_current_build {
-        writeln!(out, "    under current build:")?;
+        writeln!(out, "    {}", style.header("under current build:"))?;
         if !b.active_on.is_empty() {
             writeln!(
                 out,
@@ -491,11 +525,11 @@ fn write_branch<W: std::io::Write>(
             )?;
         }
         if !b.indeterminate_on.is_empty() {
-            write_indeterminate_reasons(out, b, total_profiles, IndetIndent::Nested)?;
+            write_indeterminate_reasons(out, b, total_profiles, IndetIndent::Nested, style)?;
         }
     }
     if !b.conditional_on.is_empty() && !conditional_covers_everyone {
-        writeln!(out, "    under variants:")?;
+        writeln!(out, "    {}", style.header("under variants:"))?;
         writeln!(
             out,
             "      reachable on: {} when {}",
@@ -535,6 +569,7 @@ fn write_indeterminate_reasons<W: std::io::Write>(
     b: &BranchCoverage,
     total_profiles: usize,
     indent: IndetIndent,
+    style: &Style,
 ) -> Result<()> {
     let (header_prefix, body_prefix) = match indent {
         IndetIndent::Compact => ("    ", "      "),
@@ -558,9 +593,9 @@ fn write_indeterminate_reasons<W: std::io::Write>(
         let ((cat, code, reason), profiles) = by_reason.iter().next().expect("len==1");
         writeln!(
             out,
-            "{header_prefix}indeterminate: {} [{tag}] {reason} → {profiles}",
-            category_short(*cat),
-            tag = code,
+            "{header_prefix}indeterminate: {} {tag} {reason} → {profiles}",
+            category_styled(*cat, style),
+            tag = style.dim(&format!("[{code}]")),
             reason = reason,
             profiles = format_profile_list(profiles, total_profiles)
         )?;
@@ -570,9 +605,9 @@ fn write_indeterminate_reasons<W: std::io::Write>(
     for ((cat, code, reason), profiles) in &by_reason {
         writeln!(
             out,
-            "{body_prefix}{cat} [{code}] {reason} → {profiles}",
-            cat = category_short(*cat),
-            code = code,
+            "{body_prefix}{cat} {code} {reason} → {profiles}",
+            cat = category_styled(*cat, style),
+            code = style.dim(&format!("[{code}]")),
             reason = reason,
             profiles = format_profile_list(profiles, total_profiles)
         )?;
@@ -580,21 +615,26 @@ fn write_indeterminate_reasons<W: std::io::Write>(
     if !no_reason.is_empty() {
         writeln!(
             out,
-            "{body_prefix}[tool]   [missing-reason] internal: reason not recorded — please file a bug → {}",
+            "{body_prefix}{} {} internal: reason not recorded — please file a bug → {}",
+            style.tool_cat("[tool]  "),
+            style.dim("[missing-reason]"),
             format_profile_list(&no_reason, total_profiles)
         )?;
     }
     Ok(())
 }
 
-fn category_short(cat: EvalErrorCategory) -> &'static str {
+/// Render the `[config]` / `[tool]` category label with the
+/// renderer's palette applied. `[config]` is yellow (operator-fixable),
+/// `[tool]` is magenta (tool-side limitation). The fall-through for
+/// future `#[non_exhaustive]` variants stays "tool" — the more
+/// conservative label means we never accidentally tell an operator
+/// "this is fixable from config" when we don't know.
+fn category_styled(cat: EvalErrorCategory, style: &Style) -> String {
     match cat {
-        EvalErrorCategory::Config => "[config]",
-        EvalErrorCategory::Tool => "[tool]  ",
-        // `#[non_exhaustive]` on the upstream enum: fall through
-        // as the more conservative "tool" label if the analyser
-        // ever adds a new variant before the renderer is updated.
-        _ => "[tool]  ",
+        EvalErrorCategory::Config => style.config_cat("[config]"),
+        EvalErrorCategory::Tool => style.tool_cat("[tool]  "),
+        _ => style.tool_cat("[tool]  "),
     }
 }
 
