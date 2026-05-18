@@ -421,10 +421,124 @@ from profile id to a human-readable explanation of why evaluation
 could not produce a definite verdict; it is populated only for
 profiles listed in `indeterminate_on`.
 
+## Explain mode
+
+`matrix explain` answers the focused question "why is this line / macro
+behaving differently across profiles?" without dumping the full
+`matrix check` report. Two mutually-exclusive query modes:
+
+```bash
+rpm-spec-tool matrix explain product.spec \
+  --target-set product-2026q2 --line 183
+
+rpm-spec-tool matrix explain product.spec \
+  --target-set product-2026q2 --macro _unitdir
+```
+
+Exactly one of `--line N` and `--macro NAME` is required (clap
+rejects both-or-neither with exit 2), and exactly one of
+`--target-set` / `--profiles` selects the matrix. Only one spec file
+is accepted per invocation — explain is a focused tool, not a batch
+reporter.
+
+### `--line N` semantics
+
+`--line N` reports every enclosing `%if`/`%ifarch`/`%ifos` branch
+whose conditional span (from the directive to its matching `%endif`)
+covers line `N`. For each such branch the output shows the active /
+inactive / indeterminate profile lists, mirroring the per-branch
+section of `matrix coverage`. Nested chains surface as multiple
+entries, outer-first, so the reader sees the full decision path.
+
+Human output:
+
+```text
+# Matrix explain: target set `product-2026q2` (10 profiles)
+## product.spec
+  line 183
+    branch 182: %if 0%{?rhel}
+      active:   rhel-8-x86_64, rhel-9-x86_64, rhel-9-aarch64
+      inactive: altlinux-10-x86_64, sles-15-x86_64
+```
+
+When no branch covers the line (typical for preamble lines or lines
+in `%description`/`%files` outside any condition), the output is one
+line: `(no enclosing %if/%ifarch/%ifos branch covers this line)`.
+
+### `--macro NAME` semantics
+
+`--macro NAME` reports the literal-expanded value of `NAME` on every
+member profile, plus `(undefined)` for profiles that don't register
+the macro. Macros whose body cannot be reduced to a literal at lint
+time (e.g. shell expansions, parameterised bodies) render as
+`(defined but body not literal-expandable)`.
+
+The depth budget for expansion is 8 levels — deep enough for nested
+path helpers like `%_libdir = %{_prefix}/lib64 → %_prefix = /usr` but
+bounded against cyclic registrations.
+
+### JSON envelope
+
+Both modes use `--format json` to emit a tagged envelope:
+
+```json
+{
+  "query": "line",
+  "target_set": "product-2026q2",
+  "profiles": ["rhel-9-x86_64", "altlinux-10-x86_64"],
+  "path": "product.spec",
+  "line": 183,
+  "branches": [
+    {
+      "branch_line": 182,
+      "display": "%if 0%{?rhel}",
+      "is_dead": false,
+      "is_universally_active": false,
+      "active_on": ["rhel-9-x86_64"],
+      "inactive_on": ["altlinux-10-x86_64"],
+      "indeterminate_on": [],
+      "indeterminate_reasons": {}
+    }
+  ]
+}
+```
+
+```json
+{
+  "query": "macro",
+  "target_set": "product-2026q2",
+  "profiles": ["rhel-9-x86_64", "altlinux-10-x86_64"],
+  "path": "product.spec",
+  "name": "_unitdir",
+  "entries": [
+    {
+      "profile_id": "rhel-9-x86_64",
+      "defined": true,
+      "value": "/usr/lib/systemd/system",
+      "unexpandable_reason": null
+    },
+    {
+      "profile_id": "altlinux-10-x86_64",
+      "defined": false,
+      "value": null,
+      "unexpandable_reason": null
+    }
+  ]
+}
+```
+
+`unexpandable_reason` is non-null only when `defined: true` and
+`value: null` — i.e. the macro is registered but its body can't be
+reduced to a literal at lint time.
+
 ## Limitations of Phase 1
 
-* No `matrix explain` / `diff` / `impact` yet — those land in a
-  future phase together with macro-usage span tracking.
+* No `matrix diff` / `impact` yet — those land in a future phase
+  together with macro-usage span tracking.
+* `matrix explain --line` does not distinguish individual branch
+  bodies inside one `%if`/`%elif`/`%else` chain — all branches of an
+  enclosing conditional are reported. For per-body activity the
+  reader pairs the report with the directive lines in the spec.
 * No parallel execution — profiles are analysed sequentially. Cost
   is linear in profile count; a profile set of 30 typically
   completes in a few seconds for one spec.

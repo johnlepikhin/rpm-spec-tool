@@ -3213,3 +3213,473 @@ B
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// matrix explain
+// ---------------------------------------------------------------------------
+
+mod matrix_explain {
+    use super::*;
+
+    /// Spec with one straightforward `%ifarch` (so the evaluator
+    /// returns a clean active/inactive split) and one nested-style
+    /// `%if 0%{?rhel}` (defined-on-rhel only). Avoids `>=` so we
+    /// don't depend on the arithmetic-comparison evaluator path.
+    const EXPLAIN_SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: Test
+License: MIT
+
+%if 0%{?rhel}
+Requires: rhel-only
+%endif
+
+%ifarch x86_64
+%global use_x86 1
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+
+    #[test]
+    fn explain_line_inside_ifarch_lists_active_profiles() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPLAIN_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--line",
+                "12",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "explain must succeed; stderr={stderr}");
+        assert!(
+            stdout.contains("%ifarch x86_64"),
+            "expected the ifarch directive in output; got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("active:")
+                && stdout.contains("rhel-9-x86_64")
+                && stdout.contains("generic"),
+            "both profiles must appear in active list; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn explain_line_outside_any_branch_reports_no_match() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPLAIN_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "generic",
+                "--line",
+                "1",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        assert!(
+            stdout.contains("no enclosing"),
+            "expected 'no enclosing branch' note; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn explain_macro_reports_defined_and_undefined() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPLAIN_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                "--macro",
+                "_bindir",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        // Distro profiles populate _bindir from their showrc dump;
+        // pin the canonical value so a profile refresh that changes
+        // it surfaces here rather than in an unrelated lint test.
+        assert!(
+            stdout.contains("rhel-9-x86_64 = /usr/bin")
+                && stdout.contains("altlinux-10-x86_64 = /usr/bin"),
+            "expected /usr/bin on both profiles; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn explain_macro_reports_undefined() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPLAIN_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "generic",
+                "--macro",
+                "definitely_not_real_macro_xyz",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        assert!(
+            stdout.contains("(undefined)"),
+            "expected (undefined) tag for unknown macro; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn explain_json_line_shape() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPLAIN_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "generic",
+                "--line",
+                "12",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        assert_eq!(v["query"], "line");
+        assert_eq!(v["line"], 12);
+        let branches = v["branches"].as_array().expect("branches");
+        assert!(!branches.is_empty());
+        // Schema: every branch carries the documented fields.
+        let b = &branches[0];
+        assert!(b["display"].is_string());
+        assert!(b["is_dead"].is_boolean());
+        assert!(b["is_universally_active"].is_boolean());
+        assert!(b["active_on"].is_array());
+        assert!(b["inactive_on"].is_array());
+    }
+
+    #[test]
+    fn explain_json_macro_shape() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPLAIN_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--macro",
+                "_bindir",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        assert_eq!(v["query"], "macro");
+        assert_eq!(v["name"], "_bindir");
+        let entries = v["entries"].as_array().expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["defined"], true);
+        assert_eq!(entries[0]["value"], "/usr/bin");
+    }
+
+    #[test]
+    fn explain_requires_line_or_macro() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPLAIN_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "generic",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_ne!(rc, 0, "explain without --line/--macro must fail");
+        assert!(
+            stderr.contains("--line") || stderr.contains("--macro"),
+            "clap should mention the missing flag; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn explain_line_and_macro_are_mutually_exclusive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPLAIN_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "generic",
+                "--line",
+                "12",
+                "--macro",
+                "_bindir",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_ne!(rc, 0, "passing both --line and --macro must fail");
+        assert!(
+            stderr.contains("cannot be used with") || stderr.contains("conflict"),
+            "clap should reject the conflict; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn explain_unknown_target_set_exits_2() {
+        // resolve_matrix_source must surface unknown-target-set as a
+        // user-error (exit 2) rather than a panic or generic anyhow
+        // dump. Mirrors matrix_check_unknown_target_set_exits_2 so a
+        // regression in shared resolver error propagation is caught
+        // for explain too.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPLAIN_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "explain",
+                "--target-set",
+                "nonexistent-set",
+                "--macro",
+                "_bindir",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2, "unknown target set must exit 2; stderr={stderr}");
+        assert!(
+            stderr.contains("nonexistent-set"),
+            "expected target-set name in error; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn explain_macro_unexpandable_reason_surfaces() {
+        // `make_build` in rhel-9-x86_64 has a body referencing
+        // `%{?_smp_mflags}` (conditional) — `expand_to_literal` bails
+        // on conditional refs, so we hit the `Unexpandable` arm.
+        // Exercises both the human "(defined but ...)" tag and the
+        // JSON `unexpandable_reason` field.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPLAIN_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--macro",
+                "make_build",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let entries = v["entries"].as_array().expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0]["defined"], true,
+            "make_build is registered on rhel-9"
+        );
+        assert!(
+            entries[0]["value"].is_null(),
+            "value must be null for unexpandable macros; got {}",
+            entries[0]
+        );
+        assert!(
+            entries[0]["unexpandable_reason"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()),
+            "expected non-empty unexpandable_reason; got {}",
+            entries[0]
+        );
+    }
+
+    #[test]
+    fn explain_json_line_indeterminate_reasons_shape() {
+        // `%if 0%{?rhel} >= 8` lands in the arithmetic-Raw path of
+        // the evaluator → produces an `indeterminate_on` entry with
+        // a populated `indeterminate_reasons` map. Exercises the
+        // BTreeMap-as-object serialization shape that the explain
+        // human renderer also depends on.
+        const ARITH_SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: Test
+License: MIT
+
+%if 0%{?rhel} >= 8
+BuildRequires: rhel-only
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, ARITH_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--line",
+                "8",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let branches = v["branches"].as_array().expect("branches");
+        assert!(!branches.is_empty(), "expected at least one branch");
+        let b = &branches[0];
+        let inds = b["indeterminate_on"].as_array().expect("indeterminate_on");
+        assert!(
+            !inds.is_empty(),
+            "arithmetic Raw branch must be indeterminate on the profile"
+        );
+        let reasons = b["indeterminate_reasons"]
+            .as_object()
+            .expect("indeterminate_reasons must be a JSON object");
+        // Map key is profile_id; value is the human reason string.
+        let reason = reasons
+            .get("rhel-9-x86_64")
+            .and_then(|v| v.as_str())
+            .expect("rhel-9-x86_64 must appear in indeterminate_reasons");
+        assert!(
+            !reason.is_empty(),
+            "indeterminate reason must be non-empty; got {reason:?}"
+        );
+    }
+
+    #[test]
+    fn explain_line_surfaces_parser_diagnostics_for_broken_spec() {
+        // Spec missing %endif — the parser recovers but emits a
+        // diagnostic. Without the up-front banner the user would see
+        // "(no enclosing branch covers this line)" and have no clue
+        // the AST is partial. Pin the banner so a refactor that
+        // silently drops it surfaces here.
+        const BROKEN_SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: Test
+License: MIT
+
+%if 0%{?rhel}
+BuildRequires: rhel-only
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BROKEN_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--line",
+                "8",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        // Explain doesn't abort on parser issues — it produces a
+        // best-effort report — but it must announce the degraded
+        // state on stderr.
+        assert_eq!(rc, 0);
+        assert!(
+            stderr.contains("parser diagnostic") || stderr.contains("recovered AST"),
+            "expected parser-diagnostic banner; got stderr={stderr:?}"
+        );
+    }
+
+    #[test]
+    fn explain_rejects_multiple_input_specs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let a = dir.path().join("a.spec");
+        let b = dir.path().join("b.spec");
+        std::fs::write(&a, EXPLAIN_SPEC).expect("write a");
+        std::fs::write(&b, EXPLAIN_SPEC).expect("write b");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "generic",
+                "--macro",
+                "_bindir",
+                a.to_str().unwrap(),
+                b.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2, "multiple specs must be rejected; stderr={stderr}");
+        assert!(
+            stderr.contains("exactly one spec"),
+            "expected friendly multi-spec error; got {stderr}"
+        );
+    }
+}
