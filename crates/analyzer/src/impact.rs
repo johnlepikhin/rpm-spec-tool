@@ -37,7 +37,11 @@ use crate::dep_walk::{for_each_dep_atom, render_text_with_macros};
 /// profiles equivalent under `matrix classes` see no
 /// `matrix diff` deltas AND no `matrix impact` deltas at the same
 /// revision pair.
-const COMPARED_TAGS: &[(Tag, &str)] = &[
+///
+/// Public so external consumers can correlate a [`TagImpact::tag_label`]
+/// string back to its [`Tag`] enum value (the JSON wire shape uses the
+/// label only). Order matches `ProfileImpact::tags` positionally.
+pub const COMPARED_TAGS: &[(Tag, &str)] = &[
     (Tag::BuildRequires, "BuildRequires"),
     (Tag::Requires, "Requires"),
 ];
@@ -61,8 +65,14 @@ pub struct ChangeSet {
 
 impl ChangeSet {
     /// `true` iff this changeset records no movement on either side.
+    ///
+    /// Intentionally ignores [`Self::unchanged`] — a profile with 12
+    /// unchanged deps and 0 added/removed has had no impact even
+    /// though `unchanged` is non-empty. The doc-comment is the
+    /// contract; the underlying behaviour is pinned by
+    /// `has_no_movement_ignores_unchanged` in the unit tests.
     #[must_use]
-    pub fn is_empty_diff(&self) -> bool {
+    pub fn has_no_movement(&self) -> bool {
         self.added.is_empty() && self.removed.is_empty()
     }
 }
@@ -91,7 +101,7 @@ impl ProfileImpact {
     /// those are the platforms a PR actually moved.
     #[must_use]
     pub fn is_no_change(&self) -> bool {
-        self.tags.iter().all(|t| t.changes.is_empty_diff())
+        self.tags.iter().all(|t| t.changes.has_no_movement())
     }
 }
 
@@ -277,6 +287,21 @@ B
         assert!(br.changes.added.is_empty());
         assert!(br.changes.removed.is_empty());
         assert_eq!(br.changes.unchanged, vec!["gcc", "make"]);
+    }
+
+    #[test]
+    fn has_no_movement_ignores_unchanged() {
+        // Pins the doc contract: a ChangeSet with N unchanged deps but
+        // 0 added/removed reports `has_no_movement == true`. Without
+        // this test a well-meaning "is the changeset empty?" rename
+        // would silently flip CI semantics (every PR that touches a
+        // spec with stable deps would suddenly look "changed").
+        let cs = ChangeSet {
+            added: Vec::new(),
+            removed: Vec::new(),
+            unchanged: vec!["gcc".to_string(), "make".to_string()],
+        };
+        assert!(cs.has_no_movement(), "unchanged-only set must not register as movement");
     }
 
     #[test]

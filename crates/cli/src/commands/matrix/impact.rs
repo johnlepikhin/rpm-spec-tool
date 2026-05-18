@@ -13,6 +13,7 @@
 //! 2 when git is missing, the revisions are unresolvable, or the
 //! repository can't be located.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
@@ -23,6 +24,31 @@ use rpm_spec_analyzer::{ImpactReport, session::parse};
 use serde::Serialize;
 
 use crate::io;
+
+/// Upper bound on bytes read from a single `git show` invocation.
+/// A typical spec is well under 100 KiB; 16 MiB tolerates checked-in
+/// vendored sources or accidental binary blobs without OOM-ing on a
+/// crafted commit. Hitting this cap surfaces as a hard error rather
+/// than silently truncating.
+const GIT_SHOW_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Build a `Command` for the configured git binary with locale forced
+/// to `C` (and `cwd` set via `-C`). Locking the locale is load-bearing:
+/// the file-missing fallback in [`git_show`] parses substrings from
+/// stderr, and git translates those messages when `LANG` is set to a
+/// non-English locale. Without this normalisation a Russian-locale
+/// developer would see "новый файл" instead of "does not exist", the
+/// fallback would silently not fire, and a brand-new spec on a PR
+/// would surface as a hard error instead of the documented
+/// "deps added from scratch" output.
+fn git_command(git_cmd: &str, repo: &Path) -> Command {
+    let mut cmd = Command::new(git_cmd);
+    cmd.arg("-C").arg(repo);
+    cmd.env("LC_ALL", "C");
+    cmd.env("LANG", "C");
+    cmd.stdin(Stdio::null());
+    cmd
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[clap(rename_all = "lower")]
@@ -223,11 +249,8 @@ fn surface_parser_diagnostics(
 /// like `v1.2.3` resolve cleanly. Plain hashes pass through unchanged.
 fn git_resolve_rev(git_cmd: &str, repo: &Path, rev: &str) -> Result<()> {
     let arg = format!("{rev}^{{commit}}");
-    let out = Command::new(git_cmd)
-        .arg("-C")
-        .arg(repo)
+    let out = git_command(git_cmd, repo)
         .args(["rev-parse", "--verify", "--quiet", &arg])
-        .stdin(Stdio::null())
         .output()
         .with_context(|| format!("running `{git_cmd} rev-parse {arg}`"))?;
     if !out.status.success() {
@@ -245,15 +268,17 @@ fn git_resolve_rev(git_cmd: &str, repo: &Path, rev: &str) -> Result<()> {
 }
 
 /// Resolve the git repository root containing `spec_abs`.
+///
+/// Canonicalises the result so a downstream `strip_prefix(repo_root)`
+/// against the (already canonicalised) spec path lines up cleanly even
+/// on systems where `/home` or similar is symlinked — git's
+/// `--show-toplevel` can return the unresolved form there.
 fn git_repo_root(git_cmd: &str, spec_abs: &Path) -> Result<PathBuf> {
     let spec_dir = spec_abs
         .parent()
         .with_context(|| format!("spec path has no parent: {}", spec_abs.display()))?;
-    let out = Command::new(git_cmd)
-        .arg("-C")
-        .arg(spec_dir)
+    let out = git_command(git_cmd, spec_dir)
         .args(["rev-parse", "--show-toplevel"])
-        .stdin(Stdio::null())
         .output()
         .with_context(|| format!("running `{git_cmd} rev-parse --show-toplevel`"))?;
     if !out.status.success() {
@@ -268,13 +293,24 @@ fn git_repo_root(git_cmd: &str, spec_abs: &Path) -> Result<PathBuf> {
         .with_context(|| "git rev-parse produced non-UTF-8 path")?
         .trim()
         .to_string();
-    Ok(PathBuf::from(root))
+    let raw = PathBuf::from(root);
+    // canonicalize() may fail on a path that no longer exists (race
+    // with `git worktree remove`); fall back to the raw form rather
+    // than aborting — strip_prefix gives a clean diagnostic later.
+    Ok(raw.canonicalize().unwrap_or(raw))
 }
 
 /// Run `git -C repo show REV:rel_path` and return the spec content
 /// as a UTF-8 string. Maps git's "file does not exist at REV" exit
 /// status to an empty string so callers see "deps added from
 /// scratch" cleanly rather than a hard error.
+///
+/// Reads stdout through a [`GIT_SHOW_MAX_BYTES`] cap so a 1 GiB blob
+/// accidentally committed to the repo surfaces as a typed error
+/// rather than an OOM kill. The parser tolerates non-UTF-8 in
+/// changelog entries (common in older specs with Latin-1 author
+/// names), so the bytes are decoded via [`String::from_utf8_lossy`]
+/// instead of strict validation.
 fn git_show(git_cmd: &str, repo: &Path, rev: &str, rel_path: &Path) -> Result<String> {
     // Build `REV:relpath`. Use forward slashes — git uses
     // POSIX-style internal paths regardless of host OS.
@@ -282,38 +318,58 @@ fn git_show(git_cmd: &str, repo: &Path, rev: &str, rel_path: &Path) -> Result<St
         .to_str()
         .with_context(|| format!("non-UTF-8 path: {}", rel_path.display()))?
         .replace('\\', "/");
-    let spec_arg = format!("{rev}:{rel_posix}");
-    let out = Command::new(git_cmd)
-        .arg("-C")
-        .arg(repo)
-        .args(["show", &spec_arg])
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| format!("running `{git_cmd} show {spec_arg}`"))?;
+    let pathspec = format!("{rev}:{rel_posix}");
+    let mut child = git_command(git_cmd, repo)
+        .args(["show", &pathspec])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("running `{git_cmd} show {pathspec}`"))?;
+
+    // Read at most GIT_SHOW_MAX_BYTES + 1 to detect overrun without
+    // buffering an unbounded blob into RAM.
+    let mut stdout_buf = Vec::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let limit = GIT_SHOW_MAX_BYTES.saturating_add(1);
+        stdout
+            .by_ref()
+            .take(limit)
+            .read_to_end(&mut stdout_buf)
+            .with_context(|| format!("reading `{git_cmd} show {pathspec}` stdout"))?;
+    }
+    let out = child
+        .wait_with_output()
+        .with_context(|| format!("waiting on `{git_cmd} show {pathspec}`"))?;
+
+    if stdout_buf.len() as u64 > GIT_SHOW_MAX_BYTES {
+        anyhow::bail!(
+            "git show `{pathspec}` exceeded {GIT_SHOW_MAX_BYTES}-byte cap; refusing to load"
+        );
+    }
+
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         // Distinguish "rev exists but file missing" (treat as empty
         // spec — added at `to` side) from "rev itself is unknown"
         // (hard error — operator typo). git's wording varies across
-        // versions: "does not exist" (older), "exists on disk, but
-        // not in" (newer, when path is present in worktree), or "path
-        // ... does not exist in" (newer, when path is absent). Match
-        // all three to avoid a hard error on a perfectly normal
-        // "added in this PR" workflow.
+        // versions: "does not exist" (older + newer-when-absent),
+        // "exists on disk, but not in" (newer-when-present-in-worktree).
+        // The git_command helper forces `LC_ALL=C` so these English
+        // substrings are stable regardless of operator locale.
         let file_missing_at_rev = stderr.contains("does not exist")
             || stderr.contains("exists on disk, but not in");
         if file_missing_at_rev {
-            tracing::debug!(
+            tracing::info!(
                 target: "matrix::impact",
                 rev = %rev,
                 path = %rel_posix,
-                "spec file does not exist at revision; treating as empty"
+                "spec file does not exist at revision; treating as empty (deps will surface as added/removed)"
             );
             return Ok(String::new());
         }
         anyhow::bail!("git show failed: {}", stderr.trim());
     }
-    String::from_utf8(out.stdout).with_context(|| "git show produced non-UTF-8 content")
+    Ok(String::from_utf8_lossy(&stdout_buf).into_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -357,7 +413,7 @@ fn render_human(
         });
         writeln!(out, "  {}: +{added_n} -{removed_n}", prof.profile_id)?;
         for tag in &prof.tags {
-            if tag.changes.is_empty_diff() {
+            if tag.changes.has_no_movement() {
                 continue;
             }
             writeln!(out, "    {}", tag.tag_label)?;
