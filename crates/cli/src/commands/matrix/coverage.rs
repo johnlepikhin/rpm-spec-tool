@@ -470,6 +470,7 @@ fn write_branch<W: std::io::Write>(
     // active/inactive/indeterminate skeleton — the tag already says
     // it. This trims ~3 lines per branch on the dominant cases.
     if matches!(cls, BranchClass::Always | BranchClass::Dead) {
+        writeln!(out)?;
         return Ok(());
     }
     // CONDITIONAL with the variant assignment matching every
@@ -480,6 +481,7 @@ fn write_branch<W: std::io::Write>(
         && b.conditional_on.len() == total_profiles
         && b.active_on.is_empty();
     if conditional_covers_everyone && b.indeterminate_on.is_empty() {
+        writeln!(out)?;
         return Ok(());
     }
     // Pure-indeterminate with one reason for every profile: emit a
@@ -537,11 +539,13 @@ fn write_branch<W: std::io::Write>(
             format_reachable_under(&b.reachable_under)
         )?;
     }
-    // Blank line separator: verbose branches form a logical block;
-    // the trailing newline gives the eye a hard break before the
-    // next branch's `line N:` header. Single-line branches (DEAD /
-    // ALWAYS / fully-covered CONDITIONAL) returned earlier and
-    // stay densely packed.
+    // Always trail with a blank line. Branches are visually
+    // distinct logical units; even single-line ones (DEAD /
+    // ALWAYS / fully-covered CONDITIONAL) read better with a
+    // hard break between them than packed densely against the
+    // next `line N:` header. Operators scanning the report need
+    // a consistent rhythm — mixing dense + spaced makes the eye
+    // re-tune at every transition.
     writeln!(out)?;
     Ok(())
 }
