@@ -54,7 +54,7 @@ const EXPAND_DEPTH: u8 = 8;
 pub enum EvalError {
     /// `%{name}` or `%name` referenced an unconditional macro that
     /// the profile's registry does not define.
-    #[error("macro `{0}` is not defined in the profile")]
+    #[error("undefined macro: {0}")]
     UndefinedMacro(String),
     /// Condition body contained non-ASCII bytes. The byte-cursor
     /// scanner in `expand_raw_string` would emit mojibake; bail
@@ -63,16 +63,16 @@ pub enum EvalError {
     NonAscii,
     /// `%(shell)` expansion appears in the condition. We don't
     /// run shell commands at lint time.
-    #[error("shell expansion `%(...)` is unsupported")]
+    #[error("shell expansion `%(...)` is not analysed")]
     ShellExpansion,
     /// `%[expr]` arithmetic expression. RPM evaluates these at
     /// build time; we don't.
-    #[error("arithmetic expression `%[...]` is unsupported")]
+    #[error("arithmetic expression `%[...]` is not analysed")]
     ArithmeticExpr,
     /// `%{name:default}` or `%{!?name:default}` — we don't model
     /// the default body. Treating it as empty would change
     /// activation semantics in subtle ways, so we bail.
-    #[error("default-value form `%{{name:default}}` is unsupported")]
+    #[error("default-value macro form `%{{name:default}}` is not analysed")]
     UnmodelledDefault,
     /// Binary operator applied to operands of different shape
     /// (e.g. integer compared with string) — RPM would coerce in
@@ -81,7 +81,7 @@ pub enum EvalError {
     TypeMismatch,
     /// `<`/`>`/`<=`/`>=`/`&&`/`||` applied to string operands.
     /// Only `==` / `!=` are modelled for strings.
-    #[error("string ordering operator is unsupported")]
+    #[error("string ordering (<, >) is not analysed")]
     StringOrdering,
     /// `%ifarch` / `%ifnarch` / `%elifarch` against a profile that
     /// doesn't have `build_arch` populated.
@@ -94,13 +94,115 @@ pub enum EvalError {
     /// Bare identifier in a parsed condition (`%if foo`) — RPM
     /// rejects these at build time; we report them rather than
     /// coercing.
-    #[error("bare identifier `{0}` is not supported in conditions")]
+    #[error("bare identifier `{0}` in condition")]
     IdentifierUnsupported(String),
     /// Catch-all for parser corner-cases we haven't modelled yet
     /// (e.g. a future `CondExpr` variant that the
-    /// `#[non_exhaustive]` upstream enum may grow).
-    #[error("unsupported condition shape: {0}")]
+    /// `#[non_exhaustive]` upstream enum may grow). The inner
+    /// `&'static str` is operator-friendly when produced by the
+    /// canonical call sites; [`Self::code`] maps it to a stable
+    /// tag so reports group cleanly even when the inner wording
+    /// drifts.
+    #[error("not analysed: {0}")]
     Unsupported(&'static str),
+}
+
+/// Categorisation of an [`EvalError`] for the renderer's triage
+/// view. The split exists because operators face two different
+/// failure modes when a coverage run reports `indeterminate`:
+///
+/// * [`Self::Config`] — operator can resolve by editing
+///   `.rpmspec.toml` (declaring `[macros.NAME]` variants, fleshing
+///   out a profile's `build_arch`/`build_os`, etc.). Actionable.
+/// * [`Self::Tool`] — the evaluator doesn't model this construct.
+///   Operator can't fix it without a code change (or a tool bug
+///   filing). Coverage degrades gracefully but reachability for
+///   these branches is genuinely unknown.
+///
+/// The renderer surfaces this category inline (`[config]` /
+/// `[tool]`) so the operator can scan the indeterminate list and
+/// know which branches are theirs to fix versus which require a
+/// project-side change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum EvalErrorCategory {
+    /// Project-config gap. Fix by editing `.rpmspec.toml` or the
+    /// profile data this evaluator reads.
+    Config,
+    /// Tool-side limitation. The evaluator doesn't model the
+    /// construct yet; reachability for the affected branch is
+    /// unknown until the evaluator grows support.
+    Tool,
+}
+
+impl EvalError {
+    /// Whether the error reflects a missing piece of project
+    /// configuration (operator-fixable) or a tool-side limitation
+    /// (requires a code change). See [`EvalErrorCategory`].
+    #[must_use]
+    pub fn category(&self) -> EvalErrorCategory {
+        match self {
+            Self::UndefinedMacro(_)
+            | Self::MissingBuildArch
+            | Self::MissingBuildOs
+            | Self::IdentifierUnsupported(_) => EvalErrorCategory::Config,
+            Self::NonAscii
+            | Self::ShellExpansion
+            | Self::ArithmeticExpr
+            | Self::UnmodelledDefault
+            | Self::TypeMismatch
+            | Self::StringOrdering
+            | Self::Unsupported(_) => EvalErrorCategory::Tool,
+        }
+    }
+
+    /// Stable short identifier for this error class. Renderer uses
+    /// the code to group/filter and to produce a fixed tag like
+    /// `[E-ARITH-RAW]` that survives future wording tweaks to the
+    /// Display string. Codes are kebab-or-shouty-case ASCII so
+    /// they're greppable in CI logs.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UndefinedMacro(_) => "undefined-macro",
+            Self::NonAscii => "non-ascii",
+            Self::ShellExpansion => "shell-expansion",
+            Self::ArithmeticExpr => "arith-expr",
+            Self::UnmodelledDefault => "default-value-form",
+            Self::TypeMismatch => "type-mismatch",
+            Self::StringOrdering => "string-ordering",
+            Self::MissingBuildArch => "missing-build-arch",
+            Self::MissingBuildOs => "missing-build-os",
+            Self::IdentifierUnsupported(_) => "identifier-unsupported",
+            Self::Unsupported(text) => unsupported_code_from_text(text),
+        }
+    }
+}
+
+/// Map the inner `Unsupported(&'static str)` message back to a
+/// stable code. The set of inner messages is small and grows
+/// rarely; matching on substrings rather than the full string
+/// gives us code stability even if the wording is polished.
+fn unsupported_code_from_text(text: &str) -> &'static str {
+    if text.contains("arithmetic") {
+        "arith-raw"
+    } else if text.contains("non-arch") {
+        "non-arch-in-ifarch"
+    } else if text.contains("non-expression") {
+        "non-expression-in-if"
+    } else if text.contains("CondKind") {
+        "unknown-cond-kind"
+    } else if text.contains("CondExpr") {
+        "unknown-cond-expr"
+    } else if text.contains("ExprAst") {
+        "unknown-expr-ast"
+    } else if text.contains("TextSegment") {
+        "unknown-text-segment"
+    } else if text.contains("macro ref") || text.contains("malformed") {
+        "malformed-macro-ref"
+    } else {
+        "unsupported-other"
+    }
 }
 
 // Serialize as the Display string so the JSON shape stays "string per
@@ -1720,9 +1822,11 @@ B\n\
         );
         let rendered = reason.to_string();
         assert!(
-            rendered.contains("not defined") && rendered.contains("this_macro_is_not_defined"),
+            rendered.contains("undefined macro") && rendered.contains("this_macro_is_not_defined"),
             "reason should name the undefined macro: {rendered}"
         );
+        assert_eq!(reason.category(), EvalErrorCategory::Config);
+        assert_eq!(reason.code(), "undefined-macro");
     }
 
     #[test]
@@ -1743,9 +1847,11 @@ B\n\
         );
         let rendered = reason.to_string();
         assert!(
-            rendered.contains("default-value form"),
+            rendered.contains("default-value"),
             "reason should mention default-value: {rendered}"
         );
+        assert_eq!(reason.category(), EvalErrorCategory::Tool);
+        assert_eq!(reason.code(), "default-value-form");
     }
 
     #[test]

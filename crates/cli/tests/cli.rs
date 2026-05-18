@@ -3026,8 +3026,12 @@ B
             stdout.contains("[DEAD]"),
             "expected DEAD tag on `%if 0`; got:\n{stdout}"
         );
+        // Whitespace-padded `active:   rhel-9-x86_64` (two spaces
+        // after the colon) — the renderer column-aligns the
+        // active/inactive rows so labels of different lengths
+        // line up. Match the relaxed form via separate substrings.
         assert!(
-            stdout.contains("active: rhel-9-x86_64"),
+            stdout.contains("active:") && stdout.contains("rhel-9-x86_64"),
             "expected rhel-only branch active on rhel; got:\n{stdout}"
         );
     }
@@ -3317,15 +3321,20 @@ defines = { foo_macro = "1" }
             stdout.contains("indeterminate:\n"),
             "expected multi-reason indeterminate header; got:\n{stdout}"
         );
-        // Each reason group renders as a single subline matching
-        // `(macro `NAME` is not defined`. Counting the leading paren
-        // form pins one group per reason without false-matching the
-        // reason text mentioned in other places (e.g. the condition
-        // display itself).
-        let foo_group = stdout.matches("(macro `foo_macro` is not defined").count();
-        let bar_group = stdout.matches("(macro `bar_macro` is not defined").count();
-        assert_eq!(foo_group, 1, "expected foo_macro group once; got {foo_group} in:\n{stdout}");
-        assert_eq!(bar_group, 1, "expected bar_macro group once; got {bar_group} in:\n{stdout}");
+        // Each reason group renders as one indented subline. The
+        // reason text format is `undefined macro: NAME`. Detect the
+        // branch subline (two leading spaces + the reason) vs the
+        // rollup subline (four leading spaces + the same reason).
+        // The rollup uses the FIRST reason seen, so only one of foo/
+        // bar appears there; the branch subline shows BOTH.
+        assert!(
+            stdout.contains("undefined macro: foo_macro"),
+            "expected foo_macro reason; got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("undefined macro: bar_macro"),
+            "expected bar_macro reason; got:\n{stdout}"
+        );
     }
 
     #[test]
@@ -3408,20 +3417,29 @@ defines = { foo_macro = "1" }
             None,
         );
         assert_eq!(rc, 0, "stderr={stderr}");
-        // One indeterminate line, with the reason printed exactly once.
-        let reason = "macro `undefined_macro_xyz` is not defined in the profile";
-        let occurrences = stdout.matches(reason).count();
+        // Three occurrences expected: once in the per-spec reason
+        // rollup table at the top, once in the printed source line
+        // `%if %{undefined_macro_xyz} == 10`, and once in the
+        // per-branch indeterminate reason. The rollup keeps the
+        // reason DRY — operators see the macro name in three places
+        // by design, not by accident.
+        let macro_name = "undefined_macro_xyz";
+        let occurrences = stdout.matches(macro_name).count();
         assert_eq!(
-            occurrences, 1,
-            "expected reason to appear exactly once; got {occurrences} in:\n{stdout}"
+            occurrences, 3,
+            "expected macro name to appear thrice (rollup + source + reason); got {occurrences} in:\n{stdout}"
         );
         // Four profiles in the set, all sharing the reason, must
-        // collapse to the "(all 4 profiles)" summary form. The threshold
-        // (4) is large enough to skip noise for small fixtures but kicks
-        // in cleanly for production target-sets of 20+ profiles.
+        // collapse to the `(all 4)` summary form.
         assert!(
-            stdout.contains("(all 4 profiles)"),
+            stdout.contains("(all 4)"),
             "expected collapsed profile-count summary; got:\n{stdout}"
+        );
+        // Category tag must surface so operators can triage
+        // config-fixable vs tool-limited reasons.
+        assert!(
+            stdout.contains("[config]"),
+            "expected [config] category tag in indeterminate line; got:\n{stdout}"
         );
     }
 
@@ -3474,10 +3492,11 @@ description = "Build edition selector"
             stdout.contains("[CONDITIONAL: flavour=1c]"),
             "expected CONDITIONAL tag with flavour=1c; got:\n{stdout}"
         );
-        assert!(
-            stdout.contains("reachable when (flavour=1c)"),
-            "expected `reachable when` annotation line; got:\n{stdout}"
-        );
+        // When CONDITIONAL covers every profile in the target set,
+        // the renderer suppresses the redundant `reachable when`
+        // follow-up — the bracket tag already carries the variant
+        // assignment. With a 1-profile target set the
+        // conditional_on equals all profiles, so the line is dropped.
         assert!(
             !stdout.contains("[DEAD]"),
             "branch must not be tagged DEAD when a variant activates it; got:\n{stdout}"
@@ -3539,6 +3558,102 @@ values = ["ent", "1c"]
             .expect("reachable_under.flavour");
         let values: Vec<&str> = values.iter().filter_map(|v| v.as_str()).collect();
         assert!(values.contains(&"1c"), "expected 1c in {values:?}");
+    }
+
+    #[test]
+    fn coverage_summary_flag_skips_per_branch_listing() {
+        // `--summary` prints only the header + reason rollup. Pin
+        // that the per-branch lines are suppressed but the rollup
+        // is present — that's the operator's "is this spec healthy?"
+        // one-liner.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(
+            &spec,
+            "Name: foo\nVersion: 1\nRelease: 1\nSummary: t\nLicense: MIT\n\
+             \n\
+             %if 0\n%global a 1\n%endif\n\
+             %if %{undefined_zzz}\n%global b 1\n%endif\n\
+             \n\
+             %description\nB\n\
+             \n\
+             %changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+        )
+        .expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--summary",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        // Summary header always prints.
+        assert!(
+            stdout.contains("2 branches:"),
+            "expected summary header; got:\n{stdout}"
+        );
+        // Per-branch line markers must NOT appear.
+        assert!(
+            !stdout.contains("line 7:") && !stdout.contains("line 10:"),
+            "summary mode must suppress per-branch listings; got:\n{stdout}"
+        );
+        // Rollup row for the undefined macro must still surface.
+        assert!(
+            stdout.contains("undefined-macro"),
+            "expected reason rollup row; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn coverage_only_dead_filters_branches() {
+        // `--only dead` keeps only DEAD branches. Pin that DEAD
+        // branches show up and others don't, while the summary
+        // header still reports the full count for context.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(
+            &spec,
+            "Name: foo\nVersion: 1\nRelease: 1\nSummary: t\nLicense: MIT\n\
+             \n\
+             %if 0\n%global d 1\n%endif\n\
+             %if 1\n%global a 1\n%endif\n\
+             \n\
+             %description\nB\n\
+             \n\
+             %changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+        )
+        .expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--only",
+                "dead",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        assert!(
+            stdout.contains("[DEAD]"),
+            "expected DEAD branch; got:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains("[ALWAYS]"),
+            "always-active branch must be filtered out; got:\n{stdout}"
+        );
+        // Summary still reports the always count.
+        assert!(
+            stdout.contains("1 always") && stdout.contains("1 dead"),
+            "summary header should retain full counts; got:\n{stdout}"
+        );
     }
 }
 
@@ -4078,16 +4193,18 @@ B
             "expected the bcond %if line; got:\n{stdout}"
         );
         // Pre-Phase-10 this would show "indeterminate: rhel-9-x86_64".
-        // Now it must show "inactive: rhel-9-x86_64" instead.
+        // Now `%bcond_with` resolves to a definite Inactive verdict on
+        // every profile → the branch is DEAD (no active, no indet).
+        // Renderer's compact path tags the line `[DEAD]` and skips
+        // the verdict skeleton, so we assert via the tag rather than
+        // the (now-suppressed) `inactive:` row.
         let bootstrap_idx = stdout
             .find("%if %{with bootstrap}")
             .expect("bootstrap line");
-        // Look at the next ~150 chars after the directive — that's
-        // the activity block.
         let tail = &stdout[bootstrap_idx..(bootstrap_idx + 200).min(stdout.len())];
         assert!(
-            tail.contains("inactive: rhel-9-x86_64"),
-            "%bcond_with default-off must resolve to Inactive; got tail:\n{tail}"
+            tail.contains("[DEAD]"),
+            "%bcond_with default-off must resolve to Inactive (rendered as DEAD on a single-profile run); got tail:\n{tail}"
         );
     }
 
@@ -4112,13 +4229,16 @@ B
             None,
         );
         assert_eq!(rc, 0);
+        // With --with FOO the bcond resolves to Active on every
+        // profile → branch tagged [ALWAYS] (renderer's compact path
+        // suppresses the active/inactive skeleton).
         let bootstrap_idx = stdout
             .find("%if %{with bootstrap}")
             .expect("bootstrap line");
         let tail = &stdout[bootstrap_idx..(bootstrap_idx + 200).min(stdout.len())];
         assert!(
-            tail.contains("active: rhel-9-x86_64"),
-            "--with FOO must flip the bcond to Active; got tail:\n{tail}"
+            tail.contains("[ALWAYS]"),
+            "--with FOO must flip the bcond to Active (rendered as ALWAYS); got tail:\n{tail}"
         );
     }
 
@@ -4142,13 +4262,13 @@ B
             None,
         );
         assert_eq!(rc, 0);
-        // `%if %{with docs}` in the spec should now resolve to
-        // Inactive (since --without docs turns off the bcond).
+        // `%if %{with docs}` resolves to Inactive on every profile
+        // → rendered as DEAD (compact path skips the inactive: row).
         let docs_idx = stdout.find("%if %{with docs}").expect("docs line");
         let tail = &stdout[docs_idx..(docs_idx + 200).min(stdout.len())];
         assert!(
-            tail.contains("inactive: rhel-9-x86_64"),
-            "--without DOCS must flip the default-ON bcond Inactive; got tail:\n{tail}"
+            tail.contains("[DEAD]"),
+            "--without DOCS must flip the default-ON bcond Inactive (rendered as DEAD); got tail:\n{tail}"
         );
     }
 
@@ -4370,12 +4490,13 @@ B
             None,
         );
         assert_eq!(rc, 0);
-        // Find the line and ensure it's active.
+        // With --with pcre2 the bcond expr collapses to Active on
+        // every profile → branch tagged [ALWAYS].
         let idx = stdout.find("%{with pcre2}").expect("branch present");
         let tail = &stdout[idx..(idx + 200).min(stdout.len())];
         assert!(
-            tail.contains("active: rhel-9-x86_64"),
-            "--with pcre2 must collapse Unevaluated → Active; got tail:\n{tail}"
+            tail.contains("[ALWAYS]"),
+            "--with pcre2 must collapse Unevaluated → Active (rendered as ALWAYS); got tail:\n{tail}"
         );
     }
 

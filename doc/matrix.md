@@ -363,29 +363,53 @@ rpm-spec-tool matrix coverage --target-set product-2026q2 product.spec
 Output (human):
 
 ```text
-# Matrix coverage: target set `product-2026q2` (5 profiles)
+Matrix coverage: target set `product-2026q2` (5 profiles)
 
-## product.spec
-  4 branches — 1 dead, 1 indeterminate
+==> product.spec
+    4 branches: 0 always · 0 conditional · 1 dead · 1 indeterminate · 2 mixed
+    [config] undefined-macro        (1 branches)  undefined macro: suse_version
 
   line 9: %if 0%{?rhel}
-    active: rhel-8-x86_64, rhel-9-x86_64
+    active:   rhel-8-x86_64, rhel-9-x86_64
     inactive: altlinux-10-x86_64, sles-15-x86_64
   line 13: %if 0 [DEAD]
-    active: (none)
-    inactive: altlinux-10-x86_64, rhel-8-x86_64, rhel-9-x86_64, sles-15-x86_64
   line 17: %ifarch e2k
-    active: altlinux-10-e2k
+    active:   altlinux-10-e2k
     inactive: altlinux-10-x86_64, rhel-8-x86_64, rhel-9-x86_64, sles-15-x86_64
 ```
 
+A per-spec summary header reports every verdict class so operators
+don't have to scan the body to know what's there. The
+`[config] undefined-macro …` rollup line aggregates indeterminate
+reasons across all branches; `[config]` reasons are operator-fixable
+(declare `[macros.X]` or fix the profile), `[tool]` reasons are
+evaluator limitations that require a code change.
+
 Tags:
 
-* `[DEAD]` — branch is inactive on every profile in the set and no
-  evaluation was indeterminate. The whole `%if…%endif` block is
-  dead code and can be deleted.
-* `[ALWAYS]` — branch is active on every profile. The condition has
-  no effect; the body can be inlined.
+* `[DEAD]` — branch is inactive on every profile and no
+  variant rescues it. The whole `%if…%endif` block is dead code.
+* `[ALWAYS]` — branch is active on every profile. The condition
+  has no effect; the body can be inlined.
+* `[INDET]` — every profile produced an indeterminate verdict.
+  The `indeterminate:` follow-up line names the reason and
+  category (`[config]`/`[tool]`).
+* `[CONDITIONAL: macro=value]` — reachable under at least one
+  declared variant. See § "Macro variants" below.
+
+`[DEAD]`, `[ALWAYS]`, and pure-`[INDET]` branches render as a single
+line (plus one reason line for INDET) — the tag carries the verdict,
+so the active/inactive/indeterminate skeleton is suppressed. Only
+mixed-verdict branches (some profiles active, others not) expand
+into the full breakdown.
+
+### Filter flags
+
+* `--summary` — print the header + reason rollup only; skip the
+  per-branch listing. The "is this spec healthy?" one-liner.
+* `--only <dead|conditional|indeterminate|always|noisy>` — restrict
+  the per-branch listing to one verdict class. `noisy` is the
+  triage shorthand (everything except ALWAYS).
 
 Evaluator scope (Phase 2):
 
@@ -459,19 +483,22 @@ When variants are declared, `matrix coverage` runs every branch that
 is inactive on every profile through a *cartesian product* of the
 declared variant values. A branch reachable on profile P under at
 least one variant combination is tagged `[CONDITIONAL: macro=value]`
-instead of `[DEAD]`, and a `reachable when` line lists the
-contributing (macro, value) pairs.
+instead of `[DEAD]`. When the variant assignment covers every
+profile in the target set, the tag itself carries the full
+information; otherwise a `reachable when` line lists which profiles
+the variant rescues.
 
 ```text
 line 30: %if "%{edition}" == "1c" [CONDITIONAL: edition=1c]
-  active: (none)
-  inactive: (all 23 profiles)
-  reachable when (edition=1c): (all 23 profiles)
 
 line 491: %if 0%{?obsolete_distro_macro} [DEAD]
-  active: (none)
-  inactive: (all 23 profiles)
 ```
+
+DEAD and ALWAYS branches render as a single line each — the tag
+already conveys all four verdict buckets. CONDITIONAL and
+mixed-verdict branches expand into the detailed
+`active`/`inactive`/`reachable when`/`indeterminate` form only
+when the tag alone doesn't tell the full story.
 
 The first branch is build-conditional (some `-D edition` value
 activates it). The second is genuinely dead — no declared variant

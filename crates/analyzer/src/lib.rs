@@ -45,7 +45,7 @@ pub use bcond::{BcondEntry, BcondMap, BcondOverrides};
 pub use branch_aware::{IndeterminatePolicy, ProfileBranchSelection, SelectedBody};
 pub use branch_coverage::{
     BranchActivity, BranchCoverage, CollectedBranch, CollectedConditional, CoverageEntry,
-    CoverageReport, EvalError,
+    CoverageReport, EvalError, EvalErrorCategory,
 };
 pub use classes::{ClassesReport, DepBucket, EquivalenceClass, ProfileSignature};
 pub use contract::{
