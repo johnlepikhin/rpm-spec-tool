@@ -23,7 +23,9 @@ pub mod diagnostic;
 pub mod error_format;
 pub(crate) mod files;
 pub mod lint;
+pub mod macro_usage;
 pub mod matrix;
+pub mod portability;
 pub(crate) mod policy;
 pub mod registry;
 pub mod rules;
@@ -33,6 +35,8 @@ pub mod visit;
 
 pub use baseline::{Baseline, BaselineEntry, BaselineError};
 pub use diagnostic::{Applicability, Diagnostic, Edit, Label, LintCategory, Severity, Suggestion};
+pub use macro_usage::MacroUsageCollector;
+pub use portability::{PortabilityEntry, PortabilityReport, PortabilityStatus, StatusCounts};
 pub use lint::{Lint, LintMetadata};
 pub use matrix::{
     AggregatedDiagnostic, MatrixResult, MatrixSignature, MatrixSignatureParseError, ProfileResult,

@@ -7,9 +7,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{ArgGroup, Args, ValueEnum};
 use rpm_spec_analyzer::config::Config;
-use rpm_spec_analyzer::profile::{
-    ProfileSection, ResolveOptions, ResolvedTargetSet, TargetEntry, resolve_target_set,
-};
+use rpm_spec_analyzer::profile::ResolvedTargetSet;
 use rpm_spec_analyzer::{MatrixResult, run_matrix};
 
 use crate::app::ColorChoice;
@@ -238,33 +236,21 @@ pub(super) fn config_with_severity_overrides(cached: &Config, opts: &CheckOpts) 
 
 /// Resolve either the `--target-set NAME` from config or the ad-hoc
 /// `--profiles a,b,c` list into one [`ResolvedTargetSet`]. The
-/// ArgGroup on [`CheckOpts`] guarantees exactly one is set. Shared
-/// with the baseline path.
+/// ArgGroup on [`CheckOpts`] guarantees exactly one is set. Thin
+/// wrapper over the shared [`super::resolve_matrix_source`] helper
+/// so observability stays uniform across `check` / `baseline create`
+/// / `portability`.
 pub(super) fn resolve_matrix(
     config: &Config,
     base_dir: &Path,
     opts: &CheckOpts,
 ) -> Result<ResolvedTargetSet> {
-    let section = ProfileSection::new(config.profile.clone(), config.profiles.clone());
-    let resolve_opts = ResolveOptions::default().with_defines(&opts.defines.raw);
-
-    if let Some(name) = &opts.target_set {
-        tracing::info!(branch = "target_set", name = %name, "resolving matrix");
-        let target = config
-            .targets
-            .get(name)
-            .with_context(|| format!("target set `{name}` is not defined in .rpmspec.toml"))?;
-        resolve_target_set(&section, name, target, base_dir, resolve_opts)
-            .with_context(|| format!("failed to resolve target set `{name}`"))
-    } else {
-        tracing::info!(
-            branch = "ad-hoc",
-            profiles = ?opts.profiles,
-            "resolving matrix from CLI --profiles"
-        );
-        let target = TargetEntry::from_profiles(opts.profiles.clone());
-        resolve_target_set(&section, AD_HOC_TARGET_SET_ID, &target, base_dir, resolve_opts)
-            .with_context(|| "failed to resolve ad-hoc target set from --profiles")
-    }
+    super::resolve_matrix_source(
+        config,
+        base_dir,
+        opts.target_set.as_deref(),
+        &opts.profiles,
+        &opts.defines.raw,
+    )
 }
 

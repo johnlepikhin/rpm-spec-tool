@@ -273,10 +273,69 @@ one binary release but the stdlib does not contractually guarantee
 cross-toolchain stability. In practice signatures rarely change, but
 expect a one-time baseline refresh after a major rustc upgrade.
 
+## Macro portability
+
+`matrix portability` answers the question "which macros referenced by
+my spec aren't defined on every target profile?". It walks the AST,
+records every user-referenced macro name (skipping positional, flag,
+and builtin language constructs), and looks each up in every member
+profile's macro registry.
+
+```bash
+rpm-spec-tool matrix portability \
+  --target-set product-2026q2 product.spec
+```
+
+Output (human):
+
+```text
+# Matrix portability: target set `product-2026q2` (5 profiles)
+
+## product.spec
+  73 macros referenced — 1 missing, 6 partial, 66 portable
+
+  STATUS     MACRO                           DEF/TOTAL  MISSING ON
+  missing    cmake_build                       0/5      generic, rhel-8-x86_64, ...
+  partial    systemd_requires                  3/5      altlinux-10-x86_64, sles-15-x86_64
+  partial    _libdir                           5/5      -
+  portable   _bindir                           5/5      -
+```
+
+Statuses:
+
+* `missing` — no profile defines the macro. Either the spec relies
+  on a `--define` the user must supply, or it's a typo / removed
+  macro.
+* `partial` — some profiles define it, others don't. The most
+  actionable category: usually means the spec needs a `%{?guard}`
+  or a compatibility shim macro.
+* `portable` — every profile defines it. Phase 2 may refine this
+  to flag profiles where values *differ* (`_libdir` resolves to
+  `/usr/lib64` vs `/usr/lib`).
+
+### Exit codes
+
+* `--fail-on none` (default) — informational, always exits 0.
+* `--fail-on missing` — exits 1 if any macro is `missing`.
+* `--fail-on partial` — exits 1 if any macro is `missing` *or*
+  `partial`. Strictest mode for release engineering CI.
+
+### JSON output
+
+```bash
+rpm-spec-tool matrix portability --format json --target-set X product.spec
+```
+
+emits `{ target_set, profiles, files[{ path, total_used, missing,
+partial, portable, entries[{ name, status, defined_in, missing_in
+}] }] }` — same shape as the human view, machine-readable for
+dashboards.
+
 ## Limitations of Phase 1
 
-* No `matrix explain` / `coverage` / `portability` / `diff` /
-  `impact` yet — those land in Phase 2.
+* No `matrix explain` / `coverage` / `diff` / `impact` yet — those
+  land in a future phase together with `path_cond.rs` branch-trace
+  export.
 * No parallel execution — profiles are analysed sequentially. Cost
   is linear in profile count; a profile set of 30 typically
   completes in a few seconds for one spec.

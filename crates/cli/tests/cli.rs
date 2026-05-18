@@ -2678,3 +2678,236 @@ A test package.
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// matrix portability
+// ---------------------------------------------------------------------------
+
+mod matrix_portability {
+    use super::*;
+
+    /// Spec deliberately mixes:
+    /// * macros every distro profile defines (`_bindir`, `_unitdir`),
+    /// * macros only some define (`dist` — RHEL has it, ALT doesn't),
+    /// * a clearly-missing macro (`definitely_not_real`).
+    const PORTABILITY_SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1%{?dist}
+Summary: Test package
+
+License: MIT
+URL:     https://example.invalid/foo
+
+%description
+Body.
+
+%files
+%{_bindir}/foo
+%{_unitdir}/foo.service
+%{definitely_not_real}
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+
+    #[test]
+    fn portability_human_groups_by_status() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PORTABILITY_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "portability",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "default fail-on=none must exit 0; stderr={stderr}");
+        // Missing rows come first per status_rank ordering. Anchor
+        // on the data row (status + ≥2 spaces + macro name) so a
+        // format-width regression fails the test instead of being
+        // hidden by a substring match on the summary line.
+        let missing_pos = stdout
+            .find("missing    definitely_not_real")
+            .unwrap_or_else(|| panic!("missing data row not found:\n{stdout}"));
+        let partial_pos = stdout
+            .find("partial    _bindir")
+            .unwrap_or_else(|| panic!("partial data row not found:\n{stdout}"));
+        assert!(
+            missing_pos < partial_pos,
+            "missing entries must precede partial:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn portability_json_shape() {
+        // JSON contract: target_set, profiles, files[].entries[]
+        // with status enum strings.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PORTABILITY_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "portability",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        assert_eq!(parsed["target_set"], "<ad-hoc>");
+        let files = parsed["files"].as_array().expect("files");
+        assert_eq!(files.len(), 1);
+        let entries = files[0]["entries"].as_array().expect("entries");
+        // Each entry has a status from the documented enum.
+        for e in entries {
+            let s = e["status"].as_str().unwrap_or_default();
+            assert!(
+                matches!(s, "missing" | "partial" | "portable"),
+                "unexpected status `{s}`"
+            );
+            assert!(e["defined_in"].is_array());
+            assert!(e["missing_in"].is_array());
+        }
+    }
+
+    #[test]
+    fn portability_fail_on_partial_returns_1_when_only_partial_present() {
+        // Build a spec that uses only macros defined on at least
+        // one profile (so nothing is `missing`), but at least one
+        // is `partial`. `generic` has no showrc bundle, so any
+        // distro macro will be partial in [generic, rhel-9-x86_64].
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        let only_partial_spec = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: Test
+License: MIT
+
+%description
+Body.
+
+%files
+%{_bindir}/foo
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        std::fs::write(&spec, only_partial_spec).expect("write spec");
+        let (rc_partial, _, _) = run(
+            &[
+                "matrix",
+                "portability",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--fail-on",
+                "partial",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc_partial, 1, "--fail-on partial must catch partial-only spec");
+
+        // Same spec with --fail-on missing should pass: there are
+        // no `missing` entries.
+        let (rc_missing, stdout, stderr) = run(
+            &[
+                "matrix",
+                "portability",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--fail-on",
+                "missing",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(
+            rc_missing, 0,
+            "--fail-on missing must NOT trigger on partial-only spec; stderr={stderr}\nstdout={stdout}"
+        );
+    }
+
+    #[test]
+    fn portability_fail_on_missing_returns_1_when_missing_present() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PORTABILITY_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "portability",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--fail-on",
+                "missing",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(
+            rc, 1,
+            "definitely_not_real must trigger fail-on=missing; stderr={stderr}"
+        );
+    }
+
+    #[test]
+    fn portability_requires_target_or_profiles_flag() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PORTABILITY_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &["matrix", "portability", spec.to_str().unwrap()],
+            None,
+        );
+        assert_ne!(rc, 0, "expected clap rejection; stderr={stderr}");
+        assert!(
+            stderr.contains("--target-set") || stderr.contains("--profiles"),
+            "expected clap to mention the required flags; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn portability_from_target_set_in_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = dir.path().join(".rpmspec.toml");
+        std::fs::write(
+            &cfg,
+            r#"
+[targets.smoke]
+profiles = ["generic", "rhel-9-x86_64"]
+"#,
+        )
+        .expect("write config");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PORTABILITY_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "portability",
+                "--config",
+                cfg.to_str().unwrap(),
+                "--target-set",
+                "smoke",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        assert!(stdout.contains("`smoke`"));
+    }
+}
