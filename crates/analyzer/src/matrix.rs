@@ -61,22 +61,25 @@ impl MatrixSignature {
     /// loader to validate that on-disk entries are well-formed before
     /// they reach the comparison set.
     pub fn from_hex(s: &str) -> Result<Self, MatrixSignatureParseError> {
-        if s.len() != SIGNATURE_HEX_LEN {
-            return Err(MatrixSignatureParseError {
-                value: s.to_string(),
-                reason: "expected 16 hex characters",
-            });
-        }
-        if !s.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)) {
-            return Err(MatrixSignatureParseError {
-                value: s.to_string(),
-                reason: "expected lowercase hex digits only",
-            });
-        }
-        let value = u64::from_str_radix(s, 16).map_err(|_| MatrixSignatureParseError {
+        let err = |reason| MatrixSignatureParseError {
             value: s.to_string(),
-            reason: "could not parse as u64",
-        })?;
+            reason,
+        };
+        if s.len() != SIGNATURE_HEX_LEN {
+            return Err(err("expected 16 hex characters"));
+        }
+        // Byte-level scan: length was already pinned at 16 ASCII bytes
+        // and we want to reject uppercase A–F. `bytes()` skips UTF-8
+        // decoding `chars()` would do; `matches!` keeps the predicate
+        // in one branch.
+        if !s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+            return Err(err("expected lowercase hex digits only"));
+        }
+        // Unreachable in practice — 16 lowercase hex digits always
+        // fit in u64. Keep the fallible call rather than `unwrap`
+        // so a future widening of `SIGNATURE_HEX_LEN` surfaces as a
+        // typed error rather than a panic.
+        let value = u64::from_str_radix(s, 16).map_err(|_| err("could not parse as u64"))?;
         Ok(MatrixSignature(value))
     }
 }

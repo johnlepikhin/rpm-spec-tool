@@ -195,29 +195,27 @@ fn load_known_signatures(baseline_path: Option<&Path>) -> Result<HashSet<MatrixS
 /// split them into "any" / "new" (relative to the known signatures
 /// from a loaded baseline). Returns `(any_deny, any_new_deny)`.
 ///
-/// **Signature consistency invariant.** Both this function and
-/// [`Baseline::from_aggregated`](rpm_spec_analyzer::Baseline::from_aggregated)
-/// must derive their `MatrixSignature` via [`MatrixSignature::for_diagnostic`].
-/// `from_aggregated` reads `AggregatedDiagnostic::signature` which the
-/// matrix aggregator computes from the underlying `Diagnostic` — same
-/// hash inputs, so a recorded baseline and a fresh run see identical
-/// signatures for the same root-cause finding.
+/// Operates on `result.aggregated` rather than per-profile diagnostics:
+/// one entry per unique `(lint_id, span, message)` finding, with
+/// `AggregatedDiagnostic::signature` already cached by the aggregator.
+/// O(unique findings) instead of O(profiles × findings), and aligned
+/// with what [`Baseline::from_aggregated`](rpm_spec_analyzer::Baseline::from_aggregated)
+/// records — same signature source on both sides, so a recorded
+/// baseline and a fresh run see identical signatures for the same
+/// root-cause finding.
 fn count_deny_findings(
     result: &MatrixResult,
     known: &HashSet<MatrixSignature>,
 ) -> (bool, bool) {
     let mut any_deny = false;
     let mut any_new_deny = false;
-    for pr in &result.per_profile {
-        for d in &pr.diagnostics {
-            if d.severity != rpm_spec_analyzer::Severity::Deny {
-                continue;
-            }
-            any_deny = true;
-            let sig = MatrixSignature::for_diagnostic(d);
-            if !known.contains(&sig) {
-                any_new_deny = true;
-            }
+    for ad in &result.aggregated {
+        if ad.diagnostic.severity != rpm_spec_analyzer::Severity::Deny {
+            continue;
+        }
+        any_deny = true;
+        if !known.contains(&ad.signature) {
+            any_new_deny = true;
         }
     }
     (any_deny, any_new_deny)

@@ -370,6 +370,25 @@ mod tests {
     }
 
     #[test]
+    fn read_caps_at_max_read_bytes() {
+        // Oversized blob is truncated to MAX_READ_BYTES, which leaves
+        // an incomplete JSON document → parse error. Defends the cap
+        // against a refactor that drops the `.take()` adapter.
+        let mut blob = String::from(r#"{"baseline_version":1,"entries":["#);
+        let entry = r#"{"matrix_signature":"0123456789abcdef","lint_id":"RPM055","message":"x","affected_profile_count":1},"#;
+        // Pad past 16 MiB so the trailing `]}` cannot survive the cap.
+        while blob.len() <= Baseline::MAX_READ_BYTES as usize {
+            blob.push_str(entry);
+        }
+        blob.push_str(r#"{"matrix_signature":"fedcba9876543210","lint_id":"RPM055","message":"x","affected_profile_count":1}]}"#);
+        let err = Baseline::read(blob.as_bytes()).unwrap_err();
+        assert!(
+            matches!(err, BaselineError::Json(_)),
+            "expected parse error from truncated input, got {err:?}"
+        );
+    }
+
+    #[test]
     fn empty_baseline_signature_set_is_empty() {
         // Fresh projects start with no recorded findings — the read
         // path must accept an empty entries array without error and

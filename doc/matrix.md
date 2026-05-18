@@ -276,6 +276,12 @@ leave a partially-serialised baseline on disk to confuse the next
 is not atomic — pipe through `> tmp && mv tmp baseline.json` if your
 CI needs the same guarantee for stdout-redirected writes.
 
+On Windows, the underlying `tempfile::NamedTempFile::persist` call uses
+`MoveFile` *without* `MOVEFILE_REPLACE_EXISTING`, so persisting onto an
+already-existing `PATH` fails. To refresh a baseline on Windows, delete
+the destination first (`del baseline.json`) or write to a fresh path.
+POSIX has no such restriction — successive runs overwrite cleanly.
+
 ### Stability caveat
 
 `matrix_signature` is built from `(lint_id, span, message)` via
