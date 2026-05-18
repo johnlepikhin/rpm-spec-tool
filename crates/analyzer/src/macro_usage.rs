@@ -165,8 +165,10 @@ impl<'ast> Visit<'ast> for MacroUsageCollector {
 /// Pull the bare name out of a verbatim macro reference token like
 /// `%foo`, `%{foo}`, `%{?foo}`, `%{!?foo}`, `%{?foo:default}`. The
 /// parser stores `ExprAst::Macro.text` as the raw source; the
-/// expression sub-tree doesn't model the breakdown.
-fn macro_name_from_verbatim(text: &str) -> Option<String> {
+/// expression sub-tree doesn't model the breakdown. Visible to the
+/// rest of the analyzer crate (e.g. `branch_coverage`) so the
+/// parsing logic stays in one place.
+pub(crate) fn macro_name_from_verbatim(text: &str) -> Option<String> {
     let inner = text.trim().strip_prefix('%')?;
     let body = match inner.strip_prefix('{') {
         Some(rest) => rest.strip_suffix('}')?,

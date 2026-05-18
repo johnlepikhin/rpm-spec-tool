@@ -17,6 +17,7 @@
 )]
 
 pub mod baseline;
+pub mod branch_coverage;
 pub mod config;
 pub mod config_cache;
 pub mod diagnostic;
@@ -34,6 +35,10 @@ pub(crate) mod shell;
 pub mod visit;
 
 pub use baseline::{Baseline, BaselineEntry, BaselineError};
+pub use branch_coverage::{
+    BranchActivity, BranchCoverage, CollectedBranch, CollectedConditional, CoverageEntry,
+    CoverageReport, EvalError,
+};
 pub use diagnostic::{Applicability, Diagnostic, Edit, Label, LintCategory, Severity, Suggestion};
 pub use macro_usage::MacroUsageCollector;
 pub use portability::{PortabilityEntry, PortabilityReport, PortabilityStatus, StatusCounts};

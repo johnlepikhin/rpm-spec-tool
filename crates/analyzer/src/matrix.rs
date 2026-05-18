@@ -84,11 +84,30 @@ impl MatrixSignature {
 /// Error returned by [`MatrixSignature::from_hex`] for any input that
 /// is not exactly 16 lowercase hex digits. Carries the offending value
 /// so callers can surface it (e.g. `BaselineError::InvalidEntry`).
+///
+/// Fields are private; use [`Self::value`] / [`Self::reason`] for read
+/// access. The struct is `#[non_exhaustive]` so a future build can add
+/// e.g. `position: usize` without breaking dependents.
 #[derive(Debug, thiserror::Error)]
 #[error("invalid matrix signature `{value}`: {reason}")]
+#[non_exhaustive]
 pub struct MatrixSignatureParseError {
-    pub value: String,
-    pub reason: &'static str,
+    value: String,
+    reason: &'static str,
+}
+
+impl MatrixSignatureParseError {
+    /// The offending input string, verbatim.
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    /// Static human-readable reason — one of: "expected 16 hex
+    /// characters", "expected lowercase hex digits only", "could not
+    /// parse as u64".
+    pub fn reason(&self) -> &'static str {
+        self.reason
+    }
 }
 
 /// Width, in characters, of [`MatrixSignature`]'s hex `Display` form.

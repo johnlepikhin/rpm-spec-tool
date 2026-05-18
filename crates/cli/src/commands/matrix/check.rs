@@ -1,6 +1,7 @@
 //! `matrix check` — analyse one or more spec files against every
 //! profile in a release target set.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -8,7 +9,7 @@ use anyhow::{Context, Result};
 use clap::{ArgGroup, Args, ValueEnum};
 use rpm_spec_analyzer::config::Config;
 use rpm_spec_analyzer::profile::ResolvedTargetSet;
-use rpm_spec_analyzer::{MatrixResult, run_matrix};
+use rpm_spec_analyzer::{MatrixResult, MatrixSignature, run_matrix};
 
 use crate::app::ColorChoice;
 use crate::io;
@@ -184,11 +185,9 @@ pub(super) fn run(
 /// Load and validate the `--baseline` file, returning a typed
 /// signature index for O(1) lookup. Returns an empty set when no
 /// baseline was supplied.
-fn load_known_signatures(
-    baseline_path: Option<&Path>,
-) -> Result<std::collections::HashSet<rpm_spec_analyzer::MatrixSignature>> {
+fn load_known_signatures(baseline_path: Option<&Path>) -> Result<HashSet<MatrixSignature>> {
     let Some(path) = baseline_path else {
-        return Ok(std::collections::HashSet::new());
+        return Ok(HashSet::new());
     };
     let file = std::fs::File::open(path)
         .with_context(|| format!("opening baseline {}", path.display()))?;
@@ -201,9 +200,17 @@ fn load_known_signatures(
 /// Count Deny-severity findings in one source's matrix result and
 /// split them into "any" / "new" (relative to the known signatures
 /// from a loaded baseline). Returns `(any_deny, any_new_deny)`.
+///
+/// **Signature consistency invariant.** Both this function and
+/// [`Baseline::from_aggregated`](rpm_spec_analyzer::Baseline::from_aggregated)
+/// must derive their `MatrixSignature` via [`MatrixSignature::for_diagnostic`].
+/// `from_aggregated` reads `AggregatedDiagnostic::signature` which the
+/// matrix aggregator computes from the underlying `Diagnostic` — same
+/// hash inputs, so a recorded baseline and a fresh run see identical
+/// signatures for the same root-cause finding.
 fn count_deny_findings(
     result: &MatrixResult,
-    known: &std::collections::HashSet<rpm_spec_analyzer::MatrixSignature>,
+    known: &HashSet<MatrixSignature>,
 ) -> (bool, bool) {
     let mut any_deny = false;
     let mut any_new_deny = false;
@@ -213,7 +220,7 @@ fn count_deny_findings(
                 continue;
             }
             any_deny = true;
-            let sig = rpm_spec_analyzer::MatrixSignature::for_diagnostic(d);
+            let sig = MatrixSignature::for_diagnostic(d);
             if !known.contains(&sig) {
                 any_new_deny = true;
             }

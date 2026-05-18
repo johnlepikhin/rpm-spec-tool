@@ -173,8 +173,10 @@ pub enum BaselineError {
     /// itself returns — both directions surface the same error type.
     #[error("baseline JSON error: {0}")]
     Json(#[source] serde_json::Error),
-    /// Low-level IO failure (e.g. writing the trailing newline after
-    /// the JSON body, or stream errors during read).
+    /// Low-level IO failure when writing the trailing newline after
+    /// the JSON body. Read-side IO errors surface inside [`Self::Json`]
+    /// because `serde_json::from_reader` wraps them in `serde_json::Error`
+    /// (see `serde_json::Error::is_io`).
     #[error("baseline IO error: {0}")]
     Io(#[source] std::io::Error),
     /// File-format version is recognised but not supported by this

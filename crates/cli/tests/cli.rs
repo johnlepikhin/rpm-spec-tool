@@ -2644,6 +2644,72 @@ A test package.
     }
 
     #[test]
+    fn matrix_check_missing_baseline_file_exits_nonzero() {
+        // ENOENT on --baseline path must surface as a hard error, not
+        // a silent fall-back to an empty known-set. Defends against a
+        // refactor that quietly treats a missing baseline as "nothing
+        // is known yet" and lets CI pass on a stale config.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let missing = dir.path().join("does-not-exist.json");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "check",
+                "--profiles",
+                "generic",
+                "--baseline",
+                missing.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_ne!(rc, 0, "missing baseline must fail loudly");
+        assert!(
+            stderr.contains("opening baseline"),
+            "expected open-failure context in stderr; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn matrix_check_empty_baseline_treats_all_findings_as_new() {
+        // An empty baseline asserts intent ("nothing is known-good")
+        // and is semantically distinct from no baseline at all. With
+        // --fail-on=new every deny finding becomes "new" → exit 1, and
+        // no [baseline] tag may appear in the output.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
+        let baseline = dir.path().join("empty.json");
+        std::fs::write(
+            &baseline,
+            r#"{ "baseline_version": 1, "entries": [] }"#,
+        )
+        .expect("write baseline");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "check",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--deny=warnings",
+                "--baseline",
+                baseline.to_str().unwrap(),
+                "--fail-on",
+                "new",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 1, "empty baseline + --fail-on=new must gate on any deny");
+        assert!(
+            !stdout.contains("[baseline]"),
+            "no entry should be marked as [baseline]-known; got stdout={stdout}"
+        );
+    }
+
+    #[test]
     fn matrix_check_lint_and_lint_exit_codes_align_on_single_profile() {
         // Sanity contract: matrix check against a single profile must
         // not report deny when single-profile lint against the same
@@ -2909,5 +2975,241 @@ profiles = ["generic", "rhel-9-x86_64"]
         );
         assert_eq!(rc, 0, "stderr={stderr}");
         assert!(stdout.contains("`smoke`"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// matrix coverage
+// ---------------------------------------------------------------------------
+
+mod matrix_coverage {
+    use super::*;
+
+    /// Spec mixes: an always-dead branch, a distro-only branch, and
+    /// an architecture-only branch. Together they exercise the
+    /// dead / partial / indeterminate paths of the evaluator.
+    const COVERAGE_SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1%{?dist}
+Summary: Test
+
+License: MIT
+URL:     https://example.invalid/foo
+
+%if 0
+Requires: never
+%endif
+
+%if 0%{?rhel}
+Requires: rhel-only
+%endif
+
+%ifarch x86_64
+Requires: arch-only
+%endif
+
+%description
+B
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+
+    #[test]
+    fn coverage_human_marks_dead_and_active_branches() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, COVERAGE_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "default fail-on=none must exit 0; stderr={stderr}");
+        assert!(
+            stdout.contains("[DEAD]"),
+            "expected DEAD tag on `%if 0`; got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("active: rhel-9-x86_64"),
+            "expected rhel-only branch active on rhel; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn coverage_json_shape() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, COVERAGE_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        assert_eq!(parsed["target_set"], "<ad-hoc>");
+        let files = parsed["files"].as_array().expect("files");
+        assert_eq!(files.len(), 1);
+        let conditionals = files[0]["conditionals"].as_array().expect("conditionals");
+        assert!(
+            !conditionals.is_empty(),
+            "expected non-empty conditionals array"
+        );
+        // Each branch has the documented schema.
+        for c in conditionals {
+            let branches = c["branches"].as_array().expect("branches");
+            for b in branches {
+                assert!(b["display"].is_string());
+                assert!(b["is_dead"].is_boolean());
+                assert!(b["active_on"].is_array());
+                assert!(b["inactive_on"].is_array());
+                assert!(b["indeterminate_on"].is_array());
+            }
+        }
+    }
+
+    #[test]
+    fn coverage_fail_on_dead_returns_1_when_dead_present() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, COVERAGE_SPEC).expect("write spec");
+        let (rc, _, _) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--fail-on",
+                "dead",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 1, "`%if 0` must trigger fail-on=dead");
+    }
+
+    #[test]
+    fn coverage_json_includes_indeterminate_reasons() {
+        // Phase 4 contract: JSON output exposes per-profile reasons
+        // for Indeterminate verdicts so dashboards can show "why".
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        let indet_spec = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: T
+
+License: MIT
+
+%if %{this_macro_is_genuinely_undefined}
+Requires: nope
+%endif
+
+%description
+B
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        std::fs::write(&spec, indet_spec).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "generic",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}"));
+        let branch = &parsed["files"][0]["conditionals"][0]["branches"][0];
+        let reasons = branch["indeterminate_reasons"]
+            .as_object()
+            .expect("indeterminate_reasons object");
+        let generic_reason = reasons["generic"].as_str().expect("generic reason");
+        assert!(
+            generic_reason.contains("not defined")
+                || generic_reason.contains("undefined")
+                || generic_reason.contains("genuinely_undefined"),
+            "reason should explain why: {generic_reason}"
+        );
+    }
+
+    #[test]
+    fn coverage_fail_on_indeterminate_returns_1_when_only_indeterminate() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        let only_indet_spec = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: T
+
+License: MIT
+
+%if %{this_macro_is_genuinely_undefined}
+Requires: nope
+%endif
+
+%description
+B
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        std::fs::write(&spec, only_indet_spec).expect("write spec");
+        let (rc, _, _) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "generic",
+                "--fail-on",
+                "indeterminate",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 1, "indeterminate-only spec must fail with --fail-on indeterminate");
+    }
+
+    #[test]
+    fn coverage_requires_target_or_profiles_flag() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, COVERAGE_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &["matrix", "coverage", spec.to_str().unwrap()],
+            None,
+        );
+        assert_ne!(rc, 0);
+        assert!(
+            stderr.contains("--target-set") || stderr.contains("--profiles"),
+            "expected clap to mention required flags; got {stderr}"
+        );
     }
 }

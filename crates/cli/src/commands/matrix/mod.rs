@@ -1,8 +1,8 @@
 //! `matrix` subcommand — multi-profile (release matrix) analysis.
 //!
 //! Phase 1 shipped `matrix check` + `matrix baseline create`. Phase 2
-//! adds `matrix portability`; coverage/explain/diff/impact remain
-//! follow-ups (see `doc/matrix.md` "Limitations").
+//! adds `matrix portability` and `matrix coverage`; explain / diff /
+//! impact remain follow-ups (see `doc/matrix.md` "Limitations").
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -16,6 +16,7 @@ use rpm_spec_analyzer::profile::{
 
 pub mod baseline;
 pub mod check;
+pub mod coverage;
 pub mod portability;
 
 pub use check::{AD_HOC_TARGET_SET_ID, CheckOpts};
@@ -81,6 +82,10 @@ pub enum Action {
     /// which member profiles. Surfaces platform-specific macros
     /// that often need `%{?guard}` wrappers.
     Portability(portability::PortabilityOpts),
+    /// For each `%if` / `%ifarch` branch in the spec, list which
+    /// member profiles activate it. Surfaces dead branches and
+    /// distro-only branches.
+    Coverage(coverage::CoverageOpts),
 }
 
 impl Cmd {
@@ -89,6 +94,7 @@ impl Cmd {
             Action::Check(opts) => check::run(opts, self.config.as_deref(), color),
             Action::Baseline(cmd) => cmd.run(self.config.as_deref()),
             Action::Portability(opts) => portability::run(opts, self.config.as_deref()),
+            Action::Coverage(opts) => coverage::run(opts, self.config.as_deref()),
         }
     }
 }

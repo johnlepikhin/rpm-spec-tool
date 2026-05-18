@@ -1,0 +1,1415 @@
+//! Cross-profile branch coverage for `%if` / `%ifarch` / `%ifos`
+//! conditionals.
+//!
+//! Walks every conditional in the parsed spec, evaluates each branch
+//! against every member profile of a [`ResolvedTargetSet`], and
+//! reports which profiles see the branch active. The report drives
+//! `matrix coverage` — release engineers use it to spot dead
+//! branches, distro-only branches, and conditions the analyzer
+//! couldn't evaluate.
+//!
+//! Phase 1 evaluator scope:
+//!
+//! * `%ifarch` / `%ifnarch` — strict equality of any list entry
+//!   against [`ArchInfo::build_arch`]. Handles bare names and
+//!   `%{macro}` arches (the macro is expanded via the profile's
+//!   registry before comparison).
+//! * `%ifos` / `%ifnos` — same, against [`ArchInfo::build_os`].
+//! * `%if EXPR` — best-effort numeric evaluation. Macros are
+//!   expanded through [`MacroRegistry::expand_to_literal`]; the
+//!   resulting text is parsed as `i64` (non-zero ⇒ active). When
+//!   any sub-expression can't be resolved (undefined macro,
+//!   non-numeric body, string compare, …) the branch is reported
+//!   as [`BranchActivity::Indeterminate`] rather than guessing.
+//!
+//! Limitations are intentional: a full RPM expression evaluator
+//! is a separate project. The "indeterminate" classification is
+//! load-bearing — it tells the user "this needs human review", not
+//! "this branch is dead".
+
+use std::collections::{BTreeMap, HashSet};
+
+use rpm_spec::ast::{
+    CondBranch, CondExpr, CondKind, Conditional, ExprAst, FilesContent, MacroRef,
+    PreambleContent, Span, SpecFile, SpecItem, Text, TextSegment,
+};
+use rpm_spec_profile::{MacroRegistry, Profile, ResolvedTargetSet};
+use serde::{Serialize, Serializer};
+
+use crate::visit::{
+    Visit, walk_files_conditional, walk_preamble_conditional, walk_top_conditional,
+};
+
+/// Recursion depth for [`MacroRegistry::expand_to_literal`] inside
+/// the evaluator. Matches the depth used by other analyzer modules
+/// that resolve macros via the same registry.
+const EXPAND_DEPTH: u8 = 8;
+
+/// Reasons the evaluator could not produce a concrete `Active` /
+/// `Inactive` verdict. Surfaces through
+/// [`BranchCoverage::indeterminate_reasons`] so users can act on
+/// the diagnosis instead of "indeterminate, ¯\\_(ツ)_/¯".
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EvalError {
+    /// `%{name}` or `%name` referenced an unconditional macro that
+    /// the profile's registry does not define.
+    #[error("macro `{0}` is not defined in the profile")]
+    UndefinedMacro(String),
+    /// Condition body contained non-ASCII bytes. The byte-cursor
+    /// scanner in `expand_raw_string` would emit mojibake; bail
+    /// instead. Matches the contract of `MacroRegistry::expand_body`.
+    #[error("non-ASCII content in condition body")]
+    NonAscii,
+    /// `%(shell)` expansion appears in the condition. We don't
+    /// run shell commands at lint time.
+    #[error("shell expansion `%(...)` is unsupported")]
+    ShellExpansion,
+    /// `%[expr]` arithmetic expression. RPM evaluates these at
+    /// build time; we don't.
+    #[error("arithmetic expression `%[...]` is unsupported")]
+    ArithmeticExpr,
+    /// `%{name:default}` or `%{!?name:default}` — we don't model
+    /// the default body. Treating it as empty would change
+    /// activation semantics in subtle ways, so we bail.
+    #[error("default-value form `%{{name:default}}` is unsupported")]
+    UnmodelledDefault,
+    /// Binary operator applied to operands of different shape
+    /// (e.g. integer compared with string) — RPM would coerce in
+    /// confusing ways, so we surface for human review.
+    #[error("string vs numeric type mismatch in binary operator")]
+    TypeMismatch,
+    /// `<`/`>`/`<=`/`>=`/`&&`/`||` applied to string operands.
+    /// Only `==` / `!=` are modelled for strings.
+    #[error("string ordering operator is unsupported")]
+    StringOrdering,
+    /// `%ifarch` / `%ifnarch` / `%elifarch` against a profile that
+    /// doesn't have `build_arch` populated.
+    #[error("profile has no `build_arch` set")]
+    MissingBuildArch,
+    /// `%ifos` / `%ifnos` / `%elifos` against a profile that doesn't
+    /// have `build_os` populated.
+    #[error("profile has no `build_os` set")]
+    MissingBuildOs,
+    /// Bare identifier in a parsed condition (`%if foo`) — RPM
+    /// rejects these at build time; we report them rather than
+    /// coercing.
+    #[error("bare identifier `{0}` is not supported in conditions")]
+    IdentifierUnsupported(String),
+    /// Catch-all for parser corner-cases we haven't modelled yet
+    /// (e.g. a future `CondExpr` variant that the
+    /// `#[non_exhaustive]` upstream enum may grow).
+    #[error("unsupported condition shape: {0}")]
+    Unsupported(&'static str),
+}
+
+// Serialize as the Display string so the JSON shape stays "string per
+// reason" — `coverage_json_includes_indeterminate_reasons` and any
+// downstream dashboards keep working unchanged. Hand-rolled rather
+// than `#[derive(Serialize)]` so the wire format matches the
+// `thiserror`-generated Display message rather than an enum tag.
+impl Serialize for EvalError {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+/// One `%if…%endif` block as collected from the spec.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct CollectedConditional {
+    /// Span of the full block (head through `%endif`).
+    pub span: Span,
+    /// Branches in source order: index `0` is the `%if`/`%ifarch`/`%ifos`
+    /// head; subsequent entries are `%elif*` clauses.
+    pub branches: Vec<CollectedBranch>,
+    /// `true` iff the source had an explicit `%else`. Coverage uses
+    /// this to report "no branch active for any profile" as dead vs.
+    /// "the implicit else is what runs".
+    pub has_else: bool,
+}
+
+/// One branch (`%if`/`%elif`-style head) of a conditional.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct CollectedBranch {
+    pub kind: CondKind,
+    pub expr: CondExpr<Span>,
+    /// Span of just this branch's head line.
+    pub span: Span,
+    /// Human-readable rendering of the condition for diagnostics
+    /// (e.g. `%if 0%{?rhel} >= 9`). Built once at collection time so
+    /// renderers don't reformat per profile.
+    pub display: String,
+}
+
+/// Result of evaluating one branch against one profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BranchActivity {
+    /// The branch's condition evaluates to "true" for this profile.
+    Active,
+    /// The branch's condition evaluates to "false".
+    Inactive,
+    /// Evaluation requires data the analyzer doesn't have
+    /// (undefined macro, opaque expression, string compare with a
+    /// non-literal side, …). The user must judge whether the spec
+    /// is correct for this profile.
+    Indeterminate,
+}
+
+/// Per-branch coverage row.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct BranchCoverage {
+    pub branch: CollectedBranch,
+    /// Sorted profile IDs that activate the branch.
+    pub active_on: Vec<String>,
+    /// Sorted profile IDs where the branch is inactive.
+    pub inactive_on: Vec<String>,
+    /// Sorted profile IDs where evaluation was indeterminate.
+    pub indeterminate_on: Vec<String>,
+    /// `profile_id → EvalError` for each entry in
+    /// [`Self::indeterminate_on`]. Populated at evaluation time so
+    /// renderers can surface "indeterminate because <X>" without
+    /// re-running the evaluator, and downstream tooling can match on
+    /// the variant rather than parsing the Display string. Empty
+    /// when no profile produced an indeterminate verdict.
+    pub indeterminate_reasons: BTreeMap<String, EvalError>,
+}
+
+impl BranchCoverage {
+    /// True iff no profile activates the branch and no profile is
+    /// indeterminate — the branch is dead across the whole target
+    /// set. This is the most actionable signal for cleanup.
+    pub fn is_dead(&self) -> bool {
+        self.active_on.is_empty() && self.indeterminate_on.is_empty()
+    }
+
+    /// True iff every profile activates the branch. Such branches
+    /// usually warrant inlining (the conditional has no effect).
+    /// Derived from the invariant `active + inactive + indeterminate
+    /// == total_profiles`, so the caller doesn't have to plumb the
+    /// matrix size in (avoiding the misuse of passing an unrelated
+    /// number).
+    pub fn is_universally_active(&self) -> bool {
+        !self.active_on.is_empty()
+            && self.inactive_on.is_empty()
+            && self.indeterminate_on.is_empty()
+    }
+}
+
+/// Whole-spec coverage report.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct CoverageReport {
+    pub conditionals: Vec<CoverageEntry>,
+}
+
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct CoverageEntry {
+    pub span: Span,
+    pub has_else: bool,
+    pub branches: Vec<BranchCoverage>,
+}
+
+impl CoverageReport {
+    /// Compute coverage for `spec` against `target_set`. One pass to
+    /// collect conditionals, then per-branch × per-profile evaluation.
+    pub fn compute(spec: &SpecFile<Span>, target_set: &ResolvedTargetSet) -> Self {
+        let mut collector = ConditionalCollector::default();
+        collector.visit_spec(spec);
+
+        let conditionals = collector
+            .collected
+            .into_iter()
+            .map(|c| evaluate_conditional(c, target_set))
+            .collect();
+
+        Self { conditionals }
+    }
+
+    /// Number of branches dead across the whole target set.
+    pub fn dead_branches(&self) -> usize {
+        self.conditionals
+            .iter()
+            .flat_map(|c| c.branches.iter())
+            .filter(|b| b.is_dead())
+            .count()
+    }
+
+    /// Number of branches where evaluation was indeterminate on at
+    /// least one profile.
+    pub fn indeterminate_branches(&self) -> usize {
+        self.conditionals
+            .iter()
+            .flat_map(|c| c.branches.iter())
+            .filter(|b| !b.indeterminate_on.is_empty())
+            .count()
+    }
+
+    /// Total number of branches considered (excludes the implicit
+    /// `%else` body).
+    pub fn total_branches(&self) -> usize {
+        self.conditionals.iter().map(|c| c.branches.len()).sum()
+    }
+}
+
+fn evaluate_conditional(
+    c: CollectedConditional,
+    target_set: &ResolvedTargetSet,
+) -> CoverageEntry {
+    let branches = c
+        .branches
+        .into_iter()
+        .map(|b| {
+            let mut active = Vec::new();
+            let mut inactive = Vec::new();
+            let mut indeterminate = Vec::new();
+            let mut reasons: BTreeMap<String, EvalError> = BTreeMap::new();
+            for rt in &target_set.targets {
+                match evaluate_branch(b.kind, &b.expr, &rt.profile) {
+                    Ok(true) => active.push(rt.profile_id.clone()),
+                    Ok(false) => inactive.push(rt.profile_id.clone()),
+                    Err(e) => {
+                        // Library-level tracing — `RUST_LOG=trace`
+                        // surfaces which profile produced which
+                        // reason, the most common ask when debugging
+                        // unexpected `Indeterminate` rows.
+                        tracing::trace!(
+                            profile = %rt.profile_id,
+                            kind = ?b.kind,
+                            condition = %b.display,
+                            reason = %e,
+                            "branch indeterminate"
+                        );
+                        reasons.insert(rt.profile_id.clone(), e);
+                        indeterminate.push(rt.profile_id.clone());
+                    }
+                }
+            }
+            active.sort();
+            inactive.sort();
+            indeterminate.sort();
+            BranchCoverage {
+                branch: b,
+                active_on: active,
+                inactive_on: inactive,
+                indeterminate_on: indeterminate,
+                indeterminate_reasons: reasons,
+            }
+        })
+        .collect();
+    CoverageEntry {
+        span: c.span,
+        has_else: c.has_else,
+        branches,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Collector
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default)]
+struct ConditionalCollector {
+    collected: Vec<CollectedConditional>,
+}
+
+impl ConditionalCollector {
+    fn record<B>(&mut self, c: &Conditional<Span, B>) {
+        let branches = c
+            .branches
+            .iter()
+            .map(|b: &CondBranch<Span, B>| CollectedBranch {
+                kind: b.kind,
+                expr: b.expr.clone(),
+                span: b.data,
+                display: render_condition(b.kind, &b.expr),
+            })
+            .collect();
+        self.collected.push(CollectedConditional {
+            span: c.data,
+            branches,
+            has_else: c.otherwise.is_some(),
+        });
+    }
+}
+
+impl<'ast> Visit<'ast> for ConditionalCollector {
+    fn visit_top_conditional(&mut self, node: &'ast Conditional<Span, SpecItem<Span>>) {
+        self.record(node);
+        walk_top_conditional(self, node);
+    }
+
+    fn visit_preamble_conditional(
+        &mut self,
+        node: &'ast Conditional<Span, PreambleContent<Span>>,
+    ) {
+        self.record(node);
+        walk_preamble_conditional(self, node);
+    }
+
+    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
+        self.record(node);
+        walk_files_conditional(self, node);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Display helper
+// ---------------------------------------------------------------------------
+
+fn render_condition(kind: CondKind, expr: &CondExpr<Span>) -> String {
+    let head = match kind {
+        CondKind::If => "%if",
+        CondKind::IfArch => "%ifarch",
+        CondKind::IfNArch => "%ifnarch",
+        CondKind::IfOs => "%ifos",
+        CondKind::IfNOs => "%ifnos",
+        CondKind::Elif => "%elif",
+        CondKind::ElifArch => "%elifarch",
+        CondKind::ElifOs => "%elifos",
+        _ => "%if",
+    };
+    let body = match expr {
+        CondExpr::Raw(text) => render_text(text),
+        CondExpr::Parsed(boxed) => render_expr_ast(boxed),
+        CondExpr::ArchList(items) => items
+            .iter()
+            .map(render_text)
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => "?".to_string(),
+    };
+    format!("{head} {body}")
+}
+
+fn render_text(t: &Text) -> String {
+    let mut out = String::new();
+    for seg in &t.segments {
+        match seg {
+            TextSegment::Literal(s) => out.push_str(s),
+            TextSegment::Macro(mr) => out.push_str(&render_macro_ref(mr)),
+            _ => out.push('?'),
+        }
+    }
+    out
+}
+
+fn render_macro_ref(mr: &MacroRef) -> String {
+    let mut s = String::from("%{");
+    match mr.conditional {
+        rpm_spec::ast::ConditionalMacro::IfDefined => s.push('?'),
+        rpm_spec::ast::ConditionalMacro::IfNotDefined => s.push_str("!?"),
+        _ => {}
+    }
+    s.push_str(&mr.name);
+    s.push('}');
+    s
+}
+
+fn render_expr_ast(expr: &ExprAst<Span>) -> String {
+    match expr {
+        ExprAst::Integer { value, .. } => value.to_string(),
+        ExprAst::String { value, .. } => format!("\"{value}\""),
+        ExprAst::Macro { text, .. } => text.clone(),
+        ExprAst::Identifier { name, .. } => name.clone(),
+        ExprAst::Paren { inner, .. } => format!("({})", render_expr_ast(inner)),
+        ExprAst::Not { inner, .. } => format!("!{}", render_expr_ast(inner)),
+        ExprAst::Binary { kind, lhs, rhs, .. } => format!(
+            "{} {} {}",
+            render_expr_ast(lhs),
+            kind.as_str(),
+            render_expr_ast(rhs)
+        ),
+        _ => "?".to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-branch evaluator
+// ---------------------------------------------------------------------------
+
+fn evaluate_branch(
+    kind: CondKind,
+    expr: &CondExpr<Span>,
+    profile: &Profile,
+) -> Result<bool, EvalError> {
+    let raw = matches!(kind, CondKind::If | CondKind::Elif);
+    let arch_check = matches!(
+        kind,
+        CondKind::IfArch | CondKind::IfNArch | CondKind::ElifArch
+    );
+    let os_check = matches!(kind, CondKind::IfOs | CondKind::IfNOs | CondKind::ElifOs);
+    let negate = matches!(kind, CondKind::IfNArch | CondKind::IfNOs);
+
+    if arch_check || os_check {
+        // Build the membership set for token matching. For arch we
+        // use `compatible_archs` if populated (rpm convention: the
+        // list contains `build_arch` plus sub-arches and `noarch`,
+        // so `%ifarch i386` matches an x86_64 host and
+        // `%ifarch x86_64` matches a host running x86_64_v3).
+        // OS doesn't have a compatibility chain, so we fall back to
+        // the single `build_os` string.
+        let candidate_set: HashSet<&str> = if arch_check {
+            if profile.arch.compatible_archs.is_empty() {
+                let Some(ba) = profile.arch.build_arch.as_deref() else {
+                    return Err(EvalError::MissingBuildArch);
+                };
+                std::iter::once(ba).collect()
+            } else {
+                profile
+                    .arch
+                    .compatible_archs
+                    .iter()
+                    .map(String::as_str)
+                    .collect()
+            }
+        } else {
+            let Some(bo) = profile.arch.build_os.as_deref() else {
+                return Err(EvalError::MissingBuildOs);
+            };
+            std::iter::once(bo).collect()
+        };
+
+        let arches: &[Text] = match expr {
+            CondExpr::ArchList(items) => items,
+            // Some parsers may emit Raw for ifarch/ifos when the
+            // list is unusually formatted; expand and split.
+            CondExpr::Raw(text) => {
+                let expanded = expand_text(text, &profile.macros)?;
+                let hit = expanded
+                    .split_whitespace()
+                    .any(|tok| candidate_set.contains(tok));
+                return Ok(hit ^ negate);
+            }
+            _ => return Err(EvalError::Unsupported("non-arch CondExpr in %ifarch")),
+        };
+
+        // Order-independent: a match anywhere wins, even if other
+        // entries fail to expand. Only when no entry matches AND at
+        // least one entry was unevaluable do we surface the
+        // expansion error.
+        let mut hit = false;
+        let mut deferred_error: Option<EvalError> = None;
+        for arch_text in arches {
+            match expand_text(arch_text, &profile.macros) {
+                Ok(expanded) => {
+                    if expanded
+                        .split_whitespace()
+                        .any(|tok| candidate_set.contains(tok))
+                    {
+                        hit = true;
+                        break;
+                    }
+                }
+                Err(e) => {
+                    deferred_error.get_or_insert(e);
+                }
+            }
+        }
+        if hit {
+            return Ok(true ^ negate);
+        }
+        if let Some(e) = deferred_error {
+            return Err(e);
+        }
+        return Ok(false ^ negate);
+    }
+
+    if raw {
+        let value = match expr {
+            CondExpr::Raw(text) => evaluate_raw(text, &profile.macros)?,
+            CondExpr::Parsed(boxed) => evaluate_expr_ast(boxed, &profile.macros)?,
+            _ => return Err(EvalError::Unsupported("non-expression CondExpr in %if")),
+        };
+        return Ok(match value {
+            EvalValue::Int(n) => n != 0,
+            EvalValue::Str(s) => !s.is_empty(),
+        });
+    }
+
+    Err(EvalError::Unsupported("unknown CondKind"))
+}
+
+// ---------------------------------------------------------------------------
+// Expression evaluator (best effort)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+enum EvalValue {
+    Int(i64),
+    Str(String),
+}
+
+fn evaluate_expr_ast(expr: &ExprAst<Span>, macros: &MacroRegistry) -> Result<EvalValue, EvalError> {
+    match expr {
+        ExprAst::Integer { value, .. } => Ok(EvalValue::Int(*value)),
+        ExprAst::String { value, .. } => Ok(EvalValue::Str(value.clone())),
+        ExprAst::Macro { text, .. } => {
+            let name = crate::macro_usage::macro_name_from_verbatim(text)
+                .ok_or(EvalError::Unsupported("macro ref text didn't parse"))?;
+            let defined = macros.get(&name).is_some();
+            let is_if_defined = text.contains("%{?");
+            let is_if_undefined = text.contains("%{!?");
+            // ExprAst::Macro stores the raw source token; the `:`
+            // for default-value form lives inside `text`.
+            let has_default = text.contains(':');
+            // `%{?name}` expands to the macro VALUE when defined,
+            // empty string when undefined — NOT to 1/0.
+            // `%{!?name}` is empty when defined; when undefined
+            // it's also empty IF there's no default body. With a
+            // default we can't substitute without modelling it.
+            if is_if_undefined {
+                if defined {
+                    return Ok(EvalValue::Str(String::new()));
+                }
+                if has_default {
+                    return Err(EvalError::UnmodelledDefault);
+                }
+                return Ok(EvalValue::Str(String::new()));
+            }
+            if is_if_defined {
+                if !defined {
+                    // `%{?name:default}` would emit `default` when
+                    // name is undefined; we don't model the default
+                    // body, so surface UnmodelledDefault rather than
+                    // silently producing the empty string.
+                    if has_default {
+                        return Err(EvalError::UnmodelledDefault);
+                    }
+                    return Ok(EvalValue::Str(String::new()));
+                }
+                // Fall through to expansion below.
+            } else if !defined {
+                return Err(EvalError::UndefinedMacro(name));
+            }
+            let lit = macros
+                .expand_to_literal(&name, EXPAND_DEPTH)
+                .ok_or_else(|| EvalError::UndefinedMacro(name.clone()))?;
+            if let Ok(n) = lit.parse::<i64>() {
+                Ok(EvalValue::Int(n))
+            } else {
+                Ok(EvalValue::Str(lit))
+            }
+        }
+        ExprAst::Identifier { name, .. } => {
+            Err(EvalError::IdentifierUnsupported(name.clone()))
+        }
+        ExprAst::Paren { inner, .. } => evaluate_expr_ast(inner, macros),
+        ExprAst::Not { inner, .. } => {
+            let v = evaluate_expr_ast(inner, macros)?;
+            let n = match v {
+                EvalValue::Int(n) => i64::from(n == 0),
+                EvalValue::Str(s) => i64::from(s.is_empty()),
+            };
+            Ok(EvalValue::Int(n))
+        }
+        ExprAst::Binary { kind, lhs, rhs, .. } => {
+            let l = evaluate_expr_ast(lhs, macros)?;
+            let r = evaluate_expr_ast(rhs, macros)?;
+            apply_binop(*kind, l, r)
+        }
+        _ => Err(EvalError::Unsupported("unknown ExprAst variant")),
+    }
+}
+
+fn apply_binop(
+    op: rpm_spec::ast::BinOp,
+    l: EvalValue,
+    r: EvalValue,
+) -> Result<EvalValue, EvalError> {
+    use rpm_spec::ast::BinOp;
+    match (l, r) {
+        (EvalValue::Int(a), EvalValue::Int(b)) => {
+            let res: i64 = match op {
+                BinOp::LogOr => i64::from(a != 0 || b != 0),
+                BinOp::LogAnd => i64::from(a != 0 && b != 0),
+                BinOp::Eq => i64::from(a == b),
+                BinOp::Ne => i64::from(a != b),
+                BinOp::Lt => i64::from(a < b),
+                BinOp::Gt => i64::from(a > b),
+                BinOp::Le => i64::from(a <= b),
+                BinOp::Ge => i64::from(a >= b),
+            };
+            Ok(EvalValue::Int(res))
+        }
+        (EvalValue::Str(a), EvalValue::Str(b)) => match op {
+            BinOp::Eq => Ok(EvalValue::Int(i64::from(a == b))),
+            BinOp::Ne => Ok(EvalValue::Int(i64::from(a != b))),
+            _ => Err(EvalError::StringOrdering),
+        },
+        // Mixed Int + Str — RPM would coerce in confusing ways;
+        // we surface the mismatch for human review.
+        _ => Err(EvalError::TypeMismatch),
+    }
+}
+
+fn evaluate_raw(text: &Text, macros: &MacroRegistry) -> Result<EvalValue, EvalError> {
+    // The parser sometimes stores the body as a single Literal
+    // ("0%{?rhel}") and sometimes splits it into Literal + Macro
+    // segments — depends on whether the surrounding grammar
+    // tokenised the macros. Reconstruct the original source string
+    // either way, then expand once via the macro lexer.
+    let raw = render_text_to_source(text)?;
+    let expanded = expand_raw_string(&raw, macros)?;
+    let trimmed = expanded.trim();
+    if let Ok(n) = trimmed.parse::<i64>() {
+        return Ok(EvalValue::Int(n));
+    }
+    // If the expanded text contains arithmetic / comparison / boolean
+    // operator characters but doesn't parse as an integer, we'd
+    // otherwise wrap it in `EvalValue::Str(..)` and report non-empty
+    // strings as Active (since `!s.is_empty()`). That's a false
+    // positive: an unresolved `0%{?undefined} >= 9` would look Active.
+    // Real arithmetic in `%if` is only modelled through `Parsed`
+    // `CondExpr` — surface the gap instead of guessing.
+    if trimmed
+        .chars()
+        .any(|c| matches!(c, '<' | '>' | '=' | '!' | '&' | '|' | '+' | '-' | '*' | '/'))
+    {
+        return Err(EvalError::Unsupported(
+            "arithmetic in Raw condition requires Parsed CondExpr",
+        ));
+    }
+    Ok(EvalValue::Str(trimmed.to_string()))
+}
+
+/// Re-render a [`Text`] back into a source-equivalent string so the
+/// uniform macro lexer can scan it.
+fn render_text_to_source(t: &Text) -> Result<String, EvalError> {
+    let mut out = String::new();
+    for seg in &t.segments {
+        match seg {
+            TextSegment::Literal(s) => out.push_str(s),
+            TextSegment::Macro(mr) => out.push_str(&macro_ref_to_source(mr)),
+            _ => return Err(EvalError::Unsupported("unknown TextSegment variant")),
+        }
+    }
+    Ok(out)
+}
+
+fn macro_ref_to_source(mr: &MacroRef) -> String {
+    use rpm_spec::ast::{ConditionalMacro, MacroKind};
+    // Explicit per-variant match so the compiler flags additions to
+    // `MacroKind`. Parametric / Shell / Expr / Lua / Builtin forms
+    // shouldn't normally appear inside `%if` bodies; we still need a
+    // render for them so the downstream lexer scan can fail with a
+    // structured `EvalError` rather than panic. Rendering them like
+    // Braced is the same lossy behaviour the previous wildcard had —
+    // preserved deliberately to keep the surface area unchanged.
+    match mr.kind {
+        MacroKind::Plain => format!("%{}", mr.name),
+        MacroKind::Braced
+        | MacroKind::Parametric
+        | MacroKind::Shell
+        | MacroKind::Expr
+        | MacroKind::Lua
+        | MacroKind::Builtin(_) => {
+            let prefix = match mr.conditional {
+                ConditionalMacro::IfDefined => "?",
+                ConditionalMacro::IfNotDefined => "!?",
+                ConditionalMacro::None => "",
+                _ => "",
+            };
+            format!("%{{{}{}}}", prefix, mr.name)
+        }
+        // `MacroKind` is `#[non_exhaustive]` upstream; force the
+        // compiler to remind us when a new variant lands.
+        _ => format!("%{{{}}}", mr.name),
+    }
+}
+
+/// Scan-and-substitute macro references in a raw `%if` body. Uses
+/// the profile crate's macro lexer so the rules (`%{name}` vs
+/// `%{?name}` vs `%name`, default-value form) match what rpm does.
+fn expand_raw_string(text: &str, macros: &MacroRegistry) -> Result<String, EvalError> {
+    use rpm_spec_profile::macro_lexer::{Conditional, MacroKind as LexKind, scan_macro_ref};
+    if !text.is_ascii() {
+        return Err(EvalError::NonAscii);
+    }
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'%' {
+            out.push(char::from(bytes[i]));
+            i += 1;
+            continue;
+        }
+        let r = scan_macro_ref(bytes, i)
+            .ok_or(EvalError::Unsupported("malformed macro reference"))?;
+        match r.kind {
+            LexKind::LiteralPercent => out.push('%'),
+            LexKind::Plain => {
+                let v = macros
+                    .expand_to_literal(r.name, EXPAND_DEPTH)
+                    .ok_or_else(|| EvalError::UndefinedMacro(r.name.to_string()))?;
+                out.push_str(&v);
+            }
+            LexKind::Braced { conditional: None, has_default: false } => {
+                let v = macros
+                    .expand_to_literal(r.name, EXPAND_DEPTH)
+                    .ok_or_else(|| EvalError::UndefinedMacro(r.name.to_string()))?;
+                out.push_str(&v);
+            }
+            LexKind::Braced {
+                conditional: Some(Conditional::IfDefined),
+                has_default,
+            } => {
+                if macros.get(r.name).is_some() {
+                    let v = macros
+                        .expand_to_literal(r.name, EXPAND_DEPTH)
+                        .ok_or_else(|| EvalError::UndefinedMacro(r.name.to_string()))?;
+                    out.push_str(&v);
+                } else if has_default {
+                    // `%{?name:default}` would substitute the default
+                    // body when name is undefined; we don't model
+                    // default bodies, so surface the gap rather than
+                    // emitting empty.
+                    return Err(EvalError::UnmodelledDefault);
+                }
+                // Undefined without default → contributes empty string.
+            }
+            LexKind::Braced {
+                conditional: Some(Conditional::IfUndefined),
+                has_default,
+            } => {
+                if has_default {
+                    return Err(EvalError::UnmodelledDefault);
+                }
+                // Bare `%{!?name}` — rpm emits the empty string in
+                // both branches when there's no default body.
+                let _ = macros.get(r.name);
+            }
+            LexKind::Braced { conditional: None, has_default: true } => {
+                return Err(EvalError::UnmodelledDefault);
+            }
+            LexKind::ShellExpansion => return Err(EvalError::ShellExpansion),
+            LexKind::ArithmeticExpr => return Err(EvalError::ArithmeticExpr),
+        }
+        i = r.full_range.end;
+    }
+    Ok(out)
+}
+
+fn expand_text(t: &Text, macros: &MacroRegistry) -> Result<String, EvalError> {
+    let mut out = String::new();
+    for seg in &t.segments {
+        match seg {
+            TextSegment::Literal(s) => out.push_str(s),
+            TextSegment::Macro(mr) => {
+                let defined = macros.get(&mr.name).is_some();
+                use rpm_spec::ast::ConditionalMacro;
+                match mr.conditional {
+                    ConditionalMacro::IfDefined => {
+                        if defined {
+                            let v = macros
+                                .expand_to_literal(&mr.name, EXPAND_DEPTH)
+                                .ok_or_else(|| EvalError::UndefinedMacro(mr.name.clone()))?;
+                            out.push_str(&v);
+                        }
+                    }
+                    ConditionalMacro::IfNotDefined => {
+                        if !defined {
+                            if let Some(wv) = mr.with_value.as_ref() {
+                                let expanded = expand_text(wv, macros)?;
+                                out.push_str(&expanded);
+                            }
+                        }
+                    }
+                    ConditionalMacro::None => {
+                        let v = macros
+                            .expand_to_literal(&mr.name, EXPAND_DEPTH)
+                            .ok_or_else(|| EvalError::UndefinedMacro(mr.name.clone()))?;
+                        out.push_str(&v);
+                    }
+                    // `ConditionalMacro` is `#[non_exhaustive]`
+                    // upstream — surface unmodelled variants rather
+                    // than guessing semantics.
+                    _ => {
+                        return Err(EvalError::Unsupported(
+                            "unknown ConditionalMacro variant",
+                        ));
+                    }
+                }
+            }
+            _ => return Err(EvalError::Unsupported("unknown TextSegment variant")),
+        }
+    }
+    Ok(out)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rpm_spec_profile::{
+        ProfileSection, ResolveOptions, TargetEntry, resolve_target_set,
+    };
+    use std::path::Path;
+
+    fn resolved(profiles: &[&str]) -> ResolvedTargetSet {
+        let section = ProfileSection::default();
+        let target =
+            TargetEntry::from_profiles(profiles.iter().map(|s| (*s).to_string()).collect());
+        resolve_target_set(
+            &section,
+            "T",
+            &target,
+            Path::new("."),
+            ResolveOptions::default(),
+        )
+        .unwrap()
+    }
+
+    fn parse(src: &str) -> rpm_spec::ast::SpecFile<Span> {
+        crate::session::parse(src).spec
+    }
+
+    /// Spec template — preamble + body + changelog. Conditionals
+    /// placed BETWEEN preamble end and `%description` are top-level
+    /// (parser yields `SpecItem::Conditional`).
+    fn spec_with_conditional(condition: &str) -> rpm_spec::ast::SpecFile<Span> {
+        let src = format!(
+            "Name: foo\n\
+Version: 1\n\
+Release: 1\n\
+Summary: S\n\
+License: MIT\n\
+\n\
+{condition}\n\
+%global flag 1\n\
+%endif\n\
+\n\
+%description\n\
+B\n\
+\n\
+%changelog\n\
+* Mon Jan 01 2024 a <a@b> - 1-1\n\
+- init\n"
+        );
+        parse(&src)
+    }
+
+    #[test]
+    fn ifarch_matches_target_build_arch() {
+        let set = resolved(&["rhel-9-x86_64", "rhel-9-aarch64"]);
+        let spec = spec_with_conditional("%ifarch x86_64");
+        let report = CoverageReport::compute(&spec, &set);
+        assert_eq!(report.conditionals.len(), 1, "got {report:#?}");
+        let b = &report.conditionals[0].branches[0];
+        assert_eq!(b.active_on, vec!["rhel-9-x86_64"]);
+        assert_eq!(b.inactive_on, vec!["rhel-9-aarch64"]);
+        assert!(b.indeterminate_on.is_empty());
+    }
+
+    #[test]
+    fn ifnarch_negates_match() {
+        let set = resolved(&["rhel-9-x86_64", "rhel-9-aarch64"]);
+        let spec = spec_with_conditional("%ifnarch x86_64");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        assert_eq!(b.active_on, vec!["rhel-9-aarch64"]);
+        assert_eq!(b.inactive_on, vec!["rhel-9-x86_64"]);
+    }
+
+    #[test]
+    fn if_with_conditional_macro_ref_evaluates_to_active_on_rhel() {
+        // `%if 0%{?rhel}` — true when rhel macro defined, false
+        // otherwise. rhel-9-x86_64 has it via the bundled showrc;
+        // generic profile (no showrc) does not.
+        let set = resolved(&["generic", "rhel-9-x86_64"]);
+        let spec = spec_with_conditional("%if 0%{?rhel}");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        assert!(
+            b.active_on.contains(&"rhel-9-x86_64".to_string()),
+            "expected active on rhel; got {b:?}"
+        );
+        assert!(
+            b.inactive_on.contains(&"generic".to_string()),
+            "expected inactive on generic; got {b:?}"
+        );
+    }
+
+    #[test]
+    fn unevaluable_condition_reports_indeterminate() {
+        // `%if %{this_macro_is_undefined_xyz}` — undefined macro
+        // can't be expanded unconditionally; evaluator must report
+        // indeterminate, not silently false.
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%if %{this_macro_is_undefined_xyz}");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        assert!(
+            b.indeterminate_on.contains(&"generic".to_string()),
+            "expected indeterminate; got {b:?}"
+        );
+    }
+
+    #[test]
+    fn dead_branch_marked() {
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%if 0");
+        let report = CoverageReport::compute(&spec, &set);
+        assert!(report.conditionals[0].branches[0].is_dead());
+        assert_eq!(report.dead_branches(), 1);
+    }
+
+    #[test]
+    fn elif_chain_evaluates_each_branch_independently() {
+        // `%if a … %elif b … %else …`: collector records both head
+        // and elif as separate branches in `branches`. Coverage
+        // reports the per-branch activity without modelling "earlier
+        // branch was already active" — that's intentional, mirrors
+        // how rpm itself evaluates each elif.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let src = "Name: foo\n\
+Version: 1\n\
+Release: 1\n\
+Summary: S\n\
+License: MIT\n\
+\n\
+%if 0\n\
+%global a 1\n\
+%elif 1\n\
+%global b 2\n\
+%else\n\
+%global c 3\n\
+%endif\n\
+\n\
+%description\n\
+B\n\
+\n\
+%changelog\n\
+* Mon Jan 01 2024 a <a@b> - 1-1\n\
+- init\n";
+        let spec = parse(src);
+        let report = CoverageReport::compute(&spec, &set);
+        assert_eq!(report.conditionals.len(), 1);
+        // Two branches: `%if 0` (dead) and `%elif 1` (active).
+        assert_eq!(report.conditionals[0].branches.len(), 2);
+        assert!(report.conditionals[0].branches[0].is_dead());
+        assert_eq!(
+            report.conditionals[0].branches[1].active_on,
+            vec!["rhel-9-x86_64"]
+        );
+    }
+
+    #[test]
+    fn ifos_branch_categorised_per_profile() {
+        // `%ifos linux` is plumbed through the same evaluator path
+        // as `%ifarch`. For profiles whose bundled showrc didn't
+        // expose `build_os` the evaluator must return Indeterminate
+        // — never silently false. We assert classification only,
+        // not the active set, because not all bundled profiles
+        // populate `build_os` and the test would otherwise be brittle.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional("%ifos linux");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        let total = b.active_on.len() + b.inactive_on.len() + b.indeterminate_on.len();
+        assert_eq!(total, 1, "every profile must be classified exactly once: {b:?}");
+    }
+
+    #[test]
+    fn binary_ops_evaluate_correctly() {
+        // Exercise all numeric BinOp variants (Eq, Ne, Lt, Gt, Le,
+        // Ge, LogAnd, LogOr) through `%if` expressions. Each is
+        // wrapped in a separate %if so we get one branch per op.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let src = "Name: foo\n\
+Version: 1\n\
+Release: 1\n\
+Summary: S\n\
+License: MIT\n\
+\n\
+%if 1 == 1\n\
+%global eq 1\n\
+%endif\n\
+%if 1 != 2\n\
+%global ne 1\n\
+%endif\n\
+%if 1 < 2\n\
+%global lt 1\n\
+%endif\n\
+%if 2 > 1\n\
+%global gt 1\n\
+%endif\n\
+%if 2 <= 2\n\
+%global le 1\n\
+%endif\n\
+%if 2 >= 2\n\
+%global ge 1\n\
+%endif\n\
+%if 1 && 1\n\
+%global and 1\n\
+%endif\n\
+%if 0 || 1\n\
+%global or 1\n\
+%endif\n\
+\n\
+%description\n\
+B\n\
+\n\
+%changelog\n\
+* Mon Jan 01 2024 a <a@b> - 1-1\n\
+- init\n";
+        let spec = parse(src);
+        let report = CoverageReport::compute(&spec, &set);
+        assert_eq!(report.conditionals.len(), 8, "got {report:#?}");
+        for c in &report.conditionals {
+            assert_eq!(
+                c.branches[0].active_on,
+                vec!["rhel-9-x86_64"],
+                "branch should be active: {}",
+                c.branches[0].branch.display
+            );
+        }
+    }
+
+    #[test]
+    fn bare_if_not_defined_macro_resolves_to_empty() {
+        // Regression: previously `%if 0%{!?undefined_xyz}` was
+        // reported as Indeterminate because expand_raw_string
+        // bailed on undefined. After the fix, bare `%{!?name}`
+        // (no default body) emits the empty string regardless of
+        // definedness — so the condition is `"0"` → Inactive.
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%if 0%{!?surely_undefined_xyz}");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        assert_eq!(
+            b.inactive_on,
+            vec!["generic"],
+            "bare %{{!?undefined}} must resolve to empty, leaving `0` ⇒ Inactive; got {b:?}"
+        );
+        assert!(b.indeterminate_on.is_empty());
+    }
+
+    #[test]
+    fn collector_records_else_presence() {
+        let set = resolved(&["generic"]);
+        let src = "Name: foo\n\
+Version: 1\n\
+Release: 1\n\
+Summary: S\n\
+License: MIT\n\
+\n\
+%if 0\n\
+%global a 1\n\
+%else\n\
+%global b 2\n\
+%endif\n\
+\n\
+%description\n\
+B\n\
+\n\
+%changelog\n\
+* Mon Jan 01 2024 a <a@b> - 1-1\n\
+- init\n";
+        let spec = parse(src);
+        let report = CoverageReport::compute(&spec, &set);
+        assert!(report.conditionals[0].has_else);
+    }
+
+    #[test]
+    fn parsed_expr_macro_returns_real_value_not_zero_one() {
+        // Regression: earlier the evaluator returned 0/1 for
+        // `%{?rhel}` instead of the macro value, so `%if %{?rhel}
+        // >= 9` mis-evaluated as `1 >= 9 = false` on RHEL profiles.
+        // After the fix, %{?rhel} expands to its value when defined.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional("%if %{?rhel} >= 9");
+        let report = CoverageReport::compute(&spec, &set);
+        assert_eq!(
+            report.conditionals[0].branches[0].active_on,
+            vec!["rhel-9-x86_64"],
+            "expected `%if %{{?rhel}} >= 9` active on RHEL 9"
+        );
+    }
+
+    #[test]
+    fn ifarch_match_is_order_independent() {
+        // Regression: an unevaluable macro before the matching arch
+        // used to short-circuit to Indeterminate. After the fix,
+        // any literal match wins regardless of position.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec_before = spec_with_conditional("%ifarch %{undefined_arch_xyz} x86_64");
+        let spec_after = spec_with_conditional("%ifarch x86_64 %{undefined_arch_xyz}");
+        let r1 = CoverageReport::compute(&spec_before, &set);
+        let r2 = CoverageReport::compute(&spec_after, &set);
+        assert_eq!(
+            r1.conditionals[0].branches[0].active_on,
+            r2.conditionals[0].branches[0].active_on,
+            "ifarch evaluation must not depend on token order"
+        );
+        // And both should resolve to Active (x86_64 matches).
+        assert_eq!(
+            r1.conditionals[0].branches[0].active_on,
+            vec!["rhel-9-x86_64"]
+        );
+    }
+
+    #[test]
+    fn ifarch_matches_subarch_via_compatible_archs() {
+        // altlinux-10-e2k has `build_arch=e2kv4` (the strictest)
+        // and `compatible_archs=[e2kv4, e2k, noarch]`. With the
+        // pre-fix evaluator `%ifarch e2k` was Inactive (build_arch
+        // didn't equal e2k). After the switch to compatible_archs,
+        // e2k matches because the host can also build subarch e2k.
+        let set = resolved(&["altlinux-10-e2k"]);
+        let spec = spec_with_conditional("%ifarch e2k");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        assert_eq!(
+            b.active_on,
+            vec!["altlinux-10-e2k"],
+            "e2k must match via compatible_archs on e2kv4 host; got {b:?}"
+        );
+    }
+
+    #[test]
+    fn ifarch_noarch_matches_every_distro_profile() {
+        // `noarch` is in every distro profile's compatible_archs.
+        let set = resolved(&["rhel-9-x86_64", "rhel-9-aarch64"]);
+        let spec = spec_with_conditional("%ifarch noarch");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        assert_eq!(b.active_on.len(), 2, "noarch must match both profiles: {b:?}");
+    }
+
+    #[test]
+    fn ifarch_falls_back_to_build_arch_when_compat_empty() {
+        // `generic` profile has no showrc bundle, so compatible_archs
+        // is empty — must fall back to build_arch (also empty).
+        // Result: MissingArchOrOs error → Indeterminate with
+        // diagnostic reason.
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%ifarch x86_64");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        assert_eq!(b.indeterminate_on, vec!["generic"]);
+        let reason = b
+            .indeterminate_reasons
+            .get("generic")
+            .expect("reason recorded");
+        // Variant check belt-and-braces with the Display assertion so
+        // a future Display-string tweak doesn't silently change the
+        // surface meaning.
+        assert!(
+            matches!(reason, EvalError::MissingBuildArch),
+            "expected MissingBuildArch, got {reason:?}"
+        );
+        let rendered = reason.to_string();
+        assert!(
+            rendered.contains("build_arch"),
+            "reason should mention missing build_arch: {rendered}"
+        );
+    }
+
+    #[test]
+    fn indeterminate_reasons_populated_for_undefined_unconditional() {
+        // `%if %{undefined_macro}` (no `?` prefix) — evaluator must
+        // record UndefinedMacro reason and surface it through
+        // indeterminate_reasons.
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%if %{this_macro_is_not_defined}");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        assert_eq!(b.indeterminate_on, vec!["generic"]);
+        let reason = b.indeterminate_reasons.get("generic").unwrap();
+        assert!(
+            matches!(reason, EvalError::UndefinedMacro(n) if n == "this_macro_is_not_defined"),
+            "expected UndefinedMacro(this_macro_is_not_defined), got {reason:?}"
+        );
+        let rendered = reason.to_string();
+        assert!(
+            rendered.contains("not defined")
+                && rendered.contains("this_macro_is_not_defined"),
+            "reason should name the undefined macro: {rendered}"
+        );
+    }
+
+    #[test]
+    fn indeterminate_reasons_record_unmodelled_default() {
+        // `%{!?name:fallback}` is unmodelled — evaluator surfaces
+        // `UnmodelledDefault` rather than guessing.
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%if 0%{!?undefined:fallback}");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        let reason = b
+            .indeterminate_reasons
+            .get("generic")
+            .expect("reason recorded");
+        assert!(
+            matches!(reason, EvalError::UnmodelledDefault),
+            "expected UnmodelledDefault, got {reason:?}"
+        );
+        let rendered = reason.to_string();
+        assert!(
+            rendered.contains("default-value form"),
+            "reason should mention default-value: {rendered}"
+        );
+    }
+
+    #[test]
+    fn is_universally_active_self_contained() {
+        // No total_profiles parameter needed — the invariant
+        // `active + inactive + indeterminate == total` makes the
+        // check derivable from the BranchCoverage alone.
+        let set = resolved(&["rhel-9-x86_64", "rhel-9-aarch64"]);
+        let spec = spec_with_conditional("%if 1");
+        let report = CoverageReport::compute(&spec, &set);
+        assert!(report.conditionals[0].branches[0].is_universally_active());
+    }
+
+    #[test]
+    fn totals_helper_methods() {
+        let set = resolved(&["generic", "rhel-9-x86_64"]);
+        let src = "Name: foo\n\
+Version: 1\n\
+Release: 1\n\
+Summary: S\n\
+License: MIT\n\
+\n\
+%if 0\n\
+%global dead 1\n\
+%endif\n\
+\n\
+%if %{undefined_xyz}\n\
+%global indet 1\n\
+%endif\n\
+\n\
+%ifarch x86_64\n\
+%global arch 1\n\
+%endif\n\
+\n\
+%description\n\
+B\n\
+\n\
+%changelog\n\
+* Mon Jan 01 2024 a <a@b> - 1-1\n\
+- init\n";
+        let spec = parse(src);
+        let report = CoverageReport::compute(&spec, &set);
+        assert_eq!(report.total_branches(), 3);
+        // `%if 0` is dead on every profile.
+        assert_eq!(report.dead_branches(), 1);
+        // `%if %{undefined_xyz}` is indeterminate everywhere;
+        // `%ifarch x86_64` is indeterminate on `generic` (no
+        // build_arch). Both contribute.
+        assert_eq!(report.indeterminate_branches(), 2);
+    }
+
+    // -----------------------------------------------------------------
+    // Per-variant EvalError coverage
+    // -----------------------------------------------------------------
+
+    /// Non-ASCII bytes in the condition body force the byte-cursor
+    /// scanner to bail (it would otherwise emit mojibake).
+    #[test]
+    fn evalerror_nonascii_recorded() {
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%if 0%{?\u{0442}\u{0435}\u{0441}\u{0442}}");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        let reason = b
+            .indeterminate_reasons
+            .get("generic")
+            .expect("non-ASCII must produce an indeterminate reason");
+        assert!(
+            matches!(reason, EvalError::NonAscii),
+            "expected NonAscii, got {reason:?}"
+        );
+    }
+
+    /// `%(shell)` expansion is unsupported by design — we don't run
+    /// shell at lint time.
+    #[test]
+    fn evalerror_shell_expansion() {
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%if %(echo 1)");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        let reason = b
+            .indeterminate_reasons
+            .get("generic")
+            .expect("shell expansion must produce an indeterminate reason");
+        assert!(
+            matches!(reason, EvalError::ShellExpansion),
+            "expected ShellExpansion, got {reason:?}"
+        );
+    }
+
+    /// `%[expr]` arithmetic is evaluated at build time by rpm; we
+    /// surface the gap rather than guess.
+    #[test]
+    fn evalerror_arithmetic_expr() {
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%if %[1+1]");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        let reason = b
+            .indeterminate_reasons
+            .get("generic")
+            .expect("arithmetic expr must produce an indeterminate reason");
+        assert!(
+            matches!(reason, EvalError::ArithmeticExpr),
+            "expected ArithmeticExpr, got {reason:?}"
+        );
+    }
+
+    /// Regression for L1: `%{?name:default}` with `name` undefined
+    /// must NOT silently expand to empty — it should surface
+    /// `UnmodelledDefault` so the user knows the default body is in
+    /// play. Previously the evaluator returned an empty string,
+    /// which then mis-classified the branch.
+    #[test]
+    fn evalerror_unmodelled_default_if_defined() {
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%if 0%{?undefined_xyz:fallback}");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        // The macro reference might be evaluated via either the
+        // Raw expand_raw_string path or the Parsed evaluate_expr_ast
+        // path depending on parser fallback. Both must surface
+        // UnmodelledDefault now.
+        let reason = b
+            .indeterminate_reasons
+            .get("generic")
+            .expect("`%{?undefined:default}` must surface UnmodelledDefault");
+        assert!(
+            matches!(reason, EvalError::UnmodelledDefault),
+            "expected UnmodelledDefault, got {reason:?}"
+        );
+    }
+
+    /// Regression for L2: a Raw `%if` whose expansion still contains
+    /// arithmetic operators (because the parser kept the body as
+    /// Raw rather than promoting to a Parsed CondExpr) must NOT be
+    /// classified Active just because the resulting non-empty string
+    /// "looks truthy". Previously `0%{?undefined} >= 9` expanded to
+    /// `"0  >= 9"` which the Str-fallback wrapped in `EvalValue::Str`
+    /// — non-empty ⇒ Active, a false positive.
+    #[test]
+    fn evalerror_raw_arithmetic_not_silent_active() {
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%if 0%{?undefined_xyz} >= 9");
+        let report = CoverageReport::compute(&spec, &set);
+        let b = &report.conditionals[0].branches[0];
+        assert!(
+            !b.active_on.contains(&"generic".to_string()),
+            "Raw `%if 0%{{?undefined}} >= 9` must NOT be Active (false positive); got {b:?}"
+        );
+        // Should land in either Inactive (if Parsed path resolves)
+        // or Indeterminate (if Raw path bails with Unsupported).
+        let total =
+            b.active_on.len() + b.inactive_on.len() + b.indeterminate_on.len();
+        assert_eq!(total, 1, "every profile classified exactly once: {b:?}");
+    }
+}

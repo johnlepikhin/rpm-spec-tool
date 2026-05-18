@@ -258,12 +258,23 @@ through as "no matches":
 * Unsupported `baseline_version` → exit 2 with `regenerate or
   upgrade rpm-spec-tool` hint.
 * Any `matrix_signature` not matching the 16 lowercase hex contract
-  of [`MatrixSignature::Display`] → exit 2, with the offending
-  entry index and `lint_id` in the message.
+  enforced by `MatrixSignature::from_hex` (the strict inverse of the
+  `Display` form) → exit 2, with the offending entry index and
+  `lint_id` in the message.
 * Unknown JSON fields → rejected (typos in the file can't silently
   become no-ops).
 * File size capped at 16 MiB — defends shared CI runners from an
   oversized baseline consuming memory.
+
+### Baseline write atomicity
+
+`matrix baseline create --out PATH` writes through a sibling temporary
+file in `PATH`'s directory and renames into place on success. On POSIX
+the rename is atomic, so a SIGINT or out-of-disk mid-write cannot
+leave a partially-serialised baseline on disk to confuse the next
+`matrix check --baseline` run. Stdout output (the default destination)
+is not atomic — pipe through `> tmp && mv tmp baseline.json` if your
+CI needs the same guarantee for stdout-redirected writes.
 
 ### Stability caveat
 
@@ -331,11 +342,89 @@ partial, portable, entries[{ name, status, defined_in, missing_in
 }] }] }` — same shape as the human view, machine-readable for
 dashboards.
 
+## Branch coverage
+
+`matrix coverage` evaluates every `%if` / `%ifarch` / `%ifos`
+branch in the spec against every member profile and reports which
+profiles activate it. Built on top of the same per-profile macro
+registry the linter uses, so the evaluation is consistent with
+what the rest of the tool sees.
+
+```bash
+rpm-spec-tool matrix coverage --target-set product-2026q2 product.spec
+```
+
+Output (human):
+
+```text
+# Matrix coverage: target set `product-2026q2` (5 profiles)
+
+## product.spec
+  4 branches — 1 dead, 1 indeterminate
+
+  line 9: %if 0%{?rhel}
+    active: rhel-8-x86_64, rhel-9-x86_64
+    inactive: altlinux-10-x86_64, sles-15-x86_64
+  line 13: %if 0 [DEAD]
+    active: (none)
+    inactive: altlinux-10-x86_64, rhel-8-x86_64, rhel-9-x86_64, sles-15-x86_64
+  line 17: %ifarch e2k
+    active: altlinux-10-e2k
+    inactive: altlinux-10-x86_64, rhel-8-x86_64, rhel-9-x86_64, sles-15-x86_64
+```
+
+Tags:
+
+* `[DEAD]` — branch is inactive on every profile in the set and no
+  evaluation was indeterminate. The whole `%if…%endif` block is
+  dead code and can be deleted.
+* `[ALWAYS]` — branch is active on every profile. The condition has
+  no effect; the body can be inlined.
+
+Evaluator scope (Phase 2):
+
+* `%ifarch` / `%ifnarch` / `%ifos` / `%ifnos` — strict equality
+  against the profile's `build_arch` / `build_os`.
+* `%if EXPR` — best-effort numeric evaluation. Macros are expanded
+  via the profile's registry; `%{?foo}` patterns contribute the
+  macro value when defined, empty when not. The result is parsed
+  as `i64` (non-zero ⇒ active). When any sub-expression can't be
+  resolved (undefined unconditional macro, opaque arithmetic,
+  string comparison without literal sides) the branch is reported
+  as `indeterminate` — surfacing it for human review rather than
+  guessing.
+
+### Exit codes
+
+* `--fail-on none` (default) — informational, always exits 0.
+* `--fail-on dead` — exits 1 if any branch is dead across the set.
+* `--fail-on indeterminate` — exits 1 if any branch is dead *or*
+  indeterminate. Strict mode for CI gating where every branch must
+  be evaluated.
+
+### JSON output
+
+```bash
+rpm-spec-tool matrix coverage --format json --target-set X product.spec
+```
+
+emits `{ target_set, profiles, files[{ path, total_branches,
+dead_branches, indeterminate_branches, conditionals[{ start_line,
+has_else, branches[{ line, display, is_dead, is_universally_active,
+active_on, inactive_on, indeterminate_on, indeterminate_reasons }] }] }] }`
+— same data as the human view, indexed by line for dashboards.
+
+`is_universally_active` is `true` when the branch evaluates to active
+on every profile in the set — the condition has no effect and the
+body is a candidate for inlining. `indeterminate_reasons` is a map
+from profile id to a human-readable explanation of why evaluation
+could not produce a definite verdict; it is populated only for
+profiles listed in `indeterminate_on`.
+
 ## Limitations of Phase 1
 
-* No `matrix explain` / `coverage` / `diff` / `impact` yet — those
-  land in a future phase together with `path_cond.rs` branch-trace
-  export.
+* No `matrix explain` / `diff` / `impact` yet — those land in a
+  future phase together with macro-usage span tracking.
 * No parallel execution — profiles are analysed sequentially. Cost
   is linear in profile count; a profile set of 30 typically
   completes in a few seconds for one spec.
