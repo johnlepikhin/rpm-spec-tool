@@ -298,13 +298,23 @@ fn walk_cond_expr(expr: &CondExpr<Span>, anchor: Span, out: &mut BcondUsage) {
 }
 
 /// Walk an `ExprAst` for `%{with foo}` / `%{without foo}` macros.
-/// `ExprAst::Macro` stores the macro verbatim as a `String`; parse the
-/// `with`/`without` form out of that text. Each node carries its own
+/// `ExprAst::Macro` stores the macro verbatim as a `String`; parse
+/// it via the shared [`rpm_spec::ast::parse_bcond_verbatim`] so the
+/// detection rule lives in one place. Each node carries its own
 /// span via the `data` field, so no anchor parameter is needed.
 fn walk_expr_ast(ast: &ExprAst<Span>, out: &mut BcondUsage) {
     match ast {
         ExprAst::Macro { text, data } => {
-            if let Some((kind, name)) = parse_with_without_from_text(text) {
+            if let Some((form, name)) = rpm_spec::ast::parse_bcond_verbatim(text) {
+                let kind = match form {
+                    rpm_spec::ast::BcondForm::With => WithKind::With,
+                    rpm_spec::ast::BcondForm::Without => WithKind::Without,
+                    // `BcondForm` is `#[non_exhaustive]` upstream; an
+                    // unknown variant is most safely treated as
+                    // "not a bcond reference" so we don't conjure a
+                    // WithKind we can't justify.
+                    _ => return,
+                };
                 out.record_ref(name.to_owned(), kind, *data);
             }
         }
@@ -317,25 +327,6 @@ fn walk_expr_ast(ast: &ExprAst<Span>, out: &mut BcondUsage) {
         }
         _ => {}
     }
-}
-
-/// Extract `(kind, NAME)` from the verbatim text of a `%{with NAME}`
-/// or `%{without NAME}` macro reference. Tolerant of optional `?` /
-/// `!?` prefixes and whitespace. Returns `None` for any other shape.
-fn parse_with_without_from_text(s: &str) -> Option<(WithKind, &str)> {
-    let body = s.strip_prefix("%{")?.strip_suffix('}')?;
-    let body = body.trim_start_matches(['?', '!']);
-    let mut parts = body.split_whitespace();
-    let head = parts.next()?;
-    if !WITH_NAMES.contains(&head) {
-        return None;
-    }
-    let kind = WithKind::from_head(head)?;
-    let name = parts.next()?;
-    if name.is_empty() {
-        return None;
-    }
-    Some((kind, name))
 }
 
 fn walk_section(section: &Section<Span>, out: &mut BcondUsage) {
@@ -530,11 +521,29 @@ fn record_declaration(out: &mut BcondUsage, node: &BuildCondition<Span>) {
 /// If `m` is `%{with NAME}` or `%{without NAME}`, return
 /// `(WithKind, NAME)`. `%bcond_value(name)` is *not* a usage reference
 /// — it's another declaration form (rpm ≥ 4.17.1), counted separately.
+///
+/// Handles two parser shapes uniformly:
+/// * Structural form: `MacroKind::Builtin(BuiltinMacro::With)` —
+///   the parser promoted the ref because the arg was a clean literal.
+/// * Legacy parametric form: `MacroKind::Parametric` with
+///   `name="with"`/`"without"` — surfaces for shapes the structural
+///   detector couldn't normalise (e.g. args containing macro
+///   segments). The lint detects both because users care equally
+///   about both surface forms.
+///
+/// In both shapes the feature name lives in `args[0]` — the unit
+/// `BuiltinMacro::With`/`Without` variants carry no payload, keeping
+/// a single source of truth for the feature name.
 fn with_or_without_target(m: &MacroRef) -> Option<(WithKind, String)> {
-    if !WITH_NAMES.contains(&m.name.as_str()) {
-        return None;
-    }
-    let kind = WithKind::from_head(m.name.as_str())?;
+    use rpm_spec::ast::{BuiltinMacro, MacroKind};
+    let kind = match &m.kind {
+        MacroKind::Builtin(BuiltinMacro::With) => WithKind::With,
+        MacroKind::Builtin(BuiltinMacro::Without) => WithKind::Without,
+        MacroKind::Parametric if WITH_NAMES.contains(&m.name.as_str()) => {
+            WithKind::from_head(m.name.as_str())?
+        }
+        _ => return None,
+    };
     let arg = m.args.first()?;
     let lit = arg.literal_str()?;
     let trimmed = lit.trim();

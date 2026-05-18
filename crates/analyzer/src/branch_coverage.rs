@@ -556,16 +556,6 @@ enum EvalValue {
     Str(String),
 }
 
-/// Surface form of a `%{with NAME}` / `%{without NAME}` macro
-/// reference. The parser stores these as opaque `ExprAst::Macro`
-/// verbatim text (no structural distinction from a generic
-/// parametric macro), so the evaluator does a syntactic peek.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BcondMacroForm {
-    With,
-    Without,
-}
-
 /// Resolve a `%{with NAME}` / `%{without NAME}` reference against
 /// the per-spec bcond map. The two-stage return shape carries one
 /// extra bit of information beyond `Option<i64>`:
@@ -578,16 +568,23 @@ enum BcondMacroForm {
 ///
 /// Both `evaluate_expr_ast` (`%if` expressions) and `expand_raw_string`
 /// (Raw `%if` body) call this so the resolution policy lives in one
-/// place. A future change (e.g. add the feature name to the error
-/// message) updates a single function.
+/// place. The bcond-syntax detection itself lives in
+/// [`rpm_spec::ast::parse_bcond_verbatim`] — a single source of truth
+/// shared with future consumers (LSP, formatter, lint rules).
 fn resolve_bcond(
     verbatim: &str,
     bcond: &crate::bcond::BcondMap,
 ) -> Option<Result<i64, EvalError>> {
-    let (form, name) = parse_bcond_macro_form(verbatim)?;
+    use rpm_spec::ast::BcondForm;
+    let (form, name) = rpm_spec::ast::parse_bcond_verbatim(verbatim)?;
     let state = match form {
-        BcondMacroForm::With => bcond.with_state(name),
-        BcondMacroForm::Without => bcond.without_state(name),
+        BcondForm::With => bcond.with_state(name),
+        BcondForm::Without => bcond.without_state(name),
+        // `BcondForm` is `#[non_exhaustive]` upstream. A future
+        // variant we don't recognise is most safely treated as
+        // "not a known bcond reference" → fall through to the
+        // caller's generic macro-lookup path by returning None.
+        _ => return None,
     };
     let result = match state {
         Some(b) => Ok(i64::from(b)),
@@ -604,30 +601,6 @@ fn resolve_bcond(
         "bcond resolved"
     );
     Some(result)
-}
-
-/// Parse `%{with NAME}` / `%{without NAME}` out of a `MacroRef`
-/// verbatim text. Returns the kind and the trimmed feature name on
-/// match, `None` otherwise. Feature names containing whitespace
-/// (i.e. parametric calls like `%{with foo bar}` which RPM would
-/// treat as a 2-arg form) reject — the bcond model has exactly one
-/// arg per use site.
-fn parse_bcond_macro_form(verbatim: &str) -> Option<(BcondMacroForm, &str)> {
-    let inner = verbatim.strip_prefix("%{").and_then(|s| s.strip_suffix('}'))?;
-    let inner = inner.trim();
-    // Split into keyword + remainder on the first whitespace run.
-    let mut parts = inner.splitn(2, char::is_whitespace);
-    let keyword = parts.next()?;
-    let name = parts.next()?.trim();
-    if name.is_empty() || name.contains(char::is_whitespace) {
-        return None;
-    }
-    let kind = match keyword {
-        "with" => BcondMacroForm::With,
-        "without" => BcondMacroForm::Without,
-        _ => return None,
-    };
-    Some((kind, name))
 }
 
 fn evaluate_expr_ast(
@@ -794,29 +767,97 @@ fn render_text_to_source(t: &Text) -> Result<String, EvalError> {
 }
 
 fn macro_ref_to_source(mr: &MacroRef) -> String {
-    use rpm_spec::ast::{ConditionalMacro, MacroKind};
-    // Explicit per-variant match so the compiler flags additions to
-    // `MacroKind`. Parametric / Shell / Expr / Lua / Builtin forms
-    // shouldn't normally appear inside `%if` bodies; we still need a
-    // render for them so the downstream lexer scan can fail with a
-    // structured `EvalError` rather than panic. Rendering them like
-    // Braced is the same lossy behaviour the previous wildcard had —
-    // preserved deliberately to keep the surface area unchanged.
-    match mr.kind {
+    use rpm_spec::ast::{BuiltinMacro, ConditionalMacro, MacroKind, TextSegment};
+    // Re-renders a `MacroRef` back to its surface form so the macro
+    // lexer in `expand_raw_string` can scan it again. Pre-Phase 12
+    // this dropped args/body for every kind beyond Plain/Braced,
+    // truncating `%{shrink:body}` → `%{shrink}` and
+    // `%{with foo}` → `%{with}` — both produced spurious
+    // "macro undefined" errors downstream. We now render each kind
+    // with its payload so round-tripping inside an `%if` body works
+    // uniformly.
+    fn flatten_text(t: &rpm_spec::ast::Text) -> String {
+        // Lossy renderer good enough for re-scanning: macro segments
+        // get re-prefixed with `%{name}` (we don't need to round-trip
+        // perfectly, just produce a re-scannable byte sequence). For
+        // depth-1 args this is equivalent to literal_str when there
+        // are no nested macros.
+        let mut out = String::new();
+        for seg in &t.segments {
+            match seg {
+                TextSegment::Literal(s) => out.push_str(s),
+                TextSegment::Macro(inner) => out.push_str(&macro_ref_to_source(inner)),
+                _ => {}
+            }
+        }
+        out
+    }
+    let prefix = match mr.conditional {
+        ConditionalMacro::IfDefined => "?",
+        ConditionalMacro::IfNotDefined => "!?",
+        ConditionalMacro::None => "",
+        _ => "",
+    };
+    match &mr.kind {
         MacroKind::Plain => format!("%{}", mr.name),
-        MacroKind::Braced
-        | MacroKind::Parametric
-        | MacroKind::Shell
-        | MacroKind::Expr
-        | MacroKind::Lua
-        | MacroKind::Builtin(_) => {
-            let prefix = match mr.conditional {
-                ConditionalMacro::IfDefined => "?",
-                ConditionalMacro::IfNotDefined => "!?",
-                ConditionalMacro::None => "",
-                _ => "",
-            };
-            format!("%{{{}{}}}", prefix, mr.name)
+        MacroKind::Braced => {
+            // `%{name}` / `%{?name}` / `%{!?name}`; optional with_value
+            // body `%{?name:default}` rebuilt from `with_value` Text.
+            match &mr.with_value {
+                Some(body) => format!("%{{{prefix}{}:{}}}", mr.name, flatten_text(body)),
+                None => format!("%{{{prefix}{}}}", mr.name),
+            }
+        }
+        MacroKind::Parametric => {
+            // `%{name arg1 arg2 …}`; whitespace-separated args.
+            let args: Vec<String> = mr.args.iter().map(flatten_text).collect();
+            if args.is_empty() {
+                format!("%{{{prefix}{}}}", mr.name)
+            } else {
+                format!("%{{{prefix}{} {}}}", mr.name, args.join(" "))
+            }
+        }
+        MacroKind::Shell => {
+            // `%(body)` — `name` is empty, body is `args[0]`.
+            let body = mr.args.first().map(flatten_text).unwrap_or_default();
+            format!("%({body})")
+        }
+        MacroKind::Expr => {
+            // Two surface forms: `%[expr]` and `%{expr:body}`. The
+            // parser uses the latter when there is a name; the
+            // former when name is empty (the `%[…]` shape stores no
+            // keyword).
+            let body = mr.args.first().map(flatten_text).unwrap_or_default();
+            if mr.name.is_empty() {
+                format!("%[{body}]")
+            } else {
+                format!("%{{{}:{body}}}", mr.name)
+            }
+        }
+        MacroKind::Lua => {
+            let body = mr.args.first().map(flatten_text).unwrap_or_default();
+            let kw = if mr.name.is_empty() { "lua" } else { mr.name.as_str() };
+            format!("%{{{kw}:{body}}}")
+        }
+        // `With` / `Without` use a SPACE separator and store the
+        // feature name in `args[0]`. The conditional prefix is
+        // included for symmetry — even though the parser does not
+        // (yet) promote prefixed forms, anyone constructing
+        // `Builtin(With)` programmatically with `conditional != None`
+        // needs the right round-trip.
+        MacroKind::Builtin(BuiltinMacro::With) => {
+            let name = mr.args.first().map(flatten_text).unwrap_or_default();
+            format!("%{{{prefix}with {name}}}")
+        }
+        MacroKind::Builtin(BuiltinMacro::Without) => {
+            let name = mr.args.first().map(flatten_text).unwrap_or_default();
+            format!("%{{{prefix}without {name}}}")
+        }
+        MacroKind::Builtin(_) => {
+            // Generic builtins: `%{keyword:body}`. Name carries the
+            // keyword (e.g. "shrink" / "quote" / "gsub").
+            let body = mr.args.first().map(flatten_text).unwrap_or_default();
+            format!("%{{{}:{body}}}", mr.name)
         }
         // `MacroKind` is `#[non_exhaustive]` upstream; force the
         // compiler to remind us when a new variant lands.
