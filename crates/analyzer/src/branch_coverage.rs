@@ -621,6 +621,43 @@ fn augment_with_variants(
     }
     b.conditional_on = profiles;
     b.reachable_under = union;
+
+    // Strip indeterminate verdicts that are now subsumed by the
+    // CONDITIONAL classification. Only profiles actually rescued
+    // into `conditional_on` are affected — a profile whose
+    // variant-pass evaluation still errored stays indeterminate.
+    //
+    // When a rescued profile's base-evaluation reason names a
+    // macro the project has declared variants for, the operator
+    // has explicitly told the tool "this macro takes one of these
+    // values", so reporting it ALSO as undefined contradicts the
+    // CONDITIONAL tag the same renderer line carries. Drop the
+    // reason (and the now-empty indeterminate entry) for that
+    // profile so the operator sees one consistent verdict.
+    //
+    // A rescued profile with multiple base-evaluation reasons
+    // would keep the ones that aren't covered by declared variants
+    // — but in practice the base evaluator short-circuits on the
+    // first failure, so we only ever see one reason per profile.
+    let declared_variant_macros: std::collections::HashSet<&str> =
+        macro_variants.keys().map(String::as_str).collect();
+    let rescued_profiles: std::collections::HashSet<&str> =
+        b.conditional_on.iter().map(String::as_str).collect();
+    b.indeterminate_reasons.retain(|pid, reason| {
+        if !rescued_profiles.contains(pid.as_str()) {
+            return true;
+        }
+        !matches!(
+            reason,
+            EvalError::UndefinedMacro(name) if declared_variant_macros.contains(name.as_str())
+        )
+    });
+    // A rescued profile whose only reason was an undefined variant
+    // macro now has no recorded reason; drop it from the
+    // indeterminate list entirely so it doesn't surface as
+    // `(no reason recorded)`. Non-rescued profiles stay untouched.
+    b.indeterminate_on
+        .retain(|pid| b.indeterminate_reasons.contains_key(pid));
 }
 
 /// Collect every macro NAME referenced by a condition's display
@@ -1945,6 +1982,85 @@ B\n\
         assert!(
             flavour_values.contains("1c"),
             "expected 1c in reachable_under; got {flavour_values:?}"
+        );
+    }
+
+    #[test]
+    fn conditional_strips_indeterminate_for_macros_with_declared_variants() {
+        // A profile-level indeterminacy whose root cause is "the
+        // variant macro itself is undefined" gets resolved by the
+        // variant declaration — the operator told the tool which
+        // values the macro takes, so reporting the macro as
+        // undefined is now incorrect. The renderer used to show
+        // both `[CONDITIONAL: pgsql_major=13]` AND `indeterminate:
+        // undefined macro: pgsql_major`, contradicting each other.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional("%if %{pgsql_major} >= 12");
+        let vmap = variants(&[("pgsql_major", &["13", "14", "15"])]);
+        let report = CoverageReport::compute_with_variants(
+            &spec,
+            &set,
+            &crate::bcond::BcondOverrides::default(),
+            &vmap,
+        );
+        let b = &report.conditionals[0].branches[0];
+        assert!(b.is_conditional(), "should classify as conditional");
+        assert!(
+            b.indeterminate_on.is_empty(),
+            "indeterminate verdict must be stripped once the variant resolves it; got {:?}",
+            b.indeterminate_on
+        );
+        assert!(
+            b.indeterminate_reasons.is_empty(),
+            "indeterminate reasons must be stripped for declared-variant macros; got {:?}",
+            b.indeterminate_reasons
+        );
+    }
+
+    #[test]
+    fn conditional_keeps_indeterminate_for_non_rescued_profiles() {
+        // When the variant-rescue pass fails to activate the branch
+        // on some profile (because another undeclared macro blocks
+        // resolution), that profile must KEEP its base-evaluation
+        // indeterminate verdict — including the reason naming the
+        // declared-variant macro, because the strip step only runs
+        // for profiles actually promoted into `conditional_on`.
+        //
+        // Without this guarantee, a stray variant declaration could
+        // silently hide indeterminacy on unrelated branches.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional("%if %{declared_macro} && %{undeclared_macro}");
+        let vmap = variants(&[("declared_macro", &["1"])]);
+        let report = CoverageReport::compute_with_variants(
+            &spec,
+            &set,
+            &crate::bcond::BcondOverrides::default(),
+            &vmap,
+        );
+        let b = &report.conditionals[0].branches[0];
+        // Even with declared_macro=1, `undeclared_macro` is still
+        // undefined → variant pass produces Err → branch is not
+        // conditional. Profile stays in indeterminate_on with its
+        // original short-circuit reason intact.
+        assert!(
+            !b.is_conditional(),
+            "branch must not be conditional when an undeclared macro blocks resolution; got {:?}",
+            b.reachable_under
+        );
+        assert_eq!(
+            b.indeterminate_on,
+            vec!["rhel-9-x86_64"],
+            "non-rescued profile must stay indeterminate"
+        );
+        // The evaluator short-circuits on the first failure
+        // (`declared_macro`), so that's the recorded reason. Strip
+        // step skipped it because the profile wasn't promoted. The
+        // invariant: strip only touches reasons on rescued
+        // profiles, never on non-rescued ones.
+        let reason = b.indeterminate_reasons.get("rhel-9-x86_64").unwrap();
+        assert!(
+            matches!(reason, EvalError::UndefinedMacro(_)),
+            "expected reason preserved verbatim; got {reason:?}"
         );
     }
 
