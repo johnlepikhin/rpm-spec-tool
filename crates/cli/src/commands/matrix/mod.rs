@@ -17,6 +17,7 @@ use rpm_spec_analyzer::profile::{
 
 pub mod baseline;
 pub mod check;
+pub mod classes;
 pub mod coverage;
 pub mod diff;
 pub mod expand;
@@ -208,6 +209,10 @@ pub enum Action {
     /// Structural diff between exactly two profiles: which deps are
     /// common, which are only on A, which are only on B. Branch-aware.
     Diff(diff::DiffOpts),
+    /// Group target-set profiles by effective dependency footprint —
+    /// surfaces a minimal "representative build set" when many
+    /// profiles collapse to the same BuildRequires/Requires.
+    Classes(classes::ClassesOpts),
 }
 
 impl Cmd {
@@ -221,6 +226,7 @@ impl Cmd {
             Action::VerifyContract(opts) => verify_contract::run(opts, self.config.as_deref()),
             Action::Expand(opts) => expand::run(opts, self.config.as_deref()),
             Action::Diff(opts) => diff::run(opts, self.config.as_deref()),
+            Action::Classes(opts) => classes::run(opts, self.config.as_deref()),
         }
     }
 }

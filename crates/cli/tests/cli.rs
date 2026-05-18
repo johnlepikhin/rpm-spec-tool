@@ -4131,6 +4131,502 @@ must_have_buildrequires = ["bootstrap-pkg"]
 }
 
 // ---------------------------------------------------------------------------
+// matrix classes
+// ---------------------------------------------------------------------------
+
+mod matrix_classes {
+    use super::*;
+
+    const CLASSES_SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: Test
+License: MIT
+BuildRequires: gcc
+
+%if 0%{?rhel}
+BuildRequires: rhel-only
+%endif
+
+%if 0%{?suse_version}
+BuildRequires: suse-only
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+
+    #[test]
+    fn classes_groups_rhel_family_together() {
+        // 4 profiles: 2 RHEL, 1 alt, 1 SLES.
+        // Expected: 3 classes (RHEL has 2 members).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, CLASSES_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "classes",
+                "--profiles",
+                "rhel-9-x86_64,rhel-8-x86_64,altlinux-10-x86_64,sles-15-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        assert!(
+            stdout.contains("4 profiles → 3 class(es)"),
+            "expected 4 → 3 collapse; got:\n{stdout}"
+        );
+        // The RHEL class is the largest (2 members) so sorts first.
+        assert!(
+            stdout.contains("## Class 1 (2 members,"),
+            "first class must have 2 members; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn classes_recommended_build_set_size_equals_class_count() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, CLASSES_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "classes",
+                "--profiles",
+                "rhel-9-x86_64,rhel-8-x86_64,altlinux-10-x86_64,sles-15-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        // Minimal representative build set must list exactly 3 profiles
+        // (one per class).
+        let build_set_idx = stdout
+            .find("Minimal representative build set")
+            .expect("build-set section");
+        let tail = &stdout[build_set_idx..];
+        assert!(
+            tail.contains("rhel-8-x86_64")
+                && tail.contains("altlinux-10-x86_64")
+                && tail.contains("sles-15-x86_64"),
+            "build set must list one representative per class; got:\n{tail}"
+        );
+    }
+
+    #[test]
+    fn classes_all_identical_profiles_collapse_to_one() {
+        // Spec has no conditionals → every profile is equivalent
+        // → 1 class containing all 4.
+        const FLAT: &str = "\
+Name: foo
+Version: 1
+Release: 1
+Summary: t
+License: MIT
+BuildRequires: gcc
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, FLAT).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "classes",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64,sles-15-x86_64,generic",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        assert!(
+            stdout.contains("4 profiles → 1 class(es)"),
+            "no conditionals → 1 class; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn classes_json_shape() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, CLASSES_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "classes",
+                "--profiles",
+                "rhel-9-x86_64,rhel-8-x86_64,altlinux-10-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        // Envelope shape.
+        assert_eq!(v["target_set"], "<ad-hoc>");
+        assert_eq!(v["class_count"], 2);
+        let classes = v["classes"].as_array().expect("classes");
+        assert_eq!(classes.len(), 2);
+        // First class is the larger (2 RHEL members).
+        assert_eq!(classes[0]["members"].as_array().unwrap().len(), 2);
+        // Representative is alphabetically first member.
+        assert_eq!(classes[0]["representative"], "rhel-8-x86_64");
+        // Representatives array mirrors class order.
+        let reps = v["representatives"].as_array().expect("reps");
+        assert_eq!(reps.len(), 2);
+        assert_eq!(reps[0], "rhel-8-x86_64");
+    }
+
+    #[test]
+    fn classes_rejects_multiple_specs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let a = dir.path().join("a.spec");
+        let b = dir.path().join("b.spec");
+        std::fs::write(&a, CLASSES_SPEC).expect("a");
+        std::fs::write(&b, CLASSES_SPEC).expect("b");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "classes",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                a.to_str().unwrap(),
+                b.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2);
+        assert!(
+            stderr.contains("exactly one spec"),
+            "expected multi-spec rejection; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn classes_requires_target_or_profiles_flag() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, CLASSES_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &["matrix", "classes", spec.to_str().unwrap()],
+            None,
+        );
+        assert_ne!(rc, 0);
+        assert!(
+            stderr.contains("--target-set") || stderr.contains("--profiles"),
+            "expected clap to mention required flags; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn classes_honours_with_flag_for_bcond() {
+        // Verify the bcond flag actually affects the signature. We
+        // capture the JSON signature hex from two runs (with vs
+        // without `--with`) and assert it changed — a regression
+        // where `--with` is ignored would produce identical hexes.
+        const BCOND: &str = "\
+Name: foo
+Version: 1
+Release: 1
+Summary: t
+License: MIT
+%bcond_with bootstrap
+BuildRequires: gcc
+
+%if %{with bootstrap}
+BuildRequires: bootstrap-pkg
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BCOND).expect("write spec");
+        let extract_sig = |stdout: &str| -> String {
+            let v: serde_json::Value = serde_json::from_str(stdout).expect("json");
+            v["classes"][0]["signature"]
+                .as_str()
+                .expect("signature str")
+                .to_string()
+        };
+        let (_, stdout1, _) = run(
+            &[
+                "matrix",
+                "classes",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        let sig_off = extract_sig(&stdout1);
+        let (_, stdout2, _) = run(
+            &[
+                "matrix",
+                "classes",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                "--with",
+                "bootstrap",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        let sig_on = extract_sig(&stdout2);
+        assert_ne!(
+            sig_off, sig_on,
+            "--with bootstrap must change the signature (off={sig_off}, on={sig_on})"
+        );
+        // Sanity: with --with bootstrap, bootstrap-pkg is in deps.
+        assert!(
+            stdout2.contains("bootstrap-pkg"),
+            "--with bootstrap must surface bootstrap-pkg; got:\n{stdout2}"
+        );
+    }
+
+    #[test]
+    fn classes_surfaces_parser_diagnostics_for_broken_spec() {
+        // Broken spec (missing %endif) produces parser diagnostics;
+        // CLI must warn on stderr like every sibling matrix command.
+        const BROKEN: &str = "\
+Name: foo
+Version: 1
+Release: 1
+Summary: t
+License: MIT
+
+%if 0%{?rhel}
+BuildRequires: gcc
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BROKEN).expect("write spec");
+        let (_rc, _, stderr) = run(
+            &[
+                "matrix",
+                "classes",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert!(
+            stderr.contains("parser diagnostic") || stderr.contains("recovered AST"),
+            "expected parser-diagnostic banner; got stderr={stderr:?}"
+        );
+    }
+
+    #[test]
+    fn classes_human_output_pins_canonical_row_layout() {
+        // Lock the human format so operator tooling that greps
+        // "representative:" / "members:" / "BuildRequires (n):" keeps
+        // working. A field-label rename would silently break it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, CLASSES_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "classes",
+                "--profiles",
+                "rhel-9-x86_64,rhel-8-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        // Header line.
+        assert!(
+            stdout.contains("# Matrix classes: target set"),
+            "missing canonical header; got:\n{stdout}"
+        );
+        // Field-label lines.
+        assert!(
+            stdout.contains("representative: rhel-8-x86_64"),
+            "missing canonical `representative:` line; got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("members:"),
+            "missing canonical `members:` label; got:\n{stdout}"
+        );
+        // Per-tag dep listing format `BuildRequires (n): ...`.
+        assert!(
+            stdout.contains("BuildRequires ("),
+            "missing canonical per-tag header; got:\n{stdout}"
+        );
+        // Minimal build set section.
+        assert!(
+            stdout.contains("## Minimal representative build set"),
+            "missing build-set section; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn classes_invariant_with_diff_equivalent_class_has_empty_only_buckets() {
+        // Cross-cutting invariant: profiles in the same class produce
+        // empty `only_a`/`only_b` buckets in `matrix diff`. Both
+        // commands rely on the same dep_walk + Skip-policy primitives;
+        // a refactor that desyncs them must surface here.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, CLASSES_SPEC).expect("write spec");
+        // Two rhel-family profiles share a class (both pull rhel-only).
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-8-x86_64,rhel-9-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        for group in v["groups"].as_array().expect("groups") {
+            let only_a = group["only_a"].as_array().unwrap();
+            let only_b = group["only_b"].as_array().unwrap();
+            assert!(
+                only_a.is_empty() && only_b.is_empty(),
+                "in-class diff must have empty only-A/only-B; got group={group}"
+            );
+        }
+    }
+
+    #[test]
+    fn classes_json_dep_bucket_uses_tag_field_not_tag_label() {
+        // The JSON wire shape must serialise the bucket label under
+        // the key "tag" (matching `matrix diff`'s TagDiffJson), even
+        // though the Rust field name is `tag_label`. Downstream
+        // tooling that read either command's JSON will see the same
+        // schema for the per-tag bucket envelope.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, CLASSES_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "classes",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let bucket = &v["classes"][0]["deps_by_tag"][0];
+        // Field name on the wire is "tag", not "tag_label".
+        assert!(
+            bucket.get("tag").is_some(),
+            "DepBucket JSON must serialise under `tag`, not `tag_label`; got {bucket}"
+        );
+        assert!(
+            bucket.get("tag_label").is_none(),
+            "DepBucket JSON must NOT have a `tag_label` field; got {bucket}"
+        );
+        assert_eq!(bucket["tag"], "BuildRequires");
+    }
+
+    #[test]
+    fn classes_indeterminate_branch_skip_drops_dep() {
+        // Arithmetic Raw `%if 0%{?rhel} >= 8` is Indeterminate under
+        // Skip policy → BR inside contributes to neither class →
+        // profiles with that arithmetic see no extra dep. Two
+        // profiles where the indeterminate branch is the only
+        // difference must therefore land in the same class.
+        const ARITH: &str = "\
+Name: foo
+Version: 1
+Release: 1
+Summary: t
+License: MIT
+BuildRequires: gcc
+
+%if 0%{?rhel} >= 8
+BuildRequires: maybe-rhel
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, ARITH).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "classes",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        assert_eq!(
+            v["class_count"], 1,
+            "Skip policy collapses indeterminate-only differences"
+        );
+        // `maybe-rhel` must not appear in any class's BR bucket.
+        let stringy = stdout.clone();
+        assert!(
+            !stringy.contains("maybe-rhel"),
+            "indeterminate-branch dep must be hidden under Skip policy; got:\n{stringy}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // matrix expand
 // ---------------------------------------------------------------------------
 

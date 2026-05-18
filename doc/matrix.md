@@ -709,6 +709,106 @@ in parentheses for quick scanning.
 * Skip policy hides indeterminate branches. Use `matrix coverage`
   on the same target set to identify which branches were dropped.
 
+## Equivalence classes
+
+`matrix classes` collapses a target set into distinct dependency
+"flavours" — every profile that produces the same effective
+`BuildRequires` + `Requires` after branch resolution lands in one
+[`EquivalenceClass`]. The command surfaces a recommended minimal
+representative build set (one profile per class), suitable for CI
+gating systems that ask "do I really need to run 30 builds?".
+
+```bash
+rpm-spec-tool matrix classes product.spec \
+  --target-set product-2026q2
+```
+
+In practice matrix sets collapse meaningfully — many arch×distro
+tuples produce identical specs once `%if 0%{?rhel}` / `%bcond_with X`
+etc. resolve. The actual collapse factor is spec-dependent: a
+distro-portable spec might fold 10 profiles into 1 class, while a
+heavily-gated one fragments to 1-class-per-profile. Running one
+profile per class is sufficient for "does this spec compile?"
+verification regardless of the magnitude.
+
+### Scope of the signature
+
+A profile's signature is the sorted union of:
+
+* every `BuildRequires:` dep atom active on the profile, plus
+* every `Requires:` dep atom active on the profile,
+
+both walked via [`crate::dep_walk`] (same rich-dep policy as
+`matrix diff` and `matrix verify-contract`) and gated by
+[`IndeterminatePolicy::Skip`] (a branch the evaluator can't resolve
+contributes nothing on either side — under uncertainty we err
+toward fewer distinct classes, matching what an operator means by
+"these look the same to me").
+
+Files / Provides / Conflicts / Obsoletes are NOT in the signature —
+they are post-build properties more naturally answered by an
+artifact comparator (future phase). Including them here would
+fragment classes on differences operators don't care about for the
+"do I need to run this build?" question.
+
+### Output
+
+Human format ranks classes by descending member count and lists the
+representative + every member + per-tag dep sets, then appends the
+minimal representative build set:
+
+```text
+# Matrix classes: target set `product-2026q2` (10 profiles → 3 class(es))
+## product.spec
+
+## Class 1 (5 members, sig fbf33e85f365e561)
+  representative: rhel-8-x86_64
+  members:        rhel-8-aarch64, rhel-8-x86_64, rhel-9-aarch64, rhel-9-x86_64, redos-7-x86_64
+  BuildRequires (4): gcc, make, rhel-only, systemd-rpm-macros
+  Requires (1): glibc
+
+## Class 2 (3 members, sig 077db16af651011b)
+  representative: altlinux-10-aarch64
+  members:        altlinux-10-aarch64, altlinux-10-e2k, altlinux-10-x86_64
+  BuildRequires (3): gcc, make, rpm-build-systemd
+  Requires (1): glibc
+
+## Class 3 (2 members, sig 1c36da981eb40b91)
+  representative: sles-15-aarch64
+  members:        sles-15-aarch64, sles-15-x86_64
+  BuildRequires (4): gcc, make, suse-only, systemd-rpm-macros
+  Requires (1): glibc
+
+## Minimal representative build set (3)
+  rhel-8-x86_64
+  altlinux-10-aarch64
+  sles-15-aarch64
+```
+
+JSON output mirrors the structure plus envelope fields
+(`target_set`, `profiles`, `path`, `class_count`, `classes`,
+`representatives`).
+
+### Stability caveat
+
+The hex signature uses
+[`std::collections::hash_map::DefaultHasher`] (currently SipHash 1-3
+with a fixed seed) — same caveat as `MatrixSignature`. Stable within
+one binary release, not contractually stable across stdlib upgrades.
+CI baselines keyed on the hex string will need a refresh after a
+major rustc bump.
+
+**Class membership itself is hash-independent:** profiles are grouped
+on the full structural `ProfileSignature` (sorted dep sets), not on
+the hash. A hash collision can change the hex label assigned to a
+class but cannot silently merge two distinct dep sets into one.
+
+### Exit codes
+
+* `0` — always (informational; never gates).
+* `2` — usage error: missing `--target-set`/`--profiles`,
+  unresolvable target set, multiple input specs, etc.
+
 ## Contract verification
 
 `matrix verify-contract` gates the spec against per-profile
