@@ -3204,12 +3204,12 @@ B
 
     #[test]
     fn coverage_define_expands_macros_inside_string_literals() {
-        // Regression for the centos-spec false-positive: a CLI define
-        // like `-D edition ent` reaches `Profile.macros` (visible via
-        // `matrix explain --macro edition`) but the conditional
+        // Regression for a real-world false-positive: a CLI define
+        // like `-D flavour ent` reaches `Profile.macros` (visible via
+        // `matrix explain --macro flavour`) but the conditional
         // evaluator's string-literal path used to skip the macro
-        // expansion step. `%if "%{edition}" == "ent"` therefore
-        // compared the literal byte string `%{edition}` to `ent` and
+        // expansion step. `%if "%{flavour}" == "ent"` therefore
+        // compared the literal byte string `%{flavour}` to `ent` and
         // mis-classified the branch as DEAD on every profile. Both
         // braced and unbraced forms exercise the same evaluator path,
         // so cover them in one test.
@@ -3219,9 +3219,9 @@ B
             &spec,
             "Name: foo\nVersion: 1\nRelease: 1\nSummary: t\nLicense: MIT\n\
              \n\
-             %if \"%{edition}\" == \"ent\"\n%global a 1\n%endif\n\
-             %if \"%edition\" == \"ent\"\n%global b 1\n%endif\n\
-             %if \"%{edition}\" == \"ent\" || \"%{edition}\" == \"ent1c\"\n%global c 1\n%endif\n\
+             %if \"%{flavour}\" == \"ent\"\n%global a 1\n%endif\n\
+             %if \"%flavour\" == \"ent\"\n%global b 1\n%endif\n\
+             %if \"%{flavour}\" == \"ent\" || \"%{flavour}\" == \"premium\"\n%global c 1\n%endif\n\
              \n\
              %description\nB\n\
              \n\
@@ -3233,7 +3233,7 @@ B
                 "matrix",
                 "coverage",
                 "-D",
-                "edition ent",
+                "flavour ent",
                 "--profiles",
                 "rhel-9-x86_64",
                 spec.to_str().unwrap(),
@@ -3244,7 +3244,7 @@ B
         // None of the three branches may surface as DEAD now.
         assert!(
             !stdout.contains("[DEAD]"),
-            "expected no [DEAD] tags with edition=ent; got:\n{stdout}"
+            "expected no [DEAD] tags with flavour=ent; got:\n{stdout}"
         );
         // All three should be ALWAYS active on the single profile.
         let always_count = stdout.matches("[ALWAYS]").count();
@@ -3252,6 +3252,127 @@ B
             always_count, 3,
             "expected all 3 branches active; got [ALWAYS] count = {always_count} in:\n{stdout}"
         );
+    }
+
+    #[test]
+    fn coverage_human_groups_indeterminate_by_two_distinct_reasons() {
+        // Multi-reason path of write_branch (`by_reason.len() > 1`) is
+        // separate from the single-reason fast path: it emits the
+        // `indeterminate:` header on its own line and one indented
+        // subline per reason. Each subline carries its own profile
+        // list. Pin that two distinct reasons render as two
+        // sublines, and that profiles are partitioned (not duplicated)
+        // between them. A renderer refactor that merges both into
+        // one bucket would silently lose information here.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let configdir = dir.path();
+        // First profile sees `foo_macro` undefined; second sees
+        // `bar_macro` undefined. Without a custom profile we can't
+        // engineer per-profile macro states, so use a config-defined
+        // target set with per-profile defines.
+        std::fs::write(
+            configdir.join(".rpmspec.toml"),
+            r#"
+[targets.split]
+profiles = ["rhel-9-x86_64", "rhel-9-aarch64"]
+
+[targets.split.profile-overrides."rhel-9-x86_64"]
+defines = { bar_macro = "1" }
+
+[targets.split.profile-overrides."rhel-9-aarch64"]
+defines = { foo_macro = "1" }
+"#,
+        )
+        .expect("write config");
+        let spec = configdir.join("foo.spec");
+        std::fs::write(
+            &spec,
+            "Name: foo\nVersion: 1\nRelease: 1\nSummary: t\nLicense: MIT\n\
+             \n\
+             %if %{foo_macro} && %{bar_macro}\n%global both 1\n%endif\n\
+             \n\
+             %description\nB\n\
+             \n\
+             %changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+        )
+        .expect("write spec");
+        let config_path = configdir.join(".rpmspec.toml");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "--config",
+                config_path.to_str().unwrap(),
+                "coverage",
+                "--target-set",
+                "split",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        // The header form (multi-reason ladder) is used, not the
+        // inline single-reason form: `indeterminate:` on its own line
+        // followed by indented `(reason): profiles` sublines.
+        assert!(
+            stdout.contains("indeterminate:\n"),
+            "expected multi-reason indeterminate header; got:\n{stdout}"
+        );
+        // Each reason group renders as a single subline matching
+        // `(macro `NAME` is not defined`. Counting the leading paren
+        // form pins one group per reason without false-matching the
+        // reason text mentioned in other places (e.g. the condition
+        // display itself).
+        let foo_group = stdout.matches("(macro `foo_macro` is not defined").count();
+        let bar_group = stdout.matches("(macro `bar_macro` is not defined").count();
+        assert_eq!(foo_group, 1, "expected foo_macro group once; got {foo_group} in:\n{stdout}");
+        assert_eq!(bar_group, 1, "expected bar_macro group once; got {bar_group} in:\n{stdout}");
+    }
+
+    #[test]
+    fn coverage_json_indeterminate_groups_pivot_by_reason() {
+        // Pin the new `indeterminate_groups` JSON field: array of
+        // `{reason, profiles}`, sorted by reason text (BTreeMap
+        // order), with profiles partitioned by reason. Skips
+        // emission when no profile is indeterminate.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(
+            &spec,
+            "Name: foo\nVersion: 1\nRelease: 1\nSummary: t\nLicense: MIT\n\
+             \n\
+             %if %{undefined_macro_xyz} == 10\n%global a 1\n%endif\n\
+             \n\
+             %description\nB\n\
+             \n\
+             %changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+        )
+        .expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64,rhel-9-aarch64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
+        let branches = v["files"][0]["conditionals"][0]["branches"][0].clone();
+        let groups = branches["indeterminate_groups"].as_array().expect("groups");
+        assert_eq!(groups.len(), 1, "expected one reason group; got: {groups:?}");
+        let g = &groups[0];
+        let reason = g["reason"].as_str().expect("reason");
+        assert!(
+            reason.contains("undefined_macro_xyz"),
+            "expected reason mentioning the missing macro; got {reason}"
+        );
+        let profiles = g["profiles"].as_array().expect("profiles");
+        assert_eq!(profiles.len(), 2, "expected both profiles in the group");
     }
 
     #[test]

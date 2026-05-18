@@ -221,7 +221,7 @@ fn write_branch<W: std::io::Write>(
             writeln!(
                 out,
                 "    indeterminate ({reason}): {}",
-                summarise_profiles(profiles, total_profiles)
+                format_profile_list(profiles, total_profiles)
             )?;
         } else {
             writeln!(out, "    indeterminate:")?;
@@ -229,14 +229,14 @@ fn write_branch<W: std::io::Write>(
                 writeln!(
                     out,
                     "      ({reason}): {}",
-                    summarise_profiles(profiles, total_profiles)
+                    format_profile_list(profiles, total_profiles)
                 )?;
             }
             if !no_reason.is_empty() {
                 writeln!(
                     out,
                     "      (no reason recorded): {}",
-                    summarise_profiles(&no_reason, total_profiles)
+                    format_profile_list(&no_reason, total_profiles)
                 )?;
             }
         }
@@ -254,25 +254,21 @@ const COLLAPSE_THRESHOLD: usize = 4;
 
 /// Render a profile-id list either as `(none)`, `(all N profiles)`
 /// when it covers the whole (sufficiently large) target set, or the
-/// comma-joined IDs.
-fn format_profile_list(ids: &[String], total_profiles: usize) -> String {
+/// comma-joined IDs. Generic over `AsRef<str>` so callers passing
+/// `&[String]` (the per-branch lists) and `&[&str]` (the
+/// regrouped-by-reason view) hit the same body — eliminates the
+/// risk that the two callers' formatting drifts apart.
+fn format_profile_list<S: AsRef<str>>(ids: &[S], total_profiles: usize) -> String {
     if ids.is_empty() {
         return "(none)".to_string();
     }
     if total_profiles >= COLLAPSE_THRESHOLD && ids.len() == total_profiles {
         return format!("(all {total_profiles} profiles)");
     }
-    ids.join(", ")
-}
-
-/// Render a borrowed profile-id slice the same way [`format_profile_list`]
-/// does for owned-`String` slices. Used inside the grouped
-/// indeterminate renderer where the source is `Vec<&str>`.
-fn summarise_profiles(profiles: &[&str], total_profiles: usize) -> String {
-    if total_profiles >= COLLAPSE_THRESHOLD && profiles.len() == total_profiles {
-        return format!("(all {total_profiles} profiles)");
-    }
-    profiles.join(", ")
+    ids.iter()
+        .map(AsRef::as_ref)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn render_json(
@@ -381,18 +377,29 @@ struct IndeterminateGroup {
     profiles: Vec<String>,
 }
 
+/// Sentinel reason string for orphan profiles (indeterminate but
+/// missing a recorded `EvalError`). Mirrors the human renderer's
+/// `(no reason recorded)` bucket so JSON and human views stay
+/// symmetric — without this, a downstream consumer parsing
+/// `indeterminate_groups` would under-count indeterminate profiles
+/// vs. `indeterminate_on`. Today every indeterminate profile gets a
+/// reason inserted at the source (branch_coverage.rs `evaluate_branch`
+/// path), but a future evaluator path that forgets the insertion
+/// would surface here rather than silently disappear.
+const NO_REASON_RECORDED: &str = "(no reason recorded)";
+
 fn build_indeterminate_groups(b: &BranchCoverage) -> Vec<IndeterminateGroup> {
     if b.indeterminate_on.is_empty() {
         return Vec::new();
     }
     let mut by_reason: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for pid in &b.indeterminate_on {
-        if let Some(reason) = b.indeterminate_reasons.get(pid) {
-            by_reason
-                .entry(reason.to_string())
-                .or_default()
-                .push(pid.clone());
-        }
+        let key = b
+            .indeterminate_reasons
+            .get(pid)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| NO_REASON_RECORDED.to_string());
+        by_reason.entry(key).or_default().push(pid.clone());
     }
     by_reason
         .into_iter()

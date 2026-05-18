@@ -1318,28 +1318,72 @@ B\n\
 
     #[test]
     fn string_literal_with_macro_ref_is_expanded_before_comparison() {
-        // Regression for the postgrespro.centos.spec false-positive:
-        // `%if "%{edition}" == "ent"` with `-D edition ent` used to
-        // mis-evaluate to DEAD because `ExprAst::String` returned the
-        // raw source `%{edition}` rather than its expanded value.
-        // Cover both the braced (%{edition}) and unbraced (%edition)
-        // forms — the parser emits the same `ExprAst::String` shape
-        // for both, so a single fix covers both at once.
+        // Regression for a real-world false-positive: `%if "%{flavour}"
+        // == "ent"` with `-D flavour ent` used to mis-evaluate to DEAD
+        // because `ExprAst::String` returned the raw source
+        // `%{flavour}` rather than its expanded value. Cover braced
+        // (%{flavour}) and unbraced (%flavour) plus a disjunction — the
+        // parser emits the same `ExprAst::String` shape for each, so a
+        // single fix covers them all.
         for cond in [
-            r#"%if "%{edition}" == "ent""#,
-            r#"%if "%edition" == "ent""#,
-            r#"%if "%{edition}" == "ent" || "%{edition}" == "ent1c""#,
+            r#"%if "%{flavour}" == "ent""#,
+            r#"%if "%flavour" == "ent""#,
+            r#"%if "%{flavour}" == "ent" || "%{flavour}" == "premium""#,
         ] {
-            let set = resolved_with_defines(&["rhel-9-x86_64"], &["edition ent"]);
+            let set = resolved_with_defines(&["rhel-9-x86_64"], &["flavour ent"]);
             let spec = spec_with_conditional(cond);
             let report =
                 CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
             assert_eq!(
                 report.conditionals[0].branches[0].active_on,
                 vec!["rhel-9-x86_64"],
-                "expected `{cond}` active on rhel-9 when edition=ent"
+                "expected `{cond}` active on rhel-9 when flavour=ent"
             );
         }
+    }
+
+    #[test]
+    fn string_literal_with_optional_macro_ref_compares_empty_when_undefined() {
+        // `%{?flavour}` is the conditional-defined form: empty when
+        // undefined, expanded value when defined. `%if "%{?flavour}"
+        // == "ent"` with no `-D flavour` must therefore compare an
+        // empty string against `"ent"` and be Inactive — NOT
+        // Indeterminate. A future refactor that made `expand_raw_string`
+        // error on undefined `%{?name}` (instead of producing `""`)
+        // would silently flip every realistic spec to indeterminate.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional(r#"%if "%{?flavour}" == "ent""#);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
+        let b = &report.conditionals[0].branches[0];
+        assert_eq!(
+            b.inactive_on,
+            vec!["rhel-9-x86_64"],
+            "expected `%if \"%{{?flavour}}\" == \"ent\"` inactive when flavour undefined; got {b:?}"
+        );
+        assert!(
+            b.indeterminate_on.is_empty(),
+            "undefined `%{{?}}` form must NOT surface as indeterminate; got {b:?}"
+        );
+    }
+
+    #[test]
+    fn string_literal_with_malformed_macro_ref_is_indeterminate() {
+        // A literal `"%{flavour"` (no closing brace) cannot be parsed
+        // as a macro reference. The evaluator falls into
+        // `EvalError::Unsupported("malformed macro reference")` and the
+        // branch surfaces as indeterminate rather than crashing. Pin
+        // both the classification and the fact that evaluation does
+        // not panic — a regression here would take down `matrix
+        // coverage` on any spec with a typo.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional(r#"%if "%{flavour" == "ent""#);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
+        let b = &report.conditionals[0].branches[0];
+        assert_eq!(
+            b.indeterminate_on,
+            vec!["rhel-9-x86_64"],
+            "malformed macro inside %if string must be indeterminate; got {b:?}"
+        );
     }
 
     #[test]
