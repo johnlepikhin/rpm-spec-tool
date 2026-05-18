@@ -7,6 +7,7 @@
 //! Phase B feature stays self-contained — adding a new field to
 //! [`MacroVariants`] doesn't churn the rest of the config schema.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Declared variant value set for a macro.
@@ -31,7 +32,7 @@ use serde::{Deserialize, Serialize};
 /// the tool report `%if "%{edition}" == "1c"` as
 /// `[CONDITIONAL: edition=1c]` even when the current build uses
 /// `-D edition ent`.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
 #[non_exhaustive]
 pub struct MacroVariants {

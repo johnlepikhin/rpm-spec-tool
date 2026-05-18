@@ -46,6 +46,9 @@ pub enum Command {
     Matrix(commands::matrix::Cmd),
     /// List every built-in lint rule with a short description.
     Lints(commands::lints::Cmd),
+    /// Manage `.rpmspec.toml` — generate from defaults, validate, or
+    /// inspect (`init` / `validate`).
+    Config(commands::config::Cmd),
     /// Emit a shell completion script for the given shell on stdout.
     Completions(commands::completions::Cmd),
 }
@@ -89,9 +92,7 @@ impl MacroDefinesArg {
     /// own pipeline, so the early check exists only to fail-fast
     /// with a stable exit code (2 — soft user error) and to avoid
     /// repeating the same error per spec in a batch.
-    pub fn validate(
-        &self,
-    ) -> Result<(), rpm_spec_analyzer::profile::DefineParseError> {
+    pub fn validate(&self) -> Result<(), rpm_spec_analyzer::profile::DefineParseError> {
         for raw in &self.raw {
             rpm_spec_analyzer::profile::parse_define(raw)?;
         }
@@ -162,6 +163,7 @@ impl Application {
             Command::Target(cmd) => cmd.run(color),
             Command::Matrix(cmd) => cmd.run(color),
             Command::Lints(cmd) => cmd.run(color),
+            Command::Config(cmd) => cmd.run(color),
             Command::Completions(cmd) => cmd.run(),
         }
     }

@@ -149,7 +149,10 @@ fn render_human(
         writeln!(
             out,
             "  {} macros referenced — {} missing, {} partial, {} portable",
-            report.total_used(), counts.missing, counts.partial, counts.portable
+            report.total_used(),
+            counts.missing,
+            counts.partial,
+            counts.portable
         )?;
         if report.entries.is_empty() {
             writeln!(out, "  (no macro references)")?;

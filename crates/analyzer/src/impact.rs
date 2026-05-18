@@ -189,7 +189,10 @@ impl ImpactReport {
     /// profiles" is the most useful one-line headline.
     #[must_use]
     pub fn affected_profile_count(&self) -> usize {
-        self.per_profile.iter().filter(|p| !p.is_no_change()).count()
+        self.per_profile
+            .iter()
+            .filter(|p| !p.is_no_change())
+            .count()
     }
 
     /// `true` iff every profile's changeset is empty across every
@@ -209,7 +212,8 @@ fn collect_dep_names(
     spec: &SpecFile<Span>,
     selection: &ProfileBranchSelection,
 ) -> Vec<BTreeSet<String>> {
-    let mut buckets: Vec<BTreeSet<String>> = COMPARED_TAGS.iter().map(|_| BTreeSet::new()).collect();
+    let mut buckets: Vec<BTreeSet<String>> =
+        COMPARED_TAGS.iter().map(|_| BTreeSet::new()).collect();
     walk_active_preamble(spec, selection, |item| {
         if let Some(idx) = COMPARED_TAGS.iter().position(|(t, _)| t == &item.tag) {
             if let TagValue::Dep(dep) = &item.value {
@@ -301,7 +305,10 @@ B
             removed: Vec::new(),
             unchanged: vec!["gcc".to_string(), "make".to_string()],
         };
-        assert!(cs.has_no_movement(), "unchanged-only set must not register as movement");
+        assert!(
+            cs.has_no_movement(),
+            "unchanged-only set must not register as movement"
+        );
     }
 
     #[test]
@@ -392,7 +399,12 @@ B
             .find(|p| p.profile_id == "rhel-9-x86_64")
             .expect("rhel profile present");
         assert!(!rhel.is_no_change());
-        assert!(rhel.tags[0].changes.added.contains(&"rhel-only".to_string()));
+        assert!(
+            rhel.tags[0]
+                .changes
+                .added
+                .contains(&"rhel-only".to_string())
+        );
         // altlinux-10-x86_64: unaffected (the new BR is gated away).
         let alt = r
             .per_profile

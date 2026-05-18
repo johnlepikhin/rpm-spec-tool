@@ -160,7 +160,11 @@ fn render_human(
     // member count descending (matches class order). Operators can
     // pipe this into CI.
     writeln!(out)?;
-    writeln!(out, "## Minimal representative build set ({})", report.class_count())?;
+    writeln!(
+        out,
+        "## Minimal representative build set ({})",
+        report.class_count()
+    )?;
     for rep in report.representatives() {
         writeln!(out, "  {rep}")?;
     }

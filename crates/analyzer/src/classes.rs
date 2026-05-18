@@ -87,23 +87,12 @@ impl ProfileSignature {
     /// shared across profiles — building one CoverageReport per
     /// profile would double the per-spec cost.
     #[must_use]
-    pub fn compute(
-        spec: &SpecFile<Span>,
-        coverage: &CoverageReport,
-        profile_id: &str,
-    ) -> Self {
-        let sel = ProfileBranchSelection::compute(
-            coverage,
-            profile_id,
-            IndeterminatePolicy::Skip,
-        );
+    pub fn compute(spec: &SpecFile<Span>, coverage: &CoverageReport, profile_id: &str) -> Self {
+        let sel = ProfileBranchSelection::compute(coverage, profile_id, IndeterminatePolicy::Skip);
         let mut buckets: Vec<BTreeSet<String>> =
             SIGNATURE_TAGS.iter().map(|_| BTreeSet::new()).collect();
         walk_active_preamble(spec, &sel, |item| {
-            if let Some(idx) = SIGNATURE_TAGS
-                .iter()
-                .position(|(t, _)| t == &item.tag)
-            {
+            if let Some(idx) = SIGNATURE_TAGS.iter().position(|(t, _)| t == &item.tag) {
                 if let TagValue::Dep(dep) = &item.value {
                     for_each_dep_atom(dep, |name| {
                         let rendered = render_text_with_macros(name);
@@ -115,7 +104,9 @@ impl ProfileSignature {
                 }
             }
         });
-        Self { tag_buckets: buckets }
+        Self {
+            tag_buckets: buckets,
+        }
     }
 
     /// Diagnostic 64-bit hash used by [`Self::hash_hex`]. Crate-internal
@@ -252,7 +243,8 @@ impl ClassesReport {
         // surfaces "this is mostly one cluster with a few outliers"
         // at a glance.
         classes.sort_by(|a, b| {
-            b.members.len()
+            b.members
+                .len()
                 .cmp(&a.members.len())
                 .then_with(|| a.representative.cmp(&b.representative))
         });
@@ -324,8 +316,15 @@ B
     fn identical_profiles_collapse_into_one_class() {
         // No conditionals — every profile has the same BR+Requires.
         // 3 profiles → 1 class.
-        let r = report_for(SHARED_SPEC, &["rhel-9-x86_64", "altlinux-10-x86_64", "sles-15-x86_64"]);
-        assert_eq!(r.class_count(), 1, "no conditionals → all profiles equivalent");
+        let r = report_for(
+            SHARED_SPEC,
+            &["rhel-9-x86_64", "altlinux-10-x86_64", "sles-15-x86_64"],
+        );
+        assert_eq!(
+            r.class_count(),
+            1,
+            "no conditionals → all profiles equivalent"
+        );
         assert_eq!(r.classes[0].members.len(), 3);
     }
 
@@ -399,7 +398,12 @@ B
 ";
         let r = report_for(
             SPEC,
-            &["rhel-9-x86_64", "rhel-9-aarch64", "rhel-8-x86_64", "altlinux-10-x86_64"],
+            &[
+                "rhel-9-x86_64",
+                "rhel-9-aarch64",
+                "rhel-8-x86_64",
+                "altlinux-10-x86_64",
+            ],
         );
         // RHEL class has 3 members; alt class has 1. RHEL class
         // sorts first by descending count.
@@ -467,7 +471,10 @@ B
         let coverage = CoverageReport::compute(&parsed.spec, &ts, &BcondOverrides::default());
         let sig_rhel = ProfileSignature::compute(&parsed.spec, &coverage, "rhel-9-x86_64");
         let sig_alt = ProfileSignature::compute(&parsed.spec, &coverage, "altlinux-10-x86_64");
-        assert_eq!(sig_rhel, sig_alt, "same dep set via different paths must hash equal");
+        assert_eq!(
+            sig_rhel, sig_alt,
+            "same dep set via different paths must hash equal"
+        );
         assert_eq!(sig_rhel.hash(), sig_alt.hash());
     }
 
@@ -501,9 +508,15 @@ B
         assert_eq!(r.class_count(), 2);
         // Look up each class by its representative and confirm the
         // BR bucket carries the right gating dep.
-        let alt = r.classes.iter().find(|c| c.representative == "altlinux-10-x86_64")
+        let alt = r
+            .classes
+            .iter()
+            .find(|c| c.representative == "altlinux-10-x86_64")
             .expect("alt class present");
-        let rhel = r.classes.iter().find(|c| c.representative == "rhel-9-x86_64")
+        let rhel = r
+            .classes
+            .iter()
+            .find(|c| c.representative == "rhel-9-x86_64")
             .expect("rhel class present");
         // BR is the first SIGNATURE_TAGS entry.
         assert_eq!(alt.deps_by_tag[0].deps, vec!["non-rhel-pkg"]);
@@ -538,7 +551,12 @@ B
 ";
         let r = report_for(
             SPEC,
-            &["rhel-9-x86_64", "rhel-8-x86_64", "altlinux-10-x86_64", "sles-15-x86_64"],
+            &[
+                "rhel-9-x86_64",
+                "rhel-8-x86_64",
+                "altlinux-10-x86_64",
+                "sles-15-x86_64",
+            ],
         );
         assert_eq!(r.class_count(), 2);
     }

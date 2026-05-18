@@ -74,9 +74,7 @@ pub enum ResolveError {
     /// triggers on newline / carriage-return — those silently parse as
     /// part of the value but produce a macro body that rpmbuild can
     /// never reproduce from a CLI flag.
-    #[error(
-        "target set `{target}`: defines entry `{key}` has an invalid value ({reason})"
-    )]
+    #[error("target set `{target}`: defines entry `{key}` has an invalid value ({reason})")]
     InvalidTargetDefine {
         target: String,
         key: String,
@@ -386,11 +384,7 @@ fn has_identity_changes(p: &IdentityPatch) -> bool {
 ///   wrong: `"foo bar" = "1"` → parse_define sees name="foo" value="bar 1"),
 /// * values containing newlines / carriage returns (silently absorbed
 ///   by parse_define but can't be reproduced from any CLI flag).
-fn validate_target_define(
-    target_id: &str,
-    key: &str,
-    value: &str,
-) -> Result<(), ResolveError> {
+fn validate_target_define(target_id: &str, key: &str, value: &str) -> Result<(), ResolveError> {
     // Validate the key directly through the shared name validator —
     // a probe like `format!("{key} _")` + parse_define silently
     // accepts keys with embedded whitespace (`"foo bar"` → name="foo"),
@@ -897,11 +891,13 @@ mod tests {
         // built-in (proves resolve() was called with the right
         // cli_override). identity.name itself is a human label from
         // the built-in TOML, not the profile key.
-        assert!(set.targets[0]
-            .profile
-            .layers
-            .iter()
-            .any(|l| matches!(l, LayerInfo::Builtin { name } if name.as_ref() == "generic")));
+        assert!(
+            set.targets[0]
+                .profile
+                .layers
+                .iter()
+                .any(|l| matches!(l, LayerInfo::Builtin { name } if name.as_ref() == "generic"))
+        );
         assert!(set.targets[1].profile.layers.iter().any(|l| {
             matches!(l, LayerInfo::Builtin { name } if name.as_ref() == "rhel-9-x86_64")
         }));
@@ -988,7 +984,9 @@ mod tests {
         target.defines.insert("use_jit".into(), "1".into());
         let mut e2k_override = crate::config_layer::TargetProfileOverride::default();
         e2k_override.defines.insert("use_jit".into(), "0".into());
-        target.profile_overrides.insert("rhel-9-x86_64".into(), e2k_override);
+        target
+            .profile_overrides
+            .insert("rhel-9-x86_64".into(), e2k_override);
 
         let set = resolve_target_set(
             &section,
@@ -1008,8 +1006,14 @@ mod tests {
             .iter()
             .find(|t| t.profile_id == "rhel-9-x86_64")
             .unwrap();
-        assert_eq!(generic.profile.macros.get("use_jit").unwrap().as_literal(), Some("1"));
-        assert_eq!(rhel.profile.macros.get("use_jit").unwrap().as_literal(), Some("0"));
+        assert_eq!(
+            generic.profile.macros.get("use_jit").unwrap().as_literal(),
+            Some("1")
+        );
+        assert_eq!(
+            rhel.profile.macros.get("use_jit").unwrap().as_literal(),
+            Some("0")
+        );
     }
 
     #[test]
@@ -1019,7 +1023,9 @@ mod tests {
         // precedence chain.
         let section = empty_section();
         let mut target = target_with(&["generic"]);
-        target.defines.insert("product_build".into(), "from-target".into());
+        target
+            .defines
+            .insert("product_build".into(), "from-target".into());
         let cli_defines = vec!["product_build from-cli".to_string()];
         let opts = ResolveOptions {
             cli_defines: &cli_defines,

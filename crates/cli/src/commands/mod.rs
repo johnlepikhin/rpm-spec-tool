@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod check;
 pub mod completions;
+pub mod config;
 pub mod config_loader;
 pub mod format;
 pub mod lint;

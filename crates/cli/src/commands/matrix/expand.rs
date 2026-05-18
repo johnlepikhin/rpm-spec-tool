@@ -102,11 +102,7 @@ pub(super) fn run(opts: ExpandOpts, config_override: Option<&Path>) -> Result<Ex
         },
         &parsed,
     );
-    let coverage = CoverageReport::compute(
-        &parsed.spec,
-        &resolved,
-        &opts.bcond.to_overrides(),
-    );
+    let coverage = CoverageReport::compute(&parsed.spec, &resolved, &opts.bcond.to_overrides());
 
     match opts.format {
         OutputFormat::Human => render_human(&source, &coverage, &resolved)?,
@@ -144,9 +140,7 @@ impl BranchStatus<'_> {
         match self {
             Self::Active => Cow::Borrowed("[ACTIVE]"),
             Self::Inactive => Cow::Borrowed("[INACTIVE]"),
-            Self::Indeterminate(reason) => {
-                Cow::Owned(format!("[INDETERMINATE: {reason}]"))
-            }
+            Self::Indeterminate(reason) => Cow::Owned(format!("[INDETERMINATE: {reason}]")),
         }
     }
 

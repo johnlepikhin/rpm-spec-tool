@@ -16,6 +16,7 @@ categories    = ["development-tools", "parser-implementations"]
 [dependencies]
 rpm-spec.workspace         = true
 rpm-spec-profile.workspace = true
+schemars.workspace   = true
 serde.workspace      = true
 serde_json.workspace = true
 thiserror.workspace  = true

@@ -5,12 +5,15 @@
 //! observed by a consumer always carries `Warn` or `Deny`.
 
 use rpm_spec::ast::Span;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Configured lint level. Maps onto rustc/clippy conventions: `allow` silences
 /// the rule, `warn` reports it without affecting exit status, `deny` reports
 /// it and fails the run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Allow,

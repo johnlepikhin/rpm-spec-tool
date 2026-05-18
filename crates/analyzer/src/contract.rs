@@ -249,7 +249,9 @@ fn collect_branch_aware(
 ) -> Vec<FoundBuildRequire> {
     let selection = ProfileBranchSelection::compute(coverage, profile_id, policy);
     let mut collector = BuildRequiresCollector::default();
-    walk_active_preamble(spec, &selection, |item| collector.consume_preamble_item(item));
+    walk_active_preamble(spec, &selection, |item| {
+        collector.consume_preamble_item(item)
+    });
     collector.found
 }
 
@@ -261,18 +263,20 @@ fn verify_one(
     // Two independent HashMaps so the required-check sees only deps
     // collected under Skip policy and the forbidden-check sees the
     // permissive Include-policy set. See module doc for the rationale.
-    let required_index: HashMap<&str, &FoundBuildRequire> = required_found
-        .iter()
-        .fold(HashMap::with_capacity(required_found.len()), |mut acc, f| {
+    let required_index: HashMap<&str, &FoundBuildRequire> = required_found.iter().fold(
+        HashMap::with_capacity(required_found.len()),
+        |mut acc, f| {
             acc.entry(f.canonical.as_str()).or_insert(f);
             acc
-        });
-    let forbidden_index: HashMap<&str, &FoundBuildRequire> = forbidden_found
-        .iter()
-        .fold(HashMap::with_capacity(forbidden_found.len()), |mut acc, f| {
+        },
+    );
+    let forbidden_index: HashMap<&str, &FoundBuildRequire> = forbidden_found.iter().fold(
+        HashMap::with_capacity(forbidden_found.len()),
+        |mut acc, f| {
             acc.entry(f.canonical.as_str()).or_insert(f);
             acc
-        });
+        },
+    );
 
     let mut violations = Vec::new();
 
@@ -378,7 +382,6 @@ impl BuildRequiresCollector {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,7 +405,12 @@ mod tests {
         let parsed = parse(spec_src);
         let contract = Contract::from_toml_str(contract_toml).expect("parse contract");
         let ts = target_set_with(profile_ids);
-        ContractReport::compute(&parsed.spec, &contract, &ts, &crate::bcond::BcondOverrides::default())
+        ContractReport::compute(
+            &parsed.spec,
+            &contract,
+            &ts,
+            &crate::bcond::BcondOverrides::default(),
+        )
     }
 
     const SPEC_WITH_GCC: &str = "\
@@ -504,7 +512,10 @@ must_not_have_buildrequires = []
 "#;
         let r = run_report(SPEC_WITH_GCC, contract, &["rhel-9-x86_64"]);
         assert!(!r.has_violations());
-        assert!(matches!(r.per_profile[0].status, ContractProfileStatus::Pass));
+        assert!(matches!(
+            r.per_profile[0].status,
+            ContractProfileStatus::Pass
+        ));
     }
 
     #[test]
@@ -685,7 +696,10 @@ must_have_buildrequires = ["gcc"]
 "#;
         let r = run_report(SPEC, contract, &["rhel-9-x86_64"]);
         assert!(!r.has_violations(), "rhel profile must see gcc as active");
-        assert!(matches!(r.per_profile[0].status, ContractProfileStatus::Pass));
+        assert!(matches!(
+            r.per_profile[0].status,
+            ContractProfileStatus::Pass
+        ));
     }
 
     #[test]
@@ -851,6 +865,9 @@ B
 must_have_buildrequires = ["maybe-gcc"]
 "#;
         let r = run_report(SPEC, contract, &["rhel-9-x86_64"]);
-        assert!(r.has_violations(), "required-side Skip policy must hide indeterminate dep");
+        assert!(
+            r.has_violations(),
+            "required-side Skip policy must hide indeterminate dep"
+        );
     }
 }

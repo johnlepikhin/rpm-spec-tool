@@ -130,12 +130,15 @@ mod tests {
     /// first dep expression. Easier and more accurate than
     /// hand-assembling AST nodes for `#[non_exhaustive]` types.
     fn first_buildrequires_dep(spec_src: &str) -> rpm_spec::ast::DepExpr {
-        use rpm_spec::ast::{Tag, TagValue};
         use crate::visit::{self, Visit};
+        use rpm_spec::ast::{Tag, TagValue};
 
         struct Grab(Option<rpm_spec::ast::DepExpr>);
         impl<'ast> Visit<'ast> for Grab {
-            fn visit_preamble(&mut self, p: &'ast rpm_spec::ast::PreambleItem<rpm_spec::ast::Span>) {
+            fn visit_preamble(
+                &mut self,
+                p: &'ast rpm_spec::ast::PreambleItem<rpm_spec::ast::Span>,
+            ) {
                 if self.0.is_none() && matches!(p.tag, Tag::BuildRequires) {
                     if let TagValue::Dep(d) = &p.value {
                         self.0 = Some(d.clone());

@@ -115,7 +115,12 @@ pub(super) fn run(opts: ExplainOpts, config_override: Option<&Path>) -> Result<E
     match (opts.line, opts.macro_name.as_deref()) {
         (Some(line), None) => {
             let report = explain_line(&source, line, &resolved, &bcond_overrides);
-            emit(opts.format, &source, &resolved, ExplainPayload::Line(report))
+            emit(
+                opts.format,
+                &source,
+                &resolved,
+                ExplainPayload::Line(report),
+            )
         }
         (None, Some(name)) => {
             // Macro explanation is profile-scoped: it consults the

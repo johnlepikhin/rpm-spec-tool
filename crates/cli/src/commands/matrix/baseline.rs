@@ -80,7 +80,10 @@ fn create(opts: CreateOpts, config_override: Option<&Path>) -> Result<ExitCode> 
         // into place — atomic on POSIX, prevents leaving a partial
         // baseline behind if the process dies mid-write (SIGINT,
         // disk full).
-        let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+        let dir = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
         let tmp = tempfile::NamedTempFile::new_in(dir)
             .with_context(|| format!("creating temp file in {}", dir.display()))?;
         baseline

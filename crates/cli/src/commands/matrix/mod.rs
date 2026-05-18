@@ -115,21 +115,15 @@ pub(crate) fn prepare_matrix(
         eprintln!("error: {e}");
         return Err(MatrixPrepareError::UserInputReported);
     }
-    let (config, base_dir) =
-        crate::commands::config_loader::load_config(config_override)?;
-    let resolved = match resolve_matrix_source(
-        &config,
-        &base_dir,
-        target_set,
-        profiles,
-        &defines.raw,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {e:#}");
-            return Err(MatrixPrepareError::UserInputReported);
-        }
-    };
+    let (config, base_dir) = crate::commands::config_loader::load_config(config_override)?;
+    let resolved =
+        match resolve_matrix_source(&config, &base_dir, target_set, profiles, &defines.raw) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                return Err(MatrixPrepareError::UserInputReported);
+            }
+        };
     Ok(MatrixContext { config, resolved })
 }
 
@@ -166,8 +160,14 @@ pub(crate) fn resolve_matrix_source(
             "resolving matrix from CLI --profiles"
         );
         let target = TargetEntry::from_profiles(profiles.to_vec());
-        resolve_target_set(&section, AD_HOC_TARGET_SET_ID, &target, base_dir, resolve_opts)
-            .with_context(|| "failed to resolve ad-hoc target set from --profiles")
+        resolve_target_set(
+            &section,
+            AD_HOC_TARGET_SET_ID,
+            &target,
+            base_dir,
+            resolve_opts,
+        )
+        .with_context(|| "failed to resolve ad-hoc target set from --profiles")
     }
 }
 

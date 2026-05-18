@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::merge::{IdentityPatch, ListPatch, ProfilePatch};
@@ -16,7 +17,7 @@ use crate::types::{Family, MacroEntry, MacroValue, Provenance, ValidationMode};
 ///
 /// Two parts: the name of the active profile (which can also be
 /// supplied via CLI override) and a map of user-defined named profiles.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 #[non_exhaustive]
 pub struct ProfileSection {
@@ -37,7 +38,7 @@ impl ProfileSection {
 }
 
 /// One entry of `[profiles.<name>]`.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
 #[non_exhaustive]
 pub struct ProfileEntry {
@@ -55,7 +56,7 @@ pub struct ProfileEntry {
     pub groups: Option<ListOverride>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
 #[non_exhaustive]
 pub struct ProfileIdentityOverride {
@@ -67,7 +68,7 @@ pub struct ProfileIdentityOverride {
 
 /// A `[profiles.X.macros]` value. Accepts either a bare string (literal
 /// value) or a table form for parameterised / multi-line macros.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum MacroOverride {
     Literal(String),
@@ -116,7 +117,7 @@ impl MacroOverride {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 #[non_exhaustive]
 pub struct ListOverride {
@@ -137,7 +138,7 @@ pub struct ListOverride {
 /// [`ProfileSection::profiles`]. Resolution failures (unknown profile
 /// name, etc.) are caught by the resolver rather than at TOML parse
 /// time — `[targets.*]` is just data here.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
 #[non_exhaustive]
 pub struct TargetEntry {
@@ -160,7 +161,7 @@ pub struct TargetEntry {
 /// Per-profile override block inside a `[targets.<name>.profile-overrides.<profile>]`
 /// section. Only `defines` for now — future extensions (per-profile
 /// severity tweaks, conditional inclusion) land here.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
 #[non_exhaustive]
 pub struct TargetProfileOverride {
@@ -378,7 +379,10 @@ product_build = "1"
 use_jit = "0"
 "#;
         let entry: TargetEntry = toml::from_str(s).unwrap();
-        assert_eq!(entry.defines.get("product_build").map(String::as_str), Some("1"));
+        assert_eq!(
+            entry.defines.get("product_build").map(String::as_str),
+            Some("1")
+        );
         let override_block = entry
             .profile_overrides
             .get("altlinux-10-e2k")

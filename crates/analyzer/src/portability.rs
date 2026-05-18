@@ -194,9 +194,7 @@ fn status_rank(s: PortabilityStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rpm_spec_profile::{
-        ProfileSection, ResolveOptions, TargetEntry, resolve_target_set,
-    };
+    use rpm_spec_profile::{ProfileSection, ResolveOptions, TargetEntry, resolve_target_set};
     use std::path::Path;
 
     fn target_with(profiles: &[&str]) -> TargetEntry {
@@ -237,10 +235,8 @@ mod tests {
     #[test]
     fn missing_when_no_profile_defines_macro() {
         let set = small_target_set(&["generic", "rhel-9-x86_64"]);
-        let report = PortabilityReport::from_names(
-            &names(&["definitely_not_a_real_macro_xyz"]),
-            &set,
-        );
+        let report =
+            PortabilityReport::from_names(&names(&["definitely_not_a_real_macro_xyz"]), &set);
         assert_eq!(report.entries.len(), 1);
         assert_eq!(report.entries[0].status, PortabilityStatus::Missing);
         assert!(report.entries[0].defined_in.is_empty());
@@ -255,18 +251,22 @@ mod tests {
         let report = PortabilityReport::from_names(&names(&["_bindir"]), &set);
         assert_eq!(report.entries[0].status, PortabilityStatus::Partial);
         assert!(
-            report.entries[0].defined_in.contains(&"rhel-9-x86_64".to_string())
+            report.entries[0]
+                .defined_in
+                .contains(&"rhel-9-x86_64".to_string())
         );
-        assert!(report.entries[0].missing_in.contains(&"generic".to_string()));
+        assert!(
+            report.entries[0]
+                .missing_in
+                .contains(&"generic".to_string())
+        );
     }
 
     #[test]
     fn entries_sorted_missing_first_then_partial_then_portable() {
         let set = small_target_set(&["generic", "rhel-9-x86_64"]);
-        let report = PortabilityReport::from_names(
-            &names(&["_bindir", "definitely_missing_xyz"]),
-            &set,
-        );
+        let report =
+            PortabilityReport::from_names(&names(&["_bindir", "definitely_missing_xyz"]), &set);
         // _bindir → Partial, definitely_missing_xyz → Missing.
         // Sort order: Missing first.
         assert_eq!(report.entries[0].name, "definitely_missing_xyz");
@@ -276,10 +276,8 @@ mod tests {
     #[test]
     fn status_counts_sum_to_total() {
         let set = small_target_set(&["generic", "rhel-9-x86_64"]);
-        let report = PortabilityReport::from_names(
-            &names(&["_bindir", "definitely_missing_xyz"]),
-            &set,
-        );
+        let report =
+            PortabilityReport::from_names(&names(&["_bindir", "definitely_missing_xyz"]), &set);
         assert_eq!(
             report.missing_count() + report.partial_count() + report.portable_count(),
             report.total_used()

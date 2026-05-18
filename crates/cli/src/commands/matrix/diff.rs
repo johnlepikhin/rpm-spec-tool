@@ -26,8 +26,8 @@ use rpm_spec::ast::{Span, SpecFile, Tag, TagValue};
 use rpm_spec_analyzer::dep_walk::{for_each_dep_atom, render_text_with_macros};
 use rpm_spec_analyzer::profile::ResolvedTargetSet;
 use rpm_spec_analyzer::{
-    CoverageReport, IndeterminatePolicy, ProfileBranchSelection, branch_aware::walk_active_preamble,
-    session::parse,
+    CoverageReport, IndeterminatePolicy, ProfileBranchSelection,
+    branch_aware::walk_active_preamble, session::parse,
 };
 use serde::Serialize;
 
@@ -53,7 +53,12 @@ pub struct DiffOpts {
     /// Exactly two profiles to compare. Comma-separated. The diff
     /// model is binary by design — for N-profile classification use
     /// `matrix classes` (when available).
-    #[arg(long = "profiles", value_name = "A,B", value_delimiter = ',', required = true)]
+    #[arg(
+        long = "profiles",
+        value_name = "A,B",
+        value_delimiter = ',',
+        required = true
+    )]
     pub profiles: Vec<String>,
 
     #[command(flatten)]
@@ -83,12 +88,7 @@ pub(super) fn run(opts: DiffOpts, config_override: Option<&Path>) -> Result<Exit
         );
         return Ok(ExitCode::from(2));
     }
-    let ctx = match super::prepare_matrix(
-        config_override,
-        None,
-        &opts.profiles,
-        &opts.defines,
-    ) {
+    let ctx = match super::prepare_matrix(config_override, None, &opts.profiles, &opts.defines) {
         Ok(c) => c,
         Err(e) => return e.into_exit(),
     };
@@ -117,11 +117,7 @@ pub(super) fn run(opts: DiffOpts, config_override: Option<&Path>) -> Result<Exit
         &parsed,
     );
 
-    let coverage = CoverageReport::compute(
-        &parsed.spec,
-        &resolved,
-        &opts.bcond.to_overrides(),
-    );
+    let coverage = CoverageReport::compute(&parsed.spec, &resolved, &opts.bcond.to_overrides());
     let report = DiffReport::compute(&parsed.spec, &coverage, &resolved);
 
     match opts.format {
@@ -186,8 +182,10 @@ impl DiffReport {
         // "this is only on A" when the dep is gated by an
         // undecidable %if would be misleading in PR review; better
         // to under-report under uncertainty.
-        let sel_a = ProfileBranchSelection::compute(coverage, &a.profile_id, IndeterminatePolicy::Skip);
-        let sel_b = ProfileBranchSelection::compute(coverage, &b.profile_id, IndeterminatePolicy::Skip);
+        let sel_a =
+            ProfileBranchSelection::compute(coverage, &a.profile_id, IndeterminatePolicy::Skip);
+        let sel_b =
+            ProfileBranchSelection::compute(coverage, &b.profile_id, IndeterminatePolicy::Skip);
 
         // Single walk per profile collecting every comparable tag in
         // one pass. Each profile pays O(AST), not O(AST × tags).
@@ -285,7 +283,11 @@ fn render_human(
     Ok(())
 }
 
-fn write_bucket<W: std::io::Write>(out: &mut W, label: &str, items: &[String]) -> std::io::Result<()> {
+fn write_bucket<W: std::io::Write>(
+    out: &mut W,
+    label: &str,
+    items: &[String],
+) -> std::io::Result<()> {
     if items.is_empty() {
         writeln!(out, "{label} (0): (none)")?;
     } else {

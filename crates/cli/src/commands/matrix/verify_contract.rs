@@ -15,8 +15,7 @@ use anyhow::{Context, Result};
 use clap::{ArgGroup, Args, ValueEnum};
 use rpm_spec_analyzer::profile::ResolvedTargetSet;
 use rpm_spec_analyzer::{
-    Contract, ContractProfileStatus, ContractReport, ContractViolation,
-    session::parse,
+    Contract, ContractProfileStatus, ContractReport, ContractViolation, session::parse,
 };
 use serde::Serialize;
 
@@ -215,10 +214,7 @@ fn render_human(
 /// rustc requires a fallback. The fallback emits a stable label
 /// rather than a Debug-formatted blob so a future variant produces
 /// a visible UX-grade hint, not opaque struct dump.
-fn render_violation(
-    out: &mut impl std::io::Write,
-    v: &ContractViolation,
-) -> std::io::Result<()> {
+fn render_violation(out: &mut impl std::io::Write, v: &ContractViolation) -> std::io::Result<()> {
     match v {
         ContractViolation::MissingRequired { package } => {
             writeln!(out, "    [missing] {package}")
@@ -230,7 +226,10 @@ fn render_violation(
                 writeln!(out, "    [forbidden] {package} (found as `{found_as}`)")
             }
         }
-        _ => writeln!(out, "    [unknown violation kind — please update rpm-spec-tool]"),
+        _ => writeln!(
+            out,
+            "    [unknown violation kind — please update rpm-spec-tool]"
+        ),
     }
 }
 

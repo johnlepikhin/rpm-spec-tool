@@ -7,6 +7,7 @@ use std::fmt;
 
 use rpm_spec::printer::PrinterConfig;
 use rpm_spec_profile::{MacroVariants, ProfileEntry, TargetEntry};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::Severity;
@@ -74,8 +75,31 @@ impl serde::Serialize for ShCode {
     }
 }
 
+impl JsonSchema for ShCode {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ShCode".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // ShCode (de)serializes through its `SC<n>` string form, so the
+        // schema mirrors that: a string with a SC-prefixed-numeric
+        // pattern. We accept the bare-digits form too because the
+        // deserializer does (`from_str_normalized`).
+        let mut schema = generator.subschema_for::<String>();
+        let obj = schema.ensure_object();
+        obj.insert(
+            "description".to_string(),
+            "Shellcheck rule code in `SC<n>` form (case-insensitive); the bare numeric \
+             form `<n>` is also accepted."
+                .into(),
+        );
+        obj.insert("pattern".to_string(), "^(?i:SC)?[0-9]{1,5}$".into());
+        schema
+    }
+}
+
 /// Whole-file `.rpmspec.toml` schema.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 #[non_exhaustive]
 pub struct Config {
@@ -122,7 +146,7 @@ pub struct Config {
 /// the upstream tool's documented dialect list; constructive parsing
 /// (typed enum vs. free-form string) means typos like `"fish"` are
 /// caught at config-load time instead of producing a runtime warning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum ShellDialect {
@@ -150,7 +174,7 @@ impl ShellDialect {
 /// (`shellcheck = "warn"`); this struct only carries options that have
 /// no natural representation as a severity (binary path, per-SC-code
 /// disable list).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
 #[non_exhaustive]
 pub struct ShellcheckConfig {
@@ -179,7 +203,7 @@ pub struct ShellcheckConfig {
 
 /// Subset that affects the pretty-printer. Mapped onto
 /// [`rpm_spec::printer::PrinterConfig`] at the boundary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
 #[non_exhaustive]
 pub struct FormatConfig {
@@ -335,6 +359,30 @@ fn split_warnings_meta<S: AsRef<str>>(list: &[S]) -> (Vec<String>, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_schema_lists_top_level_sections() {
+        let schema = schemars::schema_for!(Config);
+        let json = serde_json::to_value(&schema).unwrap();
+        let props = json
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("schema must have top-level `properties`");
+        // Spot-check that the schema reflects the public surface; if
+        // someone removes/renames a section, this test reminds them to
+        // update the `config doc` consumers too.
+        for key in [
+            "lints",
+            "format",
+            "shellcheck",
+            "profile",
+            "profiles",
+            "targets",
+            "macros",
+        ] {
+            assert!(props.contains_key(key), "schema missing `{key}`");
+        }
+    }
 
     #[test]
     fn from_toml_round_trip() {

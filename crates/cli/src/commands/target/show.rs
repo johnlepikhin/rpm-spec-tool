@@ -27,7 +27,11 @@ pub(super) fn render(
     entry: &TargetEntry,
     style: &Style,
 ) -> Result<()> {
-    writeln!(out, "{}", style.bold(&format!("# Target set: {}", resolved.id)))?;
+    writeln!(
+        out,
+        "{}",
+        style.bold(&format!("# Target set: {}", resolved.id))
+    )?;
     writeln!(out)?;
     writeln!(
         out,
@@ -35,7 +39,11 @@ pub(super) fn render(
         style.bold(&resolved.targets.len().to_string())
     )?;
     writeln!(out, "  target-wide defines: {}", entry.defines.len())?;
-    writeln!(out, "  per-profile overrides: {}", entry.profile_overrides.len())?;
+    writeln!(
+        out,
+        "  per-profile overrides: {}",
+        entry.profile_overrides.len()
+    )?;
     writeln!(out)?;
 
     writeln!(

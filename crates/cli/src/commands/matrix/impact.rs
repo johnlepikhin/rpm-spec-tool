@@ -143,7 +143,10 @@ pub(super) fn run(opts: ImpactOpts, config_override: Option<&Path>) -> Result<Ex
     let spec_abs = match source.path.canonicalize() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("error: cannot canonicalise spec path {}: {e}", source.path.display());
+            eprintln!(
+                "error: cannot canonicalise spec path {}: {e}",
+                source.path.display()
+            );
             return Ok(ExitCode::from(2));
         }
     };
@@ -347,8 +350,8 @@ fn git_show(git_cmd: &str, repo: &Path, rev: &str, rel_path: &Path) -> Result<St
         // "exists on disk, but not in" (newer-when-present-in-worktree).
         // The git_command helper forces `LC_ALL=C` so these English
         // substrings are stable regardless of operator locale.
-        let file_missing_at_rev = stderr.contains("does not exist")
-            || stderr.contains("exists on disk, but not in");
+        let file_missing_at_rev =
+            stderr.contains("does not exist") || stderr.contains("exists on disk, but not in");
         if file_missing_at_rev {
             tracing::info!(
                 target: "matrix::impact",
@@ -400,7 +403,10 @@ fn render_human(
         }
         // Headline: total added/removed across compared tags.
         let (added_n, removed_n): (usize, usize) = prof.tags.iter().fold((0, 0), |acc, t| {
-            (acc.0 + t.changes.added.len(), acc.1 + t.changes.removed.len())
+            (
+                acc.0 + t.changes.added.len(),
+                acc.1 + t.changes.removed.len(),
+            )
         });
         writeln!(out, "  {}: +{added_n} -{removed_n}", prof.profile_id)?;
         for tag in &prof.tags {
@@ -409,7 +415,12 @@ fn render_human(
             }
             writeln!(out, "    {}", tag.tag_label)?;
             if !tag.changes.added.is_empty() {
-                writeln!(out, "      added ({}): {}", tag.changes.added.len(), tag.changes.added.join(", "))?;
+                writeln!(
+                    out,
+                    "      added ({}): {}",
+                    tag.changes.added.len(),
+                    tag.changes.added.join(", ")
+                )?;
             }
             if !tag.changes.removed.is_empty() {
                 writeln!(

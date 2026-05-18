@@ -32,8 +32,7 @@ use rpm_spec::ast::{
 };
 
 use crate::visit::{
-    Visit, walk_files_conditional, walk_macro_ref, walk_preamble_conditional,
-    walk_top_conditional,
+    Visit, walk_files_conditional, walk_macro_ref, walk_preamble_conditional, walk_top_conditional,
 };
 
 /// Visitor that records every user-meaningful macro name referenced
@@ -144,10 +143,7 @@ impl<'ast> Visit<'ast> for MacroUsageCollector {
         walk_top_conditional(self, node);
     }
 
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         for branch in &node.branches {
             self.record_cond_expr(&branch.expr);
         }
@@ -336,7 +332,10 @@ B
         assert_eq!(macro_name_from_verbatim("%foo"), Some("foo".to_string()));
         assert_eq!(macro_name_from_verbatim("%{foo}"), Some("foo".to_string()));
         assert_eq!(macro_name_from_verbatim("%{?foo}"), Some("foo".to_string()));
-        assert_eq!(macro_name_from_verbatim("%{!?foo}"), Some("foo".to_string()));
+        assert_eq!(
+            macro_name_from_verbatim("%{!?foo}"),
+            Some("foo".to_string())
+        );
         assert_eq!(
             macro_name_from_verbatim("%{?foo:default}"),
             Some("foo".to_string())

@@ -104,7 +104,11 @@ fn render_table(out: &mut impl Write, per_profile: &[ProfileResult]) -> Result<(
         } else {
             "ISSUES"
         };
-        writeln!(out, "  {:<28} {:>6} {:>6} {:>6}", pr.profile_id, deny, warn, parse)?;
+        writeln!(
+            out,
+            "  {:<28} {:>6} {:>6} {:>6}",
+            pr.profile_id, deny, warn, parse
+        )?;
     }
     Ok(())
 }
@@ -245,7 +249,11 @@ impl JsonSpan {
 }
 
 pub fn render_json(items: &[MatrixCheckResult], target_set: &ResolvedTargetSet) -> Result<()> {
-    let profile_names: Vec<&str> = target_set.targets.iter().map(|t| t.profile_id.as_str()).collect();
+    let profile_names: Vec<&str> = target_set
+        .targets
+        .iter()
+        .map(|t| t.profile_id.as_str())
+        .collect();
     let files: Vec<MatrixJsonFile> = items
         .iter()
         .map(|item| MatrixJsonFile {

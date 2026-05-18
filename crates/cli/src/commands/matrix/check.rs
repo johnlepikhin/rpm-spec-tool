@@ -203,10 +203,7 @@ fn load_known_signatures(baseline_path: Option<&Path>) -> Result<HashSet<MatrixS
 /// records — same signature source on both sides, so a recorded
 /// baseline and a fresh run see identical signatures for the same
 /// root-cause finding.
-fn count_deny_findings(
-    result: &MatrixResult,
-    known: &HashSet<MatrixSignature>,
-) -> (bool, bool) {
+fn count_deny_findings(result: &MatrixResult, known: &HashSet<MatrixSignature>) -> (bool, bool) {
     let mut any_deny = false;
     let mut any_new_deny = false;
     for ad in &result.aggregated {
@@ -232,5 +229,3 @@ pub(super) fn config_with_severity_overrides(cached: &Config, opts: &CheckOpts) 
     }
     c
 }
-
-

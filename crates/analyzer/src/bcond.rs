@@ -224,10 +224,7 @@ impl BcondMap {
 // Internals: AST walking
 // ---------------------------------------------------------------------------
 
-fn record_declaration(
-    decl: &BuildCondition<Span>,
-    entries: &mut BTreeMap<String, BcondEntry>,
-) {
+fn record_declaration(decl: &BuildCondition<Span>, entries: &mut BTreeMap<String, BcondEntry>) {
     let with_active: Option<bool> = match decl.style {
         // `%bcond_with FOO` — default OFF (user must pass `--with FOO`
         // to enable). RPM does this by not defining `_with_FOO` until
@@ -310,10 +307,7 @@ fn parse_literal_default(default: Option<&rpm_spec::ast::Text>) -> Option<bool> 
     }
 }
 
-fn collect_from_spec_item(
-    item: &SpecItem<Span>,
-    entries: &mut BTreeMap<String, BcondEntry>,
-) {
+fn collect_from_spec_item(item: &SpecItem<Span>, entries: &mut BTreeMap<String, BcondEntry>) {
     match item {
         SpecItem::BuildCondition(b) => record_declaration(b, entries),
         SpecItem::Conditional(c) => collect_from_top_conditional(c, entries),
@@ -343,7 +337,6 @@ fn collect_from_top_conditional(
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -398,7 +391,10 @@ B
     fn cli_with_enables_disabled_bcond() {
         let m = map_for(SPEC, &["bootstrap"], &[]);
         assert_eq!(m.with_state("bootstrap"), Some(true));
-        let (_, entry) = m.entries().find(|(n, _)| *n == "bootstrap").expect("present");
+        let (_, entry) = m
+            .entries()
+            .find(|(n, _)| *n == "bootstrap")
+            .expect("present");
         assert!(entry.overridden);
     }
 
@@ -438,10 +434,7 @@ B
 
     #[test]
     fn overrides_conflicts_lists_intersection() {
-        let ovr = BcondOverrides::from_cli(
-            &["a".into(), "b".into()],
-            &["b".into(), "c".into()],
-        );
+        let ovr = BcondOverrides::from_cli(&["a".into(), "b".into()], &["b".into(), "c".into()]);
         let conflicts: Vec<&str> = ovr.conflicts().into_iter().collect();
         assert_eq!(conflicts, vec!["b"]);
     }

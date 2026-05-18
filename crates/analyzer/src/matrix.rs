@@ -359,8 +359,14 @@ mod tests {
         let agg = aggregate(&per_profile);
         assert_eq!(agg.len(), 2);
         // RPM055 is on both; RPM062 only on RHEL.
-        let r55 = agg.iter().find(|d| d.diagnostic.lint_id == "RPM055").unwrap();
-        let r62 = agg.iter().find(|d| d.diagnostic.lint_id == "RPM062").unwrap();
+        let r55 = agg
+            .iter()
+            .find(|d| d.diagnostic.lint_id == "RPM055")
+            .unwrap();
+        let r62 = agg
+            .iter()
+            .find(|d| d.diagnostic.lint_id == "RPM062")
+            .unwrap();
         assert_eq!(
             r55.affected_profiles,
             vec!["altlinux-10-x86_64", "rhel-9-x86_64"]
@@ -391,7 +397,9 @@ mod tests {
         let sig = signature(&fake_diag("RPM001", "msg", 0, 1));
         let s = sig.to_string();
         assert_eq!(s.len(), SIGNATURE_HEX_LEN);
-        assert!(s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            s.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
     }
-
 }

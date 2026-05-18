@@ -12,6 +12,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Resolved profile passed to lints via the analyzer's
@@ -54,7 +55,7 @@ pub struct Identity {
 /// Not all marker macros translate 1:1: derivative distributions
 /// (AlmaLinux, Rocky, …) report themselves as [`Family::Rhel`] because the
 /// macros they expose are the RHEL ones plus their own brand marker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum Family {
@@ -426,7 +427,7 @@ impl GroupList {
 /// Three-valued whitelist mode. `Off` is the contract: consumer lints
 /// MUST emit nothing when their list is `Off`. `Warn`/`Strict` differ
 /// only in default severity for the consumer.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ValidationMode {
     #[default]

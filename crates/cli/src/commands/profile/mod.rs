@@ -86,7 +86,8 @@ pub enum Action {
 
 impl Cmd {
     pub fn run(self, color: crate::app::ColorChoice) -> Result<ExitCode> {
-        let (config, base_dir) = crate::commands::config_loader::load_config(self.config.as_deref())?;
+        let (config, base_dir) =
+            crate::commands::config_loader::load_config(self.config.as_deref())?;
         let style = style::Style::new(color);
         let stdout = std::io::stdout();
         let mut out = stdout.lock();
