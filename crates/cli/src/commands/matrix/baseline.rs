@@ -44,21 +44,19 @@ impl Cmd {
 }
 
 fn create(opts: CreateOpts, config_override: Option<&Path>) -> Result<ExitCode> {
-    if let Err(e) = opts.check.defines.validate() {
-        eprintln!("error: {e}");
-        return Ok(ExitCode::from(2));
-    }
-    let (config, base_dir) =
-        crate::commands::config_loader::load_config(config_override)?;
-    let config = check::config_with_severity_overrides(&config, &opts.check);
-
-    let resolved = match check::resolve_matrix(&config, &base_dir, &opts.check) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {e:#}");
-            return Ok(ExitCode::from(2));
-        }
+    let ctx = match crate::commands::matrix::prepare_matrix(
+        config_override,
+        opts.check.target_set.as_deref(),
+        &opts.check.profiles,
+        &opts.check.defines,
+    ) {
+        Ok(c) => c,
+        Err(e) => return e.into_exit(),
     };
+    // Severity overrides mirror the `matrix check` policy so a baseline
+    // captures the same finding set the gating run would see.
+    let config = check::config_with_severity_overrides(&ctx.config, &opts.check);
+    let resolved = ctx.resolved;
 
     let sources = io::read_sources(&opts.check.input.paths)?;
     // Aggregate findings across every input source — the baseline

@@ -3685,6 +3685,362 @@ BuildRequires: rhel-only
 }
 
 // ---------------------------------------------------------------------------
+// matrix expand
+// ---------------------------------------------------------------------------
+
+mod matrix_expand {
+    use super::*;
+
+    /// Spec mixes a literal `%if 0%{?rhel}` (active on rhel,
+    /// inactive on alt) with `%ifarch x86_64` (active on both
+    /// x86_64 profiles). Avoids `>=` arithmetic to keep the
+    /// evaluator on a deterministic path.
+    const EXPAND_SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: Test
+License: MIT
+BuildRequires: gcc
+
+%if 0%{?rhel}
+BuildRequires: rhel-pkg
+%endif
+
+%ifarch x86_64
+%global use_x86 1
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+
+    #[test]
+    fn expand_human_tags_active_and_inactive_branches() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPAND_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "expand must succeed; stderr={stderr}");
+        // rhel-9 section: %if 0%{?rhel} active
+        assert!(
+            stdout.contains("== Profile rhel-9-x86_64 =="),
+            "expected profile header; got:\n{stdout}"
+        );
+        let rhel_section_start = stdout.find("== Profile rhel-9-x86_64 ==").unwrap();
+        let alt_section_start = stdout.find("== Profile altlinux-10-x86_64 ==").unwrap();
+        let rhel_section = &stdout[rhel_section_start..alt_section_start];
+        let alt_section = &stdout[alt_section_start..];
+        assert!(
+            rhel_section.contains("%if 0%{?rhel}  [ACTIVE]"),
+            "rhel section must mark %if as ACTIVE; got:\n{rhel_section}"
+        );
+        assert!(
+            alt_section.contains("%if 0%{?rhel}  [INACTIVE]"),
+            "alt section must mark %if as INACTIVE; got:\n{alt_section}"
+        );
+    }
+
+    #[test]
+    fn expand_json_shape() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPAND_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        assert_eq!(v["target_set"], "<ad-hoc>");
+        let pp = v["per_profile"].as_array().expect("per_profile");
+        assert_eq!(pp.len(), 1);
+        let branches = pp[0]["branches"].as_array().expect("branches");
+        assert_eq!(branches.len(), 2, "expected %if + %ifarch entries");
+        // Branch entries are sorted by line ascending.
+        assert!(branches[0]["line"].as_u64().unwrap() < branches[1]["line"].as_u64().unwrap());
+        // Status discriminator is snake_case.
+        for b in branches {
+            let status = b["status"].as_str().expect("status");
+            assert!(
+                matches!(status, "active" | "inactive" | "indeterminate"),
+                "unexpected status {status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn expand_json_carries_indeterminate_reason() {
+        // Arithmetic-comparison Raw form `>=` lands in the
+        // Indeterminate path of the evaluator. Pin the reason
+        // serialisation so the JSON wire format stays stable.
+        const ARITH: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+
+%if 0%{?rhel} >= 8
+BuildRequires: gcc
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, ARITH).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let branch = &v["per_profile"][0]["branches"][0];
+        assert_eq!(branch["status"], "indeterminate");
+        assert!(
+            branch["indeterminate_reason"].as_str().is_some_and(|s| !s.is_empty()),
+            "expected non-empty indeterminate_reason; got {branch}"
+        );
+    }
+
+    #[test]
+    fn expand_rejects_multiple_specs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let a = dir.path().join("a.spec");
+        let b = dir.path().join("b.spec");
+        std::fs::write(&a, EXPAND_SPEC).expect("a");
+        std::fs::write(&b, EXPAND_SPEC).expect("b");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "rhel-9-x86_64",
+                a.to_str().unwrap(),
+                b.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2);
+        assert!(
+            stderr.contains("exactly one spec"),
+            "expected multi-spec error; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn expand_requires_target_or_profiles_flag() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPAND_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &["matrix", "expand", spec.to_str().unwrap()],
+            None,
+        );
+        assert_ne!(rc, 0);
+        assert!(
+            stderr.contains("--target-set") || stderr.contains("--profiles"),
+            "expected clap to mention required flags; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn expand_preserves_unexpanded_macros_in_body() {
+        // Doc claim: "macros are NOT expanded" — body text passes
+        // through verbatim. Pin so a future renderer "helpfully
+        // expand for the reader" change surfaces here.
+        const SPEC: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+BuildRequires: %{name}-devel
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        assert!(
+            stdout.contains("BuildRequires: %{name}-devel"),
+            "macro must survive verbatim; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn expand_spec_with_no_conditionals_emits_verbatim_no_tags() {
+        const SPEC: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+BuildRequires: gcc
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        // Header rendered, but no [ACTIVE]/[INACTIVE]/[INDETERMINATE]
+        // anywhere since there are no branch directives.
+        assert!(stdout.contains("== Profile rhel-9-x86_64 =="));
+        assert!(
+            !stdout.contains("[ACTIVE]")
+                && !stdout.contains("[INACTIVE]")
+                && !stdout.contains("[INDETERMINATE"),
+            "spec with no conditionals must produce no branch tags; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn expand_json_pins_directive_text_and_envelope() {
+        // Lock the JSON wire-format envelope keys + the `directive`
+        // contract (canonical form from CollectedBranch.display) so
+        // a refactor that changes either surfaces here.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPAND_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        assert_eq!(v["target_set"], "<ad-hoc>");
+        assert_eq!(v["profiles"][0], "rhel-9-x86_64");
+        assert!(
+            v["path"].as_str().unwrap_or("").ends_with("foo.spec"),
+            "path must end with spec filename; got {}",
+            v["path"]
+        );
+        let branches = v["per_profile"][0]["branches"].as_array().expect("branches");
+        // First branch is %if 0%{?rhel} on line 8 of EXPAND_SPEC.
+        assert_eq!(branches[0]["directive"], "%if 0%{?rhel}");
+        assert_eq!(branches[0]["line"], 8);
+    }
+
+    #[test]
+    fn expand_surfaces_parser_diagnostics_for_broken_spec() {
+        const BROKEN: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+
+%if 0%{?rhel}
+BuildRequires: gcc
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BROKEN).expect("spec");
+        let (_rc, _, stderr) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert!(
+            stderr.contains("parser diagnostic")
+                || stderr.contains("recovered AST"),
+            "expected parser-diagnostic banner; got stderr={stderr:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // matrix verify-contract
 // ---------------------------------------------------------------------------
 

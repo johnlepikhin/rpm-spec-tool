@@ -8,7 +8,6 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{ArgGroup, Args, ValueEnum};
 use rpm_spec_analyzer::config::Config;
-use rpm_spec_analyzer::profile::ResolvedTargetSet;
 use rpm_spec_analyzer::{MatrixResult, MatrixSignature, run_matrix};
 
 use crate::app::ColorChoice;
@@ -115,25 +114,20 @@ pub(super) fn run(
     config_override: Option<&Path>,
     color: ColorChoice,
 ) -> Result<ExitCode> {
-    if let Err(e) = opts.defines.validate() {
-        eprintln!("error: {e}");
-        return Ok(ExitCode::from(2));
-    }
-
-    let (cached_config, base_dir) =
-        crate::commands::config_loader::load_config(config_override)?;
-    let config = config_with_severity_overrides(&cached_config, &opts);
-
-    // Resolve the target set up-front: it doesn't depend on the input
-    // source so we pay one cost per matrix run, regardless of the
-    // number of specs.
-    let resolved = match resolve_matrix(&config, &base_dir, &opts) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {e:#}");
-            return Ok(ExitCode::from(2));
-        }
+    let ctx = match super::prepare_matrix(
+        config_override,
+        opts.target_set.as_deref(),
+        &opts.profiles,
+        &opts.defines,
+    ) {
+        Ok(c) => c,
+        Err(e) => return e.into_exit(),
     };
+    // Severity overrides are check-specific (only `matrix check` and
+    // `matrix baseline create` honour `--deny`/`--warn`/`--allow`).
+    // Apply them on top of the shared config the helper returned.
+    let config = config_with_severity_overrides(&ctx.config, &opts);
+    let resolved = ctx.resolved;
 
     // Pre-flight: --fail-on=new without --baseline would silently
     // treat every finding as "new", defeating CI gating. Reject up
@@ -241,23 +235,4 @@ pub(super) fn config_with_severity_overrides(cached: &Config, opts: &CheckOpts) 
     c
 }
 
-/// Resolve either the `--target-set NAME` from config or the ad-hoc
-/// `--profiles a,b,c` list into one [`ResolvedTargetSet`]. The
-/// ArgGroup on [`CheckOpts`] guarantees exactly one is set. Thin
-/// wrapper over the shared [`super::resolve_matrix_source`] helper
-/// so observability stays uniform across `check` / `baseline create`
-/// / `portability`.
-pub(super) fn resolve_matrix(
-    config: &Config,
-    base_dir: &Path,
-    opts: &CheckOpts,
-) -> Result<ResolvedTargetSet> {
-    super::resolve_matrix_source(
-        config,
-        base_dir,
-        opts.target_set.as_deref(),
-        &opts.profiles,
-        &opts.defines.raw,
-    )
-}
 

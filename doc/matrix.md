@@ -531,6 +531,90 @@ Both modes use `--format json` to emit a tagged envelope:
 `value: null` — i.e. the macro is registered but its body can't be
 reduced to a literal at lint time.
 
+## Expand mode
+
+`matrix expand` prints the spec source per profile with each branch
+directive line (`%if` / `%elif` / `%else` / `%ifarch` / `%ifnarch` /
+`%ifos` / `%ifnos`) tagged `[ACTIVE]` / `[INACTIVE]` /
+`[INDETERMINATE: <reason>]` according to the branch evaluator's
+verdict on that profile. It is the static
+analogue of `rpmspec -P`: macros are NOT expanded and inactive
+branch bodies stay in place so the reader can scan past them.
+
+```bash
+rpm-spec-tool matrix expand product.spec \
+  --target-set product-2026q2
+```
+
+`matrix expand` is single-spec only — multi-spec batches across a
+target set with 10+ profiles drown the signal. Reject explicitly
+with exit 2.
+
+### Human output
+
+```text
+# Matrix expand: target set `product-2026q2` (2 profiles)
+## product.spec
+
+== Profile rhel-9-x86_64 ==
+Name:    foo
+Version: 1.0
+…
+%if 0%{?rhel}  [ACTIVE]
+BuildRequires: rhel-pkg
+%endif
+
+== Profile altlinux-10-x86_64 ==
+Name:    foo
+…
+%if 0%{?rhel}  [INACTIVE]
+BuildRequires: rhel-pkg
+%endif
+```
+
+Each profile section is prefixed with `== Profile <id> ==`. Lines
+that are not branch directives render verbatim. Indeterminate
+branches carry the evaluator's reason inline:
+
+```text
+%if 0%{?rhel} >= 8  [INDETERMINATE: unsupported condition shape: arithmetic in Raw condition requires Parsed CondExpr]
+```
+
+### JSON output
+
+```json
+{
+  "target_set": "product-2026q2",
+  "profiles": ["rhel-9-x86_64", "altlinux-10-x86_64"],
+  "path": "product.spec",
+  "per_profile": [
+    {
+      "profile_id": "rhel-9-x86_64",
+      "branches": [
+        {
+          "line": 8,
+          "directive": "%if 0%{?rhel}",
+          "status": "active",
+          "indeterminate_reason": null
+        }
+      ]
+    }
+  ]
+}
+```
+
+The full source text is intentionally NOT serialised — tooling
+consumers can re-read the spec themselves and join on `line`. The
+`status` discriminator uses `snake_case`: `active` / `inactive` /
+`indeterminate`. `indeterminate_reason` is non-null only when
+`status == "indeterminate"`.
+
+### Exit codes
+
+* `0` — always (`expand` is informational, never gates).
+* `2` — usage error: missing `--target-set`/`--profiles`,
+  unresolvable target set, multiple input specs, etc.
+
 ## Contract verification
 
 `matrix verify-contract` gates the spec against per-profile

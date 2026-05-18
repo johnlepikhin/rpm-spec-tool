@@ -64,25 +64,16 @@ pub struct VerifyContractOpts {
 }
 
 pub(super) fn run(opts: VerifyContractOpts, config_override: Option<&Path>) -> Result<ExitCode> {
-    if let Err(e) = opts.defines.validate() {
-        eprintln!("error: {e}");
-        return Ok(ExitCode::from(2));
-    }
-    let (config, base_dir) =
-        crate::commands::config_loader::load_config(config_override)?;
-    let resolved = match super::resolve_matrix_source(
-        &config,
-        &base_dir,
+    let ctx = match super::prepare_matrix(
+        config_override,
         opts.target_set.as_deref(),
         &opts.profiles,
-        &opts.defines.raw,
+        &opts.defines,
     ) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {e:#}");
-            return Ok(ExitCode::from(2));
-        }
+        Ok(c) => c,
+        Err(e) => return e.into_exit(),
     };
+    let resolved = ctx.resolved;
 
     let contract = match load_contract(&opts.contract) {
         Ok(c) => c,

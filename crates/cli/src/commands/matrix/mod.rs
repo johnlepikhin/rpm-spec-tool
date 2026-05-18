@@ -18,11 +18,115 @@ use rpm_spec_analyzer::profile::{
 pub mod baseline;
 pub mod check;
 pub mod coverage;
+pub mod expand;
 pub mod explain;
 pub mod portability;
 pub mod verify_contract;
 
 pub use check::{AD_HOC_TARGET_SET_ID, CheckOpts};
+
+/// Bundle of artifacts every `matrix` subcommand needs before running
+/// its main loop: a resolved config and the fully-resolved target set.
+///
+/// Built by [`prepare_matrix`] so each subcommand goes from "raw CLI
+/// flags" to "ready to compute" in a single call. Replaces the
+/// ~12-line load-validate-resolve dance that was previously copied
+/// into every command.
+///
+/// Visibility: the type itself is `pub(crate)` so the
+/// `commands::matrix::Cmd` dispatcher and its descendants can pass
+/// it around. Fields are tighter — `pub(in crate::commands::matrix)`
+/// — so the only sanctioned way to construct one is through
+/// [`prepare_matrix`], which guarantees the validation prelude ran.
+/// Sibling subcommands (check, baseline, coverage, …) live inside
+/// `crate::commands::matrix::*` and read fields normally.
+#[derive(Debug)]
+pub(crate) struct MatrixContext {
+    pub(in crate::commands::matrix) config: Config,
+    pub(in crate::commands::matrix) resolved: ResolvedTargetSet,
+}
+
+/// Error returned by [`prepare_matrix`]. The two variants encode the
+/// two failure modes distinctly so callers can route user errors to
+/// `ExitCode::from(2)` while internal errors propagate via `anyhow`
+/// for full backtraces.
+///
+/// **Convention**, not a compiler guarantee: every `prepare_matrix`
+/// caller should call [`Self::into_exit`] on the error path. A
+/// caller that manually destructures `UserInputReported` and returns
+/// `Ok(ExitCode::SUCCESS)` would silently mask the diagnostic — the
+/// variant name is the only safeguard.
+#[derive(Debug)]
+pub(crate) enum MatrixPrepareError {
+    /// User-input error (invalid defines, unknown target set, etc).
+    /// The friendly message has **already been printed to stderr**
+    /// inside `prepare_matrix`. The variant name makes the contract
+    /// self-documenting: a caller propagating this without invoking
+    /// [`Self::into_exit`] (e.g. wrapping with `?` into a stricter
+    /// `anyhow::Error` chain) silently loses the diagnostic.
+    UserInputReported,
+    /// Internal I/O or config-parse failure. Carries the anyhow chain
+    /// so the caller's `?` propagation surfaces the full context.
+    Internal(anyhow::Error),
+}
+
+impl From<anyhow::Error> for MatrixPrepareError {
+    fn from(e: anyhow::Error) -> Self {
+        Self::Internal(e)
+    }
+}
+
+impl MatrixPrepareError {
+    /// Convert into the caller's `Result<ExitCode>` return shape.
+    /// `UserInputReported` becomes `Ok(ExitCode::from(2))` (silent —
+    /// the message is already on stderr); `Internal` propagates as
+    /// an anyhow error.
+    pub(crate) fn into_exit(self) -> Result<ExitCode> {
+        match self {
+            Self::UserInputReported => Ok(ExitCode::from(2)),
+            Self::Internal(e) => Err(e),
+        }
+    }
+}
+
+/// Standard prelude every `matrix` subcommand runs:
+///
+/// 1. Validate `--define` syntax.
+/// 2. Load `.rpmspec.toml` from `config_override` or the cwd walk-up.
+/// 3. Resolve `--target-set NAME` / `--profiles a,b,c` into one
+///    [`ResolvedTargetSet`] via [`resolve_matrix_source`].
+///
+/// Returns the populated context on success or a typed
+/// [`MatrixPrepareError`] on failure — callers fold both error
+/// variants into their `Result<ExitCode>` return via
+/// [`MatrixPrepareError::into_exit`].
+pub(crate) fn prepare_matrix(
+    config_override: Option<&Path>,
+    target_set: Option<&str>,
+    profiles: &[String],
+    defines: &crate::app::MacroDefinesArg,
+) -> std::result::Result<MatrixContext, MatrixPrepareError> {
+    if let Err(e) = defines.validate() {
+        eprintln!("error: {e}");
+        return Err(MatrixPrepareError::UserInputReported);
+    }
+    let (config, base_dir) =
+        crate::commands::config_loader::load_config(config_override)?;
+    let resolved = match resolve_matrix_source(
+        &config,
+        &base_dir,
+        target_set,
+        profiles,
+        &defines.raw,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e:#}");
+            return Err(MatrixPrepareError::UserInputReported);
+        }
+    };
+    Ok(MatrixContext { config, resolved })
+}
 
 /// Resolve a matrix source — either a config-defined `[targets.<name>]`
 /// set or an ad-hoc `--profiles a,b,c` list — into one
@@ -97,6 +201,9 @@ pub enum Action {
     /// must-have / must-not-have BuildRequires for every member
     /// profile of a target set. Fails on any violation.
     VerifyContract(verify_contract::VerifyContractOpts),
+    /// Print the spec source per profile with each `%if`/`%ifarch`
+    /// directive line tagged `[ACTIVE]`/`[INACTIVE]`/`[INDETERMINATE]`.
+    Expand(expand::ExpandOpts),
 }
 
 impl Cmd {
@@ -108,6 +215,7 @@ impl Cmd {
             Action::Coverage(opts) => coverage::run(opts, self.config.as_deref()),
             Action::Explain(opts) => explain::run(opts, self.config.as_deref()),
             Action::VerifyContract(opts) => verify_contract::run(opts, self.config.as_deref()),
+            Action::Expand(opts) => expand::run(opts, self.config.as_deref()),
         }
     }
 }
