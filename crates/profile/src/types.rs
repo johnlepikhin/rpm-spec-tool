@@ -153,7 +153,16 @@ impl MacroRegistry {
     /// recursive expansion. Returns `None` if any reference fails to
     /// resolve, since a partially-expanded path would yield wrong
     /// caller decisions (e.g. wrong lint suggestions).
+    ///
+    /// Only plain `%name` and unconditional `%{name}` references are
+    /// resolved here. Conditional (`%{?name}`, `%{!?name}`),
+    /// defaulted (`%{name:default}`), shell (`%(...)`), arithmetic
+    /// (`%[...]`), and any other macro token returns `None` — those
+    /// forms need runtime expansion semantics not available at lint
+    /// time. `%%` is preserved as a literal `%` in the output.
     fn expand_body(&self, body: &str, depth: u8) -> Option<String> {
+        use crate::macro_lexer::{MacroKind, scan_macro_ref};
+
         if body.len() > MAX_EXPAND_BODY {
             tracing::debug!(
                 body_len = body.len(),
@@ -195,42 +204,29 @@ impl MacroRegistry {
                 i += 1;
                 continue;
             }
-            // `%%` is a literal percent.
-            if bytes.get(i + 1) == Some(&b'%') {
-                out.push('%');
-                i += 2;
-                continue;
+            // Every `%` byte must scan to a well-formed token; a
+            // malformed `%` (lone trailing, unterminated `%{`, `%`
+            // followed by a non-ident char, …) is conservatively
+            // treated as unresolvable.
+            let r = scan_macro_ref(bytes, i)?;
+            match r.kind {
+                MacroKind::LiteralPercent => out.push('%'),
+                MacroKind::Plain
+                | MacroKind::Braced {
+                    conditional: None,
+                    has_default: false,
+                } => {
+                    let expanded = self.expand_to_literal(r.name, depth)?;
+                    out.push_str(&expanded);
+                }
+                // Conditional refs, defaulted refs, shell/arithmetic:
+                // depend on whether the macro is defined / on runtime
+                // semantics — can't statically reduce.
+                MacroKind::Braced { .. }
+                | MacroKind::ShellExpansion
+                | MacroKind::ArithmeticExpr => return None,
             }
-            let (name, advance) = match bytes.get(i + 1) {
-                // `%{name}` — brace-delimited.
-                Some(&b'{') => {
-                    let close = body[i + 2..].find('}').map(|n| i + 2 + n)?;
-                    let inner = &body[i + 2..close];
-                    // Reject `?name` / `!?name` conditional refs and
-                    // `name:default` defaulting — those depend on
-                    // whether the macro is defined; can't statically
-                    // reduce.
-                    if inner.starts_with('?') || inner.starts_with('!') || inner.contains(':') {
-                        return None;
-                    }
-                    (inner, close + 1 - i)
-                }
-                // `%name` — read while ident bytes.
-                Some(&b) if b.is_ascii_alphabetic() || b == b'_' => {
-                    let start = i + 1;
-                    let mut end = start;
-                    while end < bytes.len()
-                        && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_')
-                    {
-                        end += 1;
-                    }
-                    (&body[start..end], end - i)
-                }
-                _ => return None,
-            };
-            let expanded = self.expand_to_literal(name, depth)?;
-            out.push_str(&expanded);
-            i += advance;
+            i = r.full_range.end;
         }
         Some(out)
     }
@@ -388,6 +384,17 @@ pub struct ArchInfo {
     /// Raw `optflags` line from `RPMRC VALUES:` — keeps `%{…}` refs so
     /// callers can resolve them against the macro registry themselves.
     pub optflags_template: Option<String>,
+    /// Full set of target architectures the profile may ever produce
+    /// across all builds (e.g. all primary arches of a distribution
+    /// family). Distinct from [`Self::compatible_archs`], which is the
+    /// host-compat list for *one* build. Populated by per-distro
+    /// builtin / override layers; empty when unknown.
+    ///
+    /// Consumed by arch-domain lints (RPM440/RPM441/RPM453) to decide
+    /// whether an `%ifarch <list>` covers the whole universe. Lints
+    /// must treat an empty set as "unknown" and bail out conservatively.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub target_arch_universe: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

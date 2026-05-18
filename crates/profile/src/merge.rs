@@ -37,6 +37,9 @@ pub struct ArchPatch {
     pub build_os: Option<String>,
     pub compatible_archs: Option<Vec<String>>,
     pub optflags_template: Option<String>,
+    /// When `Some`, replaces the profile's
+    /// [`ArchInfo::target_arch_universe`] set wholesale (no merge).
+    pub target_arch_universe: Option<std::collections::BTreeSet<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +50,21 @@ pub struct ListPatch {
 }
 
 impl Profile {
+    /// Return the profile's target arch universe (set of all
+    /// architectures this profile may ever produce across all builds)
+    /// when populated, else `None`.
+    ///
+    /// Consumed by arch-domain lints (RPM440/RPM441/RPM453). Treat
+    /// `None` as "unknown" — never assume an arch list is exhaustive
+    /// without an explicit profile-side declaration.
+    pub fn arch_universe(&self) -> Option<&std::collections::BTreeSet<String>> {
+        if self.arch.target_arch_universe.is_empty() {
+            None
+        } else {
+            Some(&self.arch.target_arch_universe)
+        }
+    }
+
     /// Apply `patch` in-place. Returns `self` for chaining.
     pub fn apply(&mut self, patch: ProfilePatch) -> &mut Self {
         let ProfilePatch {
@@ -92,6 +110,9 @@ impl Profile {
         if let Some(v) = arch.optflags_template {
             self.arch.optflags_template = Some(v);
         }
+        if let Some(v) = arch.target_arch_universe {
+            self.arch.target_arch_universe = v;
+        }
 
         if let Some(lp) = licenses {
             apply_list_patch(&mut self.licenses.allowed, &mut self.licenses.mode, lp);
@@ -134,6 +155,29 @@ mod tests {
         // pick a family — distinct from `Some(Family::Generic)`.
         assert!(p.identity.family.is_none());
         assert!(p.layers.is_empty());
+    }
+
+    #[test]
+    fn arch_universe_is_none_until_populated() {
+        let p = Profile::default();
+        assert!(p.arch_universe().is_none());
+    }
+
+    #[test]
+    fn arch_universe_returns_populated_set() {
+        use std::collections::BTreeSet;
+        let mut universe = BTreeSet::new();
+        universe.insert("x86_64".to_string());
+        universe.insert("aarch64".to_string());
+        let mut p = Profile::default();
+        p.apply(ProfilePatch {
+            arch: ArchPatch {
+                target_arch_universe: Some(universe.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert_eq!(p.arch_universe(), Some(&universe));
     }
 
     #[test]

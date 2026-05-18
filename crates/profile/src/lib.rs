@@ -16,15 +16,19 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
-// TODO(pre-1.0): document the public surface and remove this allow.
+// TODO(pre-1.0): document the public surface and remove this expect.
 // Currently 103 items lack `///` doc comments — chiefly per-rule
 // structs in `rules/` and per-layer config types. Tracked separately
 // from publication.
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "pre-1.0: 103 items lack /// — track and reduce; expect form fires loudly when the backlog reaches zero"
+)]
 
 pub mod autodetect;
 pub mod builtin;
 pub mod config_layer;
+pub mod macro_lexer;
 pub mod merge;
 pub mod overrides;
 pub mod resolve;
