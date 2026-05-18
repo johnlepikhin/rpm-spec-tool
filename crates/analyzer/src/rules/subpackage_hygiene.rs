@@ -147,6 +147,10 @@ fn canonical_subpkg_ref(main: Option<&str>, sr: &SubpkgRef) -> Option<String> {
 // RPM123 — package-without-description
 // =====================================================================
 
+/// A `%package` subpackage was declared but has no matching `%files` section; no payload will be assembled for it.
+///
+/// See [`PACKAGE_WITHOUT_FILES_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct PackageWithoutDescription {
     diagnostics: Vec<Diagnostic>,
@@ -204,6 +208,10 @@ impl Lint for PackageWithoutDescription {
 // RPM124 — package-without-files
 // =====================================================================
 
+/// A `%package` subpackage was declared but has no matching `%files` section; no payload will be assembled for it.
+///
+/// See [`PACKAGE_WITHOUT_FILES_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct PackageWithoutFiles {
     diagnostics: Vec<Diagnostic>,

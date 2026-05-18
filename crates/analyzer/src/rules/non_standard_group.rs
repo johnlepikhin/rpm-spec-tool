@@ -31,6 +31,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// Group: must name a group from the profile's allow-list.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct NonStandardGroup {
     diagnostics: Vec<Diagnostic>,

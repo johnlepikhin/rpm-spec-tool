@@ -20,12 +20,15 @@
 
 use std::collections::BTreeSet;
 
-use rpm_spec::ast::{CondExpr, Conditional, Span, Text, TextSegment};
+use rpm_spec::ast::{
+    CondExpr, Conditional, FilesContent, PreambleContent, Span, SpecItem, Text, TextSegment,
+};
 
 use crate::rules::boolean_dnf::{
     AtomTable, Cube, Dnf, Literal, MAX_ATOMS_FOR_TAUTOLOGY, distribute_and, eval_cube,
     is_contradiction, to_dnf,
 };
+use crate::visit::Visit;
 
 /// Hard cap on nested-`%if` depth before we bail out of path-condition
 /// analysis. Real-world specs never exceed a handful of levels; this
@@ -228,6 +231,44 @@ pub(crate) trait BranchAnalyser {
     fn on_post_chain(&mut self, _node_anchor: Span, _has_else: bool, _prior: &[&CondExpr<Span>]) {}
 }
 
+/// Recurse into a top-level `%if` body. Generic body-walker shared by
+/// every Phase 8b conditional-analysis rule — each rule passes this
+/// (or its sibling [`walk_preamble_body`] / [`walk_files_body`]) as
+/// the `walk_body` argument to [`analyse_conditional`] or to a local
+/// `walk_conditional` helper.
+///
+/// The function is generic over any visitor; Rust monomorphises it
+/// per rule type so the call site can pass `walk_top_body` directly
+/// as a `fn(&mut A, &[SpecItem<Span>])` pointer.
+pub(crate) fn walk_top_body<A>(slf: &mut A, body: &[SpecItem<Span>])
+where
+    A: for<'a> Visit<'a>,
+{
+    for item in body {
+        slf.visit_item(item);
+    }
+}
+
+/// Recurse into a preamble-context `%if` body. See [`walk_top_body`].
+pub(crate) fn walk_preamble_body<A>(slf: &mut A, body: &[PreambleContent<Span>])
+where
+    A: for<'a> Visit<'a>,
+{
+    for c in body {
+        slf.visit_preamble_content(c);
+    }
+}
+
+/// Recurse into a `%files`-context `%if` body. See [`walk_top_body`].
+pub(crate) fn walk_files_body<A>(slf: &mut A, body: &[FilesContent<Span>])
+where
+    A: for<'a> Visit<'a>,
+{
+    for c in body {
+        slf.visit_files_content(c);
+    }
+}
+
 /// Walk a [`Conditional`] block with full path-condition tracking.
 /// Each rule's `visit_*_conditional` impl delegates here, supplying
 /// the body-walker for its concrete branch type.
@@ -271,6 +312,47 @@ pub(crate) fn analyse_conditional<A, B>(
         walk_body(rule, els);
         rule.pc().pop();
     }
+}
+
+/// `true` when `path ⊨ {lit}` — every assignment satisfying the path
+/// also makes `lit` true. Wraps [`path_implies`] for a single literal.
+/// `None` propagates uncertainty (atom-budget overflow).
+pub(crate) fn path_implies_literal(path: &Dnf, lit: Literal, atom_count: usize) -> Option<bool> {
+    let mut singleton = Dnf::new();
+    let mut cube = Cube::new();
+    cube.insert(lit);
+    singleton.insert(cube);
+    path_implies(path, &singleton, atom_count)
+}
+
+/// Split `cube` into `(kept, dropped)` by asking, for each literal `L`,
+/// whether `path ⊨ L`. Literals proved by the path are dropped — they
+/// are redundant inside the cube. The remainder is the simplified cube.
+///
+/// Returns `None` only when the underlying solver can't decide
+/// (atom-budget overflow); callers must treat `None` as "don't know,
+/// don't fire". When `path` is UNSAT (`path.is_empty()`), every literal
+/// is vacuously implied and the kept cube is empty — callers should
+/// detect unsat paths separately (RPM113 covers that).
+pub(crate) fn subtract_implied_literals(
+    cube: &Cube,
+    path: &Dnf,
+    atom_count: usize,
+) -> Option<(Cube, Vec<Literal>)> {
+    if atom_count > MAX_ATOMS_FOR_TAUTOLOGY {
+        return None;
+    }
+    let mut kept = Cube::new();
+    let mut dropped = Vec::new();
+    for &lit in cube {
+        match path_implies_literal(path, lit, atom_count)? {
+            true => dropped.push(lit),
+            false => {
+                kept.insert(lit);
+            }
+        }
+    }
+    Some((kept, dropped))
 }
 
 /// `path ⊨ branch` — every assignment satisfying any cube of `path`
@@ -435,5 +517,62 @@ mod tests {
         pc.push(None);
         assert!(pc.current().is_none());
         assert!(pc.is_tainted());
+    }
+
+    #[test]
+    fn subtract_implied_literals_drops_redundant_conjunct() {
+        // Under path `A`, the cube `A && B` simplifies to `B`.
+        let a = parse_if("A");
+        let a_and_b = parse_if("A && B");
+        let mut atoms = AtomTable::new();
+        let path = cond_to_dnf(&a, &mut atoms, false).unwrap();
+        let cube_dnf = cond_to_dnf(&a_and_b, &mut atoms, false).unwrap();
+        assert_eq!(cube_dnf.len(), 1);
+        let cube = cube_dnf.into_iter().next().unwrap();
+        let (kept, dropped) = subtract_implied_literals(&cube, &path, atoms.len()).unwrap();
+        assert_eq!(kept.len(), 1, "kept={kept:?}");
+        assert_eq!(dropped.len(), 1, "dropped={dropped:?}");
+        assert!(!dropped[0].negated, "the dropped literal should be A+");
+    }
+
+    #[test]
+    fn subtract_implied_literals_keeps_independent_conjunct() {
+        // Under path `A`, the cube `C && D` is unchanged.
+        let a = parse_if("A");
+        let c_and_d = parse_if("C && D");
+        let mut atoms = AtomTable::new();
+        let path = cond_to_dnf(&a, &mut atoms, false).unwrap();
+        let cube_dnf = cond_to_dnf(&c_and_d, &mut atoms, false).unwrap();
+        let cube = cube_dnf.into_iter().next().unwrap();
+        let (kept, dropped) = subtract_implied_literals(&cube, &path, atoms.len()).unwrap();
+        assert_eq!(kept.len(), 2, "kept={kept:?}");
+        assert!(dropped.is_empty(), "dropped={dropped:?}");
+    }
+
+    #[test]
+    fn subtract_implied_literals_handles_negation_in_path() {
+        // Under path `!A`, the cube `!A && B` simplifies to `B`.
+        let not_a = parse_if("!A");
+        let not_a_and_b = parse_if("!A && B");
+        let mut atoms = AtomTable::new();
+        let path = cond_to_dnf(&not_a, &mut atoms, false).unwrap();
+        let cube_dnf = cond_to_dnf(&not_a_and_b, &mut atoms, false).unwrap();
+        let cube = cube_dnf.into_iter().next().unwrap();
+        let (kept, dropped) = subtract_implied_literals(&cube, &path, atoms.len()).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(dropped.len(), 1);
+        assert!(dropped[0].negated, "the dropped literal should be A-");
+    }
+
+    #[test]
+    fn path_implies_literal_negative_case() {
+        // Path `A` does NOT imply `B`.
+        let a = parse_if("A");
+        let b_lit = parse_if("B");
+        let mut atoms = AtomTable::new();
+        let path = cond_to_dnf(&a, &mut atoms, false).unwrap();
+        let b_dnf = cond_to_dnf(&b_lit, &mut atoms, false).unwrap();
+        let lit = *b_dnf.iter().next().unwrap().iter().next().unwrap();
+        assert_eq!(path_implies_literal(&path, lit, atoms.len()), Some(false));
     }
 }

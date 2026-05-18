@@ -31,6 +31,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// Each unconstrained Obsoletes entry should be matched by a Provides of the same name to keep upgrades smooth.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ObsoleteWithoutProvides {
     diagnostics: Vec<Diagnostic>,
@@ -144,11 +148,17 @@ fn walk_atoms<'a>(expr: &'a DepExpr, out: &mut Vec<&'a rpm_spec::ast::DepAtom>) 
             }
             // Forced by `#[non_exhaustive]` on a foreign-crate enum;
             // see comment above. Re-audit on every `rpm-spec` bump.
+            // NOTE: kept as `#[allow]` (not `#[expect]`) because the wildcard
+            // arm is reachable today — `#[non_exhaustive]` makes it valid for
+            // current rustc, so `#[expect(unreachable_patterns)]` would emit
+            // `unfulfilled_lint_expectations`.
             #[allow(unreachable_patterns)]
             _ => {}
         },
         // Forced by `#[non_exhaustive]` on a foreign-crate enum;
         // see comment above. Re-audit on every `rpm-spec` bump.
+        // NOTE: kept as `#[allow]` (not `#[expect]`) because the wildcard
+        // arm is reachable today — see explanation on the inner arm above.
         #[allow(unreachable_patterns)]
         _ => {}
     }
@@ -175,13 +185,10 @@ impl Lint for ObsoleteWithoutProvides {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = ObsoleteWithoutProvides::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<ObsoleteWithoutProvides>(src)
     }
 
     #[test]

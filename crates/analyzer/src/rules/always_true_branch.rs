@@ -17,7 +17,10 @@ use rpm_spec::ast::{Conditional, FilesContent, PreambleContent, Span, SpecItem};
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
 use crate::lint::{Lint, LintMetadata};
 use crate::rules::boolean_dnf::Dnf;
-use crate::rules::path_cond::{BranchAnalyser, PathConditions, analyse_conditional, path_implies};
+use crate::rules::path_cond::{
+    BranchAnalyser, PathConditions, analyse_conditional, path_implies, walk_files_body,
+    walk_preamble_body, walk_top_body,
+};
 use crate::visit::Visit;
 
 pub static ALWAYS_TRUE_METADATA: LintMetadata = LintMetadata {
@@ -29,6 +32,10 @@ pub static ALWAYS_TRUE_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// `%if` branch is implied by the enclosing path-condition; the test is redundant and the body always runs.
+///
+/// See [`ALWAYS_TRUE_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct AlwaysTrueBranch {
     diagnostics: Vec<Diagnostic>,
@@ -69,22 +76,6 @@ impl AlwaysTrueBranch {
     }
 }
 
-fn walk_top_body(slf: &mut AlwaysTrueBranch, body: &[SpecItem<Span>]) {
-    for item in body {
-        slf.visit_item(item);
-    }
-}
-fn walk_preamble_body(slf: &mut AlwaysTrueBranch, body: &[PreambleContent<Span>]) {
-    for c in body {
-        slf.visit_preamble_content(c);
-    }
-}
-fn walk_files_body(slf: &mut AlwaysTrueBranch, body: &[FilesContent<Span>]) {
-    for c in body {
-        slf.visit_files_content(c);
-    }
-}
-
 impl BranchAnalyser for AlwaysTrueBranch {
     fn pc(&mut self) -> &mut PathConditions {
         &mut self.pc
@@ -119,13 +110,10 @@ impl Lint for AlwaysTrueBranch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = AlwaysTrueBranch::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<AlwaysTrueBranch>(src)
     }
 
     #[test]

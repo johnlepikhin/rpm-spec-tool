@@ -124,10 +124,14 @@ pub static HOIST_PREFIX_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// All branches of this conditional start with the same item(s); lift them above the block.
+///
+/// See [`HOIST_PREFIX_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct HoistCommonPrefix {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
 }
 
 impl HoistCommonPrefix {
@@ -157,7 +161,7 @@ impl HoistCommonPrefix {
 
 impl HoistCommonPrefix {
     fn check<B: HasBodySpan>(&mut self, node: &Conditional<Span, B>) {
-        let Some(source) = self.source.clone() else {
+        let Some(source) = self.source.as_deref() else {
             return;
         };
         let bodies = all_bodies(node);
@@ -165,7 +169,7 @@ impl HoistCommonPrefix {
         if bodies.len() < 2 {
             return;
         }
-        let k = common_prefix_len::<B>(&bodies, &source);
+        let k = common_prefix_len::<B>(&bodies, source);
         if k == 0 || !at_least_one_item_remains::<B>(&bodies, k) {
             return;
         }
@@ -195,8 +199,8 @@ impl Lint for HoistCommonPrefix {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
     }
 }
 
@@ -212,10 +216,14 @@ pub static HOIST_SUFFIX_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// All branches of this conditional end with the same item(s); lift them below the block.
+///
+/// See [`HOIST_SUFFIX_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct HoistCommonSuffix {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
 }
 
 impl HoistCommonSuffix {
@@ -245,14 +253,14 @@ impl HoistCommonSuffix {
 
 impl HoistCommonSuffix {
     fn check<B: HasBodySpan>(&mut self, node: &Conditional<Span, B>) {
-        let Some(source) = self.source.clone() else {
+        let Some(source) = self.source.as_deref() else {
             return;
         };
         let bodies = all_bodies(node);
         if bodies.len() < 2 {
             return;
         }
-        let k = common_suffix_len::<B>(&bodies, &source);
+        let k = common_suffix_len::<B>(&bodies, source);
         if k == 0 || !at_least_one_item_remains::<B>(&bodies, k) {
             return;
         }
@@ -282,8 +290,8 @@ impl Lint for HoistCommonSuffix {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
     }
 }
 
@@ -294,7 +302,7 @@ mod tests {
 
     fn run<L: Lint>(src: &str, mut lint: L) -> Vec<Diagnostic> {
         let outcome = parse(src);
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
         lint.visit_spec(&outcome.spec);
         lint.take_diagnostics()
     }

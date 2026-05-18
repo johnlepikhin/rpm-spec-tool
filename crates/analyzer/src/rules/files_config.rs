@@ -38,6 +38,10 @@ pub static ETC_NOT_CONFIG_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// A file under `/etc` (or `%{_sysconfdir}`) is listed without `%config`. RPM will overwrite local edits on every upgrade — mark it as `%config(noreplace)`.
+///
+/// See [`ETC_NOT_CONFIG_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct EtcFileNotConfig {
     diagnostics: Vec<Diagnostic>,
@@ -102,6 +106,10 @@ pub static CONFIG_UNDER_USR_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// `%config` is applied to a path under `/usr`. The FHS treats `/usr` as read-only — configuration belongs in `/etc`.
+///
+/// See [`CONFIG_UNDER_USR_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ConfigUnderUsr {
     diagnostics: Vec<Diagnostic>,
@@ -167,6 +175,10 @@ pub static PLAIN_CONFIG_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// `%config` without `noreplace` is risky — on upgrade rpm may overwrite local edits with the package default. Either switch to `%config(noreplace)` or leave a comment explaining why plain `%config` is intended.
+///
+/// See [`PLAIN_CONFIG_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct PlainConfigWithoutComment {
     diagnostics: Vec<Diagnostic>,

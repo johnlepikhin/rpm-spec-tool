@@ -108,20 +108,61 @@ struct MacroBinding {
 #[derive(Debug, Clone, Default)]
 struct MacroTable {
     map: HashMap<String, MacroBinding>,
+    /// Stack of undo logs, one per open scope. Each entry records the
+    /// prior binding for a key the current scope mutated, so
+    /// [`Self::end_scope`] can roll the table back without cloning the
+    /// whole map per `%if` branch.
+    ///
+    /// `Vec<Vec<…>>` rather than a single flat log because scopes nest:
+    /// a `%if` branch may itself contain a nested `%if`, and the inner
+    /// branch's undo must not bleed into the outer branch's.
+    scopes: Vec<Vec<(String, Option<MacroBinding>)>>,
 }
 
 impl MacroTable {
     fn insert(&mut self, m: &MacroDef<Span>) {
-        if matches!(m.kind, MacroDefKind::Undefine) {
-            self.map.remove(&m.name);
-            return;
+        let prev = if matches!(m.kind, MacroDefKind::Undefine) {
+            self.map.remove(&m.name)
+        } else {
+            let value = literal_from_body(&m.body);
+            self.map.insert(m.name.clone(), MacroBinding { value })
+        };
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.push((m.name.clone(), prev));
         }
-        let value = literal_from_body(&m.body);
-        self.map.insert(m.name.clone(), MacroBinding { value });
     }
 
     fn get(&self, name: &str) -> Option<&MacroBinding> {
         self.map.get(name)
+    }
+
+    /// Open an undo scope. Subsequent [`Self::insert`] calls record the
+    /// prior binding into this scope's log. Calls must be paired with
+    /// [`Self::end_scope`]. Replaces the previous `table.clone()` /
+    /// `*table = snap` pattern — O(mutations) rather than O(table size)
+    /// per `%if` branch.
+    fn begin_scope(&mut self) {
+        self.scopes.push(Vec::new());
+    }
+
+    /// Close the innermost scope, replaying its undo log in reverse so
+    /// each key is restored to the binding it held when the scope opened.
+    fn end_scope(&mut self) {
+        let Some(scope) = self.scopes.pop() else {
+            return;
+        };
+        // Replay in reverse so multiple writes to the same key restore
+        // the binding that pre-dated the *first* write within the scope.
+        for (name, prev) in scope.into_iter().rev() {
+            match prev {
+                Some(binding) => {
+                    self.map.insert(name, binding);
+                }
+                None => {
+                    self.map.remove(&name);
+                }
+            }
+        }
     }
 }
 
@@ -248,6 +289,26 @@ fn contains_macro_ref(expr: &ExprAst<Span>) -> bool {
     }
 }
 
+/// `true` when `expr` contains at least one `Macro` node whose name is
+/// bound in `table`. Used to short-circuit `fold_expr` — without a
+/// substitutable macro the recursive tree rebuild is pure allocation
+/// noise (the folded tree is structurally identical to the input and
+/// can never satisfy the constant-truth predicates).
+fn has_substitutable_macro(expr: &ExprAst<Span>, table: &MacroTable) -> bool {
+    match expr {
+        ExprAst::Macro { text, .. } => parse_macro_ref(text)
+            .map(|(_, name)| table.get(&name).is_some())
+            .unwrap_or(false),
+        ExprAst::Paren { inner, .. } | ExprAst::Not { inner, .. } => {
+            has_substitutable_macro(inner, table)
+        }
+        ExprAst::Binary { lhs, rhs, .. } => {
+            has_substitutable_macro(lhs, table) || has_substitutable_macro(rhs, table)
+        }
+        _ => false,
+    }
+}
+
 // =====================================================================
 // RPM117 — macro-defined-makes-if-trivial
 // =====================================================================
@@ -268,6 +329,10 @@ pub static MACRO_FOLDS_IF_TRIVIAL_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// After substituting macro values defined earlier in the spec, the `%if` expression reduces to a constant; the test is redundant.
+///
+/// See [`MACRO_FOLDS_IF_TRIVIAL_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct MacroFoldsIfTrivial {
     diagnostics: Vec<Diagnostic>,
@@ -304,14 +369,14 @@ fn walk_conditional_117(
 ) {
     for branch in &cond.branches {
         check_branch_117(&branch.expr, branch.data, table, out);
-        let snap = table.clone();
+        table.begin_scope();
         walk_items_117(&branch.body, table, out);
-        *table = snap;
+        table.end_scope();
     }
     if let Some(els) = &cond.otherwise {
-        let snap = table.clone();
+        table.begin_scope();
         walk_items_117(els, table, out);
-        *table = snap;
+        table.end_scope();
     }
 }
 
@@ -323,6 +388,13 @@ fn check_branch_117(
 ) {
     let CondExpr::Parsed(ast) = expr else { return };
     if !contains_macro_ref(ast) {
+        return;
+    }
+    // Skip the recursive tree rebuild when nothing in `table` could
+    // substitute. Without a substitutable macro the folded tree is
+    // structurally identical to `ast` and can never satisfy the
+    // truthy/falsy predicates, so we can bail before allocating.
+    if !has_substitutable_macro(ast, table) {
         return;
     }
     let folded = fold_expr(ast, table);
@@ -443,6 +515,10 @@ pub static UNUSED_CONDITIONAL_GLOBAL_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// `%global` macro is defined but never read elsewhere in the spec — may indicate a leftover or unintended dead code.
+///
+/// See [`UNUSED_CONDITIONAL_GLOBAL_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct UnusedConditionalGlobal {
     diagnostics: Vec<Diagnostic>,
@@ -769,6 +845,45 @@ mod tests {
     }
 
     #[test]
+    fn macro_table_scope_restores_prior_bindings() {
+        // FOO is defined outside the scope; the scope rebinds it and
+        // also adds BAR. After end_scope, FOO must be restored to its
+        // original value and BAR must be gone.
+        let outcome =
+            parse("Name: x\n%global FOO 1\n%global FOO 2\n%global BAR 3\n%undefine FOO\n");
+        // Extract the four MacroDefs in order.
+        let defs: Vec<&MacroDef<Span>> = outcome
+            .spec
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                SpecItem::MacroDef(m) => Some(m),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(defs.len(), 4);
+        let mut t = MacroTable::default();
+        // Outer: define FOO=1.
+        t.insert(defs[0]);
+        assert!(matches!(
+            t.get("FOO").unwrap().value,
+            Some(MacroLiteral::Integer(1))
+        ));
+        // Open a scope and mutate FOO twice + define + undefine.
+        t.begin_scope();
+        t.insert(defs[1]); // FOO=2
+        t.insert(defs[2]); // BAR=3
+        t.insert(defs[3]); // %undefine FOO
+        assert!(t.get("FOO").is_none());
+        assert!(t.get("BAR").is_some());
+        // Close scope — both should revert to pre-scope state.
+        t.end_scope();
+        let foo = t.get("FOO").expect("FOO restored");
+        assert!(matches!(foo.value, Some(MacroLiteral::Integer(1))));
+        assert!(t.get("BAR").is_none(), "BAR should have been removed");
+    }
+
+    #[test]
     fn macro_table_returns_none_for_nontrivial_body() {
         let outcome = parse("Name: x\n%global FOO %{BAR}\n");
         let mut t = MacroTable::default();
@@ -818,6 +933,45 @@ mod tests {
         let expr = parse_if_expr("%{X}");
         let folded = fold_expr(&expr, &t);
         assert!(matches!(folded, ExprAst::Macro { .. }));
+    }
+
+    #[test]
+    fn has_substitutable_macro_reports_table_membership() {
+        let mut t = MacroTable::default();
+        t.map.insert(
+            "X".to_string(),
+            MacroBinding {
+                value: Some(MacroLiteral::Integer(1)),
+            },
+        );
+        // Macro present and bound → substitutable.
+        let expr = parse_if_expr("%{X}");
+        assert!(has_substitutable_macro(&expr, &t));
+        // Macro present but unbound → not substitutable.
+        let expr = parse_if_expr("%{Y}");
+        assert!(!has_substitutable_macro(&expr, &t));
+        // No macro at all → not substitutable.
+        let expr = parse_if_expr("1");
+        assert!(!has_substitutable_macro(&expr, &t));
+    }
+
+    #[test]
+    fn fold_expr_returns_input_unchanged_when_no_macros() {
+        // Pure-literal expression with an empty table — folding is a
+        // no-op semantically (structural equality is preserved). The
+        // caller (`check_branch_117`) short-circuits on
+        // `has_substitutable_macro` so `fold_expr` is never invoked
+        // here in practice; this guards the semantic invariant.
+        let t = MacroTable::default();
+        let expr = parse_if_expr("42");
+        assert!(!has_substitutable_macro(&expr, &t));
+        let folded = fold_expr(&expr, &t);
+        match (&expr, &folded) {
+            (ExprAst::Integer { value: a, .. }, ExprAst::Integer { value: b, .. }) => {
+                assert_eq!(a, b)
+            }
+            other => panic!("expected Integer round-trip, got {other:?}"),
+        }
     }
 
     // ---- RPM117 ----

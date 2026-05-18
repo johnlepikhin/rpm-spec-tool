@@ -21,7 +21,7 @@ use rpm_spec::ast::{Span, SpecFile};
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
 use crate::files::{FilesClassifier, for_each_files_entry_with_subpkg, pkg_name_for};
 use crate::lint::{Lint, LintMetadata};
-use crate::rules::util::package_name;
+use crate::rules::util::{package_name, render_text_with_macros};
 use crate::visit::Visit;
 use rpm_spec_profile::Profile;
 
@@ -35,6 +35,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// The same normalised path appears in `%files` more than once. Within one package it is dead packaging; across subpackages it produces a true file conflict at install time.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct DuplicateFilesInFilesSections {
     diagnostics: Vec<Diagnostic>,
@@ -73,14 +77,32 @@ impl<'ast> Visit<'ast> for DuplicateFilesInFilesSections {
                 // Globs are out of scope — see RPM368.
                 return;
             }
+            // `%license` / `%doc` with a *relative* path get installed
+            // under a per-package directory (`%{_licensedir}/%{name}/…`
+            // or `%{_docdir}/%{name}/…`), so two subpackages listing
+            // the same `gpl.txt` are NOT a file conflict — they end up
+            // in different package-scoped directories. Skip these to
+            // avoid the texlive-base flood (100+ subpackages each with
+            // `%license gpl.txt`). An absolute path under `%license`
+            // is still considered (less common, but the per-package
+            // remapping no longer applies).
+            if (cls.directives.is_license || cls.directives.is_doc) && !path.starts_with('/') {
+                return;
+            }
             let norm = normalize_path(path);
             // `pkg_name_for` returns an empty string when neither the
-            // subpkg nor the main name resolves; render that as
-            // `<unnamed>` so cross-package collision messages stay
-            // readable.
+            // subpkg nor the main name resolves. Falling back to
+            // `<unnamed>` collapses every macro-templated subpackage
+            // (`%files -n %{shortname}-FOO`) into a single bucket and
+            // produces a flood of false-positive "duplicate" diagnostics
+            // (e.g. 100+ subpackages each with `%license gpl.txt`).
+            // Instead, prefer the literal source-text rendering of the
+            // subpkg ref as the bucket key. Two textually-identical
+            // templates DO collide (correctly flagged); two textually
+            // different ones do not.
             let mut pkg = pkg_name_for(main.as_deref(), subpkg);
             if pkg.is_empty() {
-                pkg = "<unnamed>".into();
+                pkg = render_subpkg_ref(subpkg).unwrap_or_else(|| "<unnamed>".into());
             }
 
             if let Some(prev) = seen.get(&norm) {
@@ -114,6 +136,27 @@ impl<'ast> Visit<'ast> for DuplicateFilesInFilesSections {
 fn normalize_path(path: &str) -> String {
     let trimmed = path.trim().trim_end_matches('/');
     trimmed.to_owned()
+}
+
+/// Render a [`SubpkgRef`] back to its source-text form, preserving
+/// macro references as `%foo` / `%{foo}`. Used as a stable bucket key
+/// when [`pkg_name_for`] cannot fully resolve the subpackage name
+/// (typically when the header contains an unresolved macro like
+/// `%{shortname}`). Returns `None` for refs that don't resolve to a
+/// non-empty string.
+fn render_subpkg_ref(subpkg: Option<&rpm_spec::ast::SubpkgRef>) -> Option<String> {
+    use rpm_spec::ast::SubpkgRef;
+    let text = match subpkg? {
+        SubpkgRef::Relative(t) | SubpkgRef::Absolute(t) => t,
+        _ => return None,
+    };
+    let rendered = render_text_with_macros(text);
+    let trimmed = rendered.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
 }
 
 impl Lint for DuplicateFilesInFilesSections {
@@ -205,5 +248,44 @@ Summary: d\n\
     fn normalises_trailing_slash() {
         let src = "Name: x\n%files\n/usr/share/x\n/usr/share/x/\n";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn silent_for_macro_templated_subpackages_with_same_license() {
+        // Real repro from `texlive-base.spec`: 100+ `%files -n
+        // %{shortname}-FOO` blocks each carry `%license gpl.txt`.
+        // Because `%{shortname}` doesn't expand at analysis time,
+        // `pkg_name_for` returns the empty string for both blocks; the
+        // old code then bucketed them together under `<unnamed>` and
+        // emitted a flood of false-positive cross-package duplicates.
+        // Two textually-distinct subpkg templates must NOT collide.
+        let src = "%global shortname acme\n\
+                   Name: %{shortname}-base\n\
+                   %files -n %{shortname}-a2ping\n\
+                   %license gpl.txt\n\
+                   %files -n %{shortname}-accfonts\n\
+                   %license gpl.txt\n";
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "textually-distinct macro-templated subpackages must not collide: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn fires_for_identical_macro_templated_subpackages() {
+        // The flip side of the FP fix: two `%files` blocks with the
+        // *literally identical* subpkg-ref template AND the same file
+        // ARE a real cross-section duplicate and must still trigger.
+        // We use a bare suffix here (`%files foo`) rather than `-n` so
+        // both sections resolve to the same concrete package name; the
+        // intent is to confirm the bucketing still groups true
+        // duplicates correctly.
+        let src = "Name: x\n\
+                   %package foo\nSummary: f\n%description foo\nbody\n\
+                   %files foo\n/usr/share/x/info\n\
+                   %files foo\n/usr/share/x/info\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }

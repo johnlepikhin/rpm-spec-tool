@@ -217,6 +217,23 @@ impl EntryClassification<'_> {
     pub fn span(&self) -> Span {
         self.entry.data
     }
+
+    /// `true` when the resolved path is a glob pattern (contains `*`,
+    /// `?`, or `[`). Conservative: returns `false` when `resolved_path`
+    /// is `None` (unresolved macro path — we can't say either way).
+    pub fn is_glob(&self) -> bool {
+        match self.resolved_path.as_deref() {
+            Some(p) => is_glob_pattern(p),
+            None => false,
+        }
+    }
+}
+
+/// `true` when `path` contains shell-glob metacharacters `*`, `?`, `[`.
+/// Stand-alone helper so non-classified call-sites (raw path strings)
+/// can use the same definition.
+pub(crate) fn is_glob_pattern(path: &str) -> bool {
+    path.contains('*') || path.contains('?') || path.contains('[')
 }
 
 /// Flat view of an entry's directives. Multiple directives on one line
@@ -568,6 +585,35 @@ mod tests {
         let e = entry_with_path("/usr/lib64/libfoo.so.1");
         let cls = c.classify(&e);
         assert!(!cls.kind_hints.is_unversioned_so);
+    }
+
+    #[test]
+    fn is_glob_recognizes_question_mark() {
+        let p = fedora_like();
+        let c = FilesClassifier::new(&p);
+        let e = entry_with_path("/usr/bin/foo?");
+        let cls = c.classify(&e);
+        assert!(cls.is_glob());
+        assert!(is_glob_pattern("/usr/bin/foo?"));
+    }
+
+    #[test]
+    fn is_glob_recognizes_char_class() {
+        let p = fedora_like();
+        let c = FilesClassifier::new(&p);
+        let e = entry_with_path("/usr/bin/foo[abc]");
+        let cls = c.classify(&e);
+        assert!(cls.is_glob());
+        assert!(is_glob_pattern("/usr/bin/foo[abc]"));
+    }
+
+    #[test]
+    fn is_glob_false_for_literal_path() {
+        let p = fedora_like();
+        let c = FilesClassifier::new(&p);
+        let e = entry_with_path("/usr/bin/foo");
+        let cls = c.classify(&e);
+        assert!(!cls.is_glob());
     }
 
     #[test]

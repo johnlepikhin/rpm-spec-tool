@@ -42,6 +42,10 @@ const OBSOLETE_OTHER_TAGS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Preamble uses a tag that's deprecated or forbidden by modern packaging guidelines.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ObsoleteTag {
     diagnostics: Vec<Diagnostic>,
@@ -113,13 +117,10 @@ impl Lint for ObsoleteTag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = ObsoleteTag::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<ObsoleteTag>(src)
     }
 
     #[test]

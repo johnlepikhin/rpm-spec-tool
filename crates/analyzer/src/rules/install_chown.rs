@@ -24,6 +24,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `%install` invokes `chown`/`chgrp` or `install -o`/`install -g`. `%install` runs unprivileged; ownership belongs in `%files` via `%attr(...)`.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct InstallChownOrOwner {
     diagnostics: Vec<Diagnostic>,
@@ -89,13 +93,10 @@ impl Lint for InstallChownOrOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = InstallChownOrOwner::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<InstallChownOrOwner>(src)
     }
 
     #[test]

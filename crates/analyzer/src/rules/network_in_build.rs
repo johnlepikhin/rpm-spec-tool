@@ -234,6 +234,7 @@ impl Lint for NetworkAccessInBuild {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_support::run_lint_with_profile;
     use crate::session::parse;
     use rpm_spec_profile::Family;
 
@@ -244,11 +245,7 @@ mod tests {
     }
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = NetworkAccessInBuild::new();
-        lint.set_profile(&fedora());
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint_with_profile::<NetworkAccessInBuild>(src, &fedora())
     }
 
     #[test]

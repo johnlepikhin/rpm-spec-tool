@@ -44,6 +44,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// A scriptlet invokes a runtime helper (`useradd`, `getent`, `update-alternatives`, ...) without declaring the providing package in `Requires:`. Minimal images abort the scriptlet with command-not-found.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ScriptletCommandWithoutRequires {
     diagnostics: Vec<Diagnostic>,
@@ -143,6 +147,7 @@ impl Lint for ScriptletCommandWithoutRequires {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_support::run_lint_with_profile;
     use crate::session::parse;
     use rpm_spec_profile::{Family, Profile};
 
@@ -153,11 +158,7 @@ mod tests {
     }
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = ScriptletCommandWithoutRequires::new();
-        lint.set_profile(&fedora_profile());
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint_with_profile::<ScriptletCommandWithoutRequires>(src, &fedora_profile())
     }
 
     #[test]

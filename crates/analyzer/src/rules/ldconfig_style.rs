@@ -33,6 +33,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Library package runs `/sbin/ldconfig` from a shell-bodied scriptlet; use the `%post -p /sbin/ldconfig` interpreter shorthand, or drop the call entirely on file-trigger-aware distros.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct LdconfigScriptletStyle {
     diagnostics: Vec<Diagnostic>,
@@ -132,7 +136,7 @@ impl Lint for LdconfigScriptletStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint_with_profile;
     use rpm_spec_profile::{MacroEntry, Profile, Provenance};
 
     fn profile() -> Profile {
@@ -145,11 +149,7 @@ mod tests {
     }
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = LdconfigScriptletStyle::new();
-        lint.set_profile(&profile());
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint_with_profile::<LdconfigScriptletStyle>(src, &profile())
     }
 
     #[test]

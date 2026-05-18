@@ -20,6 +20,10 @@ they're rare and usually intentional cross-distro patterns.",
     category: LintCategory::Packaging,
 };
 
+/// Spec file declares more than one top-level %changelog section. rpm processes only the first one and silently drops the rest. Note: %changelog blocks nested inside %if/%endif are ignored on purpose — they're rare and usually intentional cross-distro patterns.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct MultipleChangelog {
     diagnostics: Vec<Diagnostic>,
@@ -72,13 +76,10 @@ impl Lint for MultipleChangelog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = MultipleChangelog::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<MultipleChangelog>(src)
     }
 
     #[test]

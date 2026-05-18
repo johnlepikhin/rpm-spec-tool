@@ -45,6 +45,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// Spec file name differs from `<Name>.spec` — most RPM tooling pairs specs to package names by filename.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SpecFilenameMismatch {
     diagnostics: Vec<Diagnostic>,

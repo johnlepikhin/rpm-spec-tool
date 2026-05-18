@@ -73,6 +73,10 @@ const LEGACY_TO_SPDX: &[(&str, &str)] = &[
     ("zlib", "Zlib"),
 ];
 
+/// Fedora ≥ 40 mandates SPDX-only license identifiers; legacy short forms (`GPLv2+`, `BSD`, …) are no longer accepted.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct LegacyLicenseSyntax {
     diagnostics: Vec<Diagnostic>,

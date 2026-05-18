@@ -37,6 +37,10 @@ pub static EXIT_GUARDED_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// A scriptlet's last command can fail with no explicit exit guard. RPM aborts the transaction on non-zero exit, leaving the system half-installed. Add `|| :` / `|| true` / `exit 0`, or use `set +e`.
+///
+/// See [`EXIT_GUARDED_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ScriptletExitNotGuaranteedZero {
     diagnostics: Vec<Diagnostic>,
@@ -61,6 +65,17 @@ impl<'ast> Visit<'ast> for ScriptletExitNotGuaranteedZero {
             };
             let last = &s.body.lines[last_idx];
             if line_guarantees_zero_exit(last) {
+                return;
+            }
+            // Macro-only last lines (e.g. `%systemd_pre foo.service`)
+            // expand to packaging-author-supplied snippets whose exit
+            // semantics we cannot reason about. Real repro:
+            // `libvirt.spec` had 57 FPs from `%libvirt_systemd_inet_pre
+            // libvirtd` being treated as a fallible bare command. We
+            // skip rather than downgrade — the macro author controls
+            // its own exit guard, and the alternative (warning on
+            // every macro-terminated scriptlet) is unactionable noise.
+            if line_is_macro_call(last) {
                 return;
             }
             // An explicit `exit 0` *anywhere* after the last fallible
@@ -143,6 +158,43 @@ fn line_is_potentially_fallible(line: &Text) -> bool {
     !is_blank_or_comment(line)
 }
 
+/// `true` when the line *begins* with a macro invocation, ignoring
+/// any leading whitespace. The trailing segments — literal arguments,
+/// additional macro references, more whitespace — are treated as
+/// arguments to the leading macro and do not change the verdict.
+///
+/// Rationale: when bash executes the line, the leading macro expands
+/// to *some* command (`useradd`, `systemctl`, a no-op helper, ...)
+/// and that command's exit status governs the scriptlet. We cannot
+/// inspect the expansion here, so we conservatively assume the macro
+/// author supplied an appropriate exit guard — emitting RPM340 on
+/// every macro-terminated scriptlet would be unactionable noise.
+///
+/// Examples that return `true`:
+///   - `%systemd_pre foo.service`
+///   - `%systemd_post foo.service bar.service`
+///   - `%sysusers_create_compat %{SOURCE16}`  (macro arg is itself a macro)
+///   - `   %{my_helper}` (leading whitespace)
+///
+/// Examples that return `false`:
+///   - `rm -f %{my_path}` (first non-WS token is the literal `rm`)
+///   - `make install`
+fn line_is_macro_call(line: &Text) -> bool {
+    for seg in &line.segments {
+        match seg {
+            // Skip leading whitespace-only literal segments.
+            TextSegment::Literal(s) if s.chars().all(char::is_whitespace) => continue,
+            // First substantive segment is a macro — accept.
+            TextSegment::Macro(_) => return true,
+            // First substantive segment is anything else (literal
+            // non-whitespace, or a future TextSegment variant) — reject.
+            _ => return false,
+        }
+    }
+    // Empty line / all-whitespace literals — not a macro call.
+    false
+}
+
 fn has_set_minus_e_active_at_last(lines: &[Text], last_idx: usize) -> bool {
     let mut active = false;
     for line in &lines[..=last_idx] {
@@ -188,6 +240,10 @@ pub static UPGRADE_TEST_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// Scriptlet compares the install count `$1` to exactly `2` to detect an upgrade. Multilib and error recovery can push `$1` above `2`; use `[ $1 -gt 1 ]` instead.
+///
+/// See [`UPGRADE_TEST_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ScriptletUpgradeTestEqTwo {
     diagnostics: Vec<Diagnostic>,
@@ -333,6 +389,87 @@ mod tests {
         // Lua scriptlets don't observe shell exit-status semantics.
         let src = "Name: x\n%post -p <lua>\nprint(\"hi\")\n";
         assert!(run_340(src).is_empty());
+    }
+
+    #[test]
+    fn silent_for_lua_scriptlet_ending_with_brace() {
+        // Real-world repro: `gcc.spec` has `%postun -n libgcc -p <lua>`
+        // ending in `}`; `glibc.spec` has `%post -p <lua>` ending in
+        // `end`. Neither is a shell command and neither belongs to
+        // RPM340's domain.
+        let src = "Name: x\n%postun -p <lua>\nif foo then\n  bar()\nend\n";
+        assert!(
+            run_340(src).is_empty(),
+            "lua scriptlet ending in `end` must not trigger RPM340"
+        );
+        let src2 = "Name: x\n%postun -n libgcc -p <lua>\nlocal x = {\n  y = 1\n}\n";
+        assert!(
+            run_340(src2).is_empty(),
+            "lua scriptlet ending in `}}` must not trigger RPM340"
+        );
+    }
+
+    #[test]
+    fn silent_for_scriptlet_ending_with_macro_call() {
+        // Real-world repro: `libvirt.spec` has 57 scriptlets ending in
+        // `%libvirt_systemd_inet_pre libvirtd` (a packaging-helper
+        // macro that contains its own exit guard). We cannot reason
+        // about the macro's expansion, so emitting a "missing exit
+        // guard" warning here is unactionable noise.
+        let src = "Name: x\n%pre\n%systemd_pre foo.service\n";
+        assert!(
+            run_340(src).is_empty(),
+            "scriptlet ending in a macro call must not trigger RPM340"
+        );
+        // Also accept braced form and no-arg form.
+        let src_braced = "Name: x\n%pre\n%{systemd_pre} foo.service\n";
+        assert!(run_340(src_braced).is_empty());
+        let src_noarg = "Name: x\n%pre\n%{my_helper}\n";
+        assert!(run_340(src_noarg).is_empty());
+    }
+
+    #[test]
+    fn silent_for_scriptlet_ending_with_macro_with_macro_arg() {
+        // Real-world repro: `samba.spec:1706` has `%pre common` whose body
+        // is `%sysusers_create_compat %{SOURCE16}`. The first non-whitespace
+        // segment is the macro `%sysusers_create_compat`; the remaining
+        // segments are whitespace plus another macro reference. The line's
+        // exit behaviour comes from the leading macro's expansion, just as
+        // with literal arguments — we must stay silent.
+        let src = "Name: x\n%pre\n%sysusers_create_compat %{SOURCE16}\n";
+        let diags = run_340(src);
+        assert!(
+            diags.is_empty(),
+            "scriptlet ending in macro-with-macro-arg must not trigger RPM340: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn silent_for_scriptlet_ending_with_multi_arg_macro() {
+        // Real-world repro from systemd.spec: scriptlets ending in
+        // `%systemd_post foo.service bar.service` (multi-argument
+        // packaging-helper macro). The macro provides its own exit
+        // guard; we cannot reason about its expansion. Must be silent.
+        let src = "Name: x\n%post\n%systemd_post foo.service bar.service\n";
+        let diags = run_340(src);
+        assert!(
+            diags.is_empty(),
+            "scriptlet ending in a multi-arg macro must not trigger RPM340: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn rpm340_still_fires_when_macro_appears_mid_command() {
+        // Guard against the macro-call check over-triggering: a line
+        // like `rm -f %{my_path}` is a real `rm` call whose exit
+        // status matters; the macro is only an argument.
+        let src = "Name: x\n%post\nrm -f %{my_path}\n";
+        let diags = run_340(src);
+        assert_eq!(
+            diags.len(),
+            1,
+            "command with macro argument should still fire: {diags:?}"
+        );
     }
 
     // ----- RPM341 -----

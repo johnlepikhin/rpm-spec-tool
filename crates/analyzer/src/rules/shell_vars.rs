@@ -40,6 +40,10 @@ pub static SOURCE_DIR_METADATA: LintMetadata = LintMetadata {
 // RPM053 rpm-buildroot-shell-var
 // =====================================================================
 
+/// Use `%{_sourcedir}` instead of the legacy `$RPM_SOURCE_DIR` environment variable.
+///
+/// See [`SOURCE_DIR_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct RpmBuildrootShellVar {
     diagnostics: Vec<Diagnostic>,
@@ -104,6 +108,10 @@ impl Lint for RpmBuildrootShellVar {
 // RPM054 rpm-source-dir-shell-var
 // =====================================================================
 
+/// Use `%{_sourcedir}` instead of the legacy `$RPM_SOURCE_DIR` environment variable.
+///
+/// See [`SOURCE_DIR_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct RpmSourceDirShellVar {
     diagnostics: Vec<Diagnostic>,
@@ -306,6 +314,9 @@ fn emit_if_match(
 
 // `SpecFile` is referenced only via the blanket `Visit` impl; suppress
 // the unused-import warning the compiler would otherwise raise.
+// NOTE: kept as `#[allow]` (not `#[expect]`) because the const reference
+// already counts as a use of `SpecFile`, so `dead_code` does not fire and
+// `#[expect]` would emit `unfulfilled_lint_expectations`.
 #[allow(dead_code)]
 const _: Option<SpecFile<Span>> = None;
 

@@ -15,10 +15,17 @@
 //! Fedora that uses `%bcond_with` won't work portably without
 //! reworking the conditional logic into `%define` + plain `%if`.
 //!
-//! Gate: `applies_to_profile` returns `true` only when
-//!   `family` is set AND is NOT `Family::Fedora` or `Family::Rhel`.
-//! When family is unknown (default Profile) the rule stays silent —
-//! we don't want to spam warnings during pre-profile lint runs.
+//! Gate: the rule only emits diagnostics when `set_profile` has been
+//! called with an *explicitly* non-Fedora/RHEL family
+//! (`Family::Alt`, `Family::Opensuse`, `Family::Mageia`). Default
+//! constructor leaves the rule inactive: when the profile is unknown
+//! (default `Profile`, `Family::Generic`, or no `set_profile` call at
+//! all — e.g. tests that bypass the session) we stay silent. The
+//! cost of a false positive on a Fedora spec running through the
+//! default pipeline outweighs the marginal benefit of catching a
+//! true positive on an unknown profile. Real repro: llvm.spec is a
+//! Fedora spec; the previous gate let `%bcond_with snapshot_build`
+//! emit 38 diagnostics under the default profile.
 //!
 //! ## Trigger
 //!
@@ -44,10 +51,19 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// `%bcond_with` / `%bcond_without` are Fedora/RHEL-specific build-option macros; use `%define NAME 1` + plain `%if` on other distros.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct BcondOnNonFedora {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
+    /// `Some(true)` only after `set_profile` was called with an
+    /// explicitly non-Fedora/RHEL family. `None` (the default) and
+    /// `Some(false)` both keep the rule silent — see the module
+    /// docs for the noise-prevention rationale.
+    active: Option<bool>,
 }
 
 impl BcondOnNonFedora {
@@ -58,6 +74,14 @@ impl BcondOnNonFedora {
 
 impl<'ast> Visit<'ast> for BcondOnNonFedora {
     fn visit_spec(&mut self, _spec: &'ast SpecFile<Span>) {
+        // No profile set, or profile is Fedora-family / unknown:
+        // stay silent. Real repro for the FP we're guarding against:
+        // llvm.spec is a Fedora spec; the rule used to fire 38 times
+        // under the default profile because `applies_to_profile` was
+        // the only gate and tests / non-session callers bypassed it.
+        if self.active != Some(true) {
+            return;
+        }
         let Some(source) = self.source.as_deref() else {
             return;
         };
@@ -100,30 +124,53 @@ impl Lint for BcondOnNonFedora {
         std::mem::take(&mut self.diagnostics)
     }
 
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
+    }
+
+    fn set_profile(&mut self, profile: &Profile) {
+        // Mirror of `applies_to_profile` — kept in lock-step so a
+        // caller that goes through the session (which gates via
+        // `applies_to_profile`) and a caller that constructs the lint
+        // directly (tests, plug-in hosts, future tooling) both reach
+        // the same conclusion. The instance-level `active` flag is
+        // the authoritative gate inside `visit_spec`.
+        self.active = Some(is_non_fedora_family(profile));
     }
 
     fn applies_to_profile(&self, profile: &Profile) -> bool {
-        // Explicit allowlist + explicit fallback arms. `Family` is
-        // `#[non_exhaustive]`, so a wildcard `_` would silently absorb
-        // future variants (e.g. `Family::Almalinux`) — defeating the
-        // very compile-time audit this match exists to provide.
-        // Splitting the fallback into `None` and `Some(_)` keeps both
-        // intents visible to a reader running `cargo expand` or `git
-        // blame` (auditor: "Is this new variant a RHEL clone, a SUSE
-        // clone, or genuinely new? Pick one.").
-        match profile.identity.family {
-            Some(Family::Alt | Family::Opensuse | Family::Mageia | Family::Generic) => true,
-            Some(Family::Fedora | Family::Rhel) => false,
-            // No family detected — pre-profile pipelines / `generic`
-            // profile. Stay silent: noise-prevention.
-            None => false,
-            // `Family` is `#[non_exhaustive]`; future variants default
-            // to silent until someone makes a deliberate call. Audit
-            // this arm whenever a new variant lands upstream.
-            Some(_) => false,
-        }
+        is_non_fedora_family(profile)
+    }
+}
+
+/// `true` only when the profile is *explicitly* a non-Fedora/RHEL
+/// distro family that lacks native `%bcond_*` support. Returns
+/// `false` for the default profile (`family = None`),
+/// `Family::Generic` (explicit opt-out), and the Fedora/RHEL
+/// families themselves.
+///
+/// `Family` is `#[non_exhaustive]`; we deliberately spell out every
+/// arm rather than use a wildcard. When a new family lands upstream
+/// the missing arm will force a deliberate "is this another RHEL
+/// clone (silent) or a fourth-family openSUSE-style distro (fire)?"
+/// review here.
+fn is_non_fedora_family(profile: &Profile) -> bool {
+    match profile.identity.family {
+        Some(Family::Alt | Family::Opensuse | Family::Mageia) => true,
+        // Fedora / RHEL natively support `%bcond_*` — silent.
+        Some(Family::Fedora | Family::Rhel) => false,
+        // `Family::Generic` is the explicit opt-out (custom internal
+        // distro); we don't claim to know whether `%bcond_*` works
+        // there. Stay silent — same noise-prevention rationale as for
+        // the unknown-profile case.
+        Some(Family::Generic) => false,
+        // No family detected — pre-profile pipelines / default Profile.
+        // Stay silent: an FP on Fedora costs more than a TP on
+        // unknown.
+        None => false,
+        // `Family` is `#[non_exhaustive]`; future variants default
+        // to silent until someone makes a deliberate call.
+        Some(_) => false,
     }
 }
 
@@ -194,10 +241,16 @@ mod tests {
     fn run(src: &str, profile: &Profile) -> Vec<Diagnostic> {
         let outcome = parse(src);
         let mut lint = BcondOnNonFedora::new();
+        // Mirror the production session order: gate via
+        // `applies_to_profile` (cheap perf reorder), then push the
+        // profile + source into the rule. The instance-level `active`
+        // flag set by `set_profile` is what `visit_spec` actually
+        // checks — covered by the `silent_when_no_profile_set` test.
         if !lint.applies_to_profile(profile) {
             return Vec::new();
         }
-        lint.set_source(src);
+        lint.set_profile(profile);
+        lint.set_source(std::sync::Arc::from(src));
         lint.visit_spec(&outcome.spec);
         lint.take_diagnostics()
     }
@@ -279,5 +332,46 @@ mod tests {
         let src = "Name: x\n    %bcond_with python3\n";
         let diags = run(src, &profile);
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn silent_when_no_profile_set() {
+        // Default construction → no `set_profile` call → the rule
+        // must stay inert. This guards against the FP described in
+        // the module docs: callers that bypass the session pipeline
+        // (tests, plug-in hosts, future tooling) used to receive
+        // spurious diagnostics on Fedora specs.
+        let outcome = parse("Name: x\n%bcond_with python3\n");
+        let mut lint = BcondOnNonFedora::new();
+        lint.set_source(std::sync::Arc::from("Name: x\n%bcond_with python3\n"));
+        lint.visit_spec(&outcome.spec);
+        let diags = lint.take_diagnostics();
+        assert!(
+            diags.is_empty(),
+            "rule must be inert without an explicit non-Fedora set_profile; got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn silent_under_fedora_profile() {
+        // Real repro from the issue: llvm.spec is a Fedora spec that
+        // uses `%bcond_with snapshot_build`. Running through the
+        // production session path (`set_profile` with Fedora) must
+        // not flag it. Bypasses `applies_to_profile` deliberately so
+        // the instance-level `active` flag is the only gate under
+        // test.
+        let profile = make_test_profile(Some(Family::Fedora), Some(".fc40"), &[], &[]);
+        let outcome = parse("Name: llvm\n%bcond_with snapshot_build\n");
+        let mut lint = BcondOnNonFedora::new();
+        lint.set_profile(&profile);
+        lint.set_source(std::sync::Arc::from(
+            "Name: llvm\n%bcond_with snapshot_build\n",
+        ));
+        lint.visit_spec(&outcome.spec);
+        let diags = lint.take_diagnostics();
+        assert!(
+            diags.is_empty(),
+            "Fedora profile must suppress RPM129; got {diags:?}"
+        );
     }
 }

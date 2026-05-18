@@ -35,6 +35,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// A development artifact (`.h`, `.pc`, CMake config, unversioned `.so`) is shipped in a non-`-devel` package. Move it to a `-devel` subpackage so runtime installs do not drag in the development ecosystem.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct DevelFileInNonDevelPackage {
     diagnostics: Vec<Diagnostic>,
@@ -111,7 +115,7 @@ fn devel_artifact_reason(h: &crate::files::KindHints) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint_with_profile;
     use rpm_spec_profile::{MacroEntry, Profile, Provenance};
 
     fn fedora_profile() -> Profile {
@@ -128,11 +132,7 @@ mod tests {
     }
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = DevelFileInNonDevelPackage::new();
-        lint.set_profile(&fedora_profile());
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint_with_profile::<DevelFileInNonDevelPackage>(src, &fedora_profile())
     }
 
     #[test]

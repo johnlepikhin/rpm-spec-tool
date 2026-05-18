@@ -42,6 +42,10 @@ pub static EMPTY_ENTRY_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// Changelog entry has no body text — likely a leftover header.
+///
+/// See [`EMPTY_ENTRY_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct EmptyChangelogEntry {
     diagnostics: Vec<Diagnostic>,
@@ -98,6 +102,10 @@ pub static FUTURE_DATE_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// Changelog entry is dated in the future.
+///
+/// See [`FUTURE_DATE_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug)]
 pub struct ChangelogFutureDate {
     diagnostics: Vec<Diagnostic>,
@@ -170,6 +178,10 @@ const MIN_PLAUSIBLE_YEAR: u16 = 1990;
 /// not just *future*.
 const RPM039_FUTURE_GRACE_YEARS: i32 = 5;
 
+/// Changelog entry date has an impossible day or year.
+///
+/// See [`IMPLAUSIBLE_DATE_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug)]
 pub struct ChangelogImplausibleDate {
     diagnostics: Vec<Diagnostic>,
@@ -262,6 +274,10 @@ pub static ORDER_WEEKDAY_EVR_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// The `%changelog` is not ordered newest-first, contains a weekday that does not match the date, or its latest entry's EVR does not match the spec's `Version-Release`.
+///
+/// See [`ORDER_WEEKDAY_EVR_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ChangelogOrderWeekdayEvr {
     diagnostics: Vec<Diagnostic>,
@@ -354,12 +370,12 @@ impl Lint for ChangelogOrderWeekdayEvr {
     }
 }
 
-fn find_changelog_entries(spec: &SpecFile<Span>) -> Option<&Vec<ChangelogEntry<Span>>> {
+fn find_changelog_entries(spec: &SpecFile<Span>) -> Option<&[ChangelogEntry<Span>]> {
     for item in &spec.items {
         if let SpecItem::Section(boxed) = item
             && let Section::Changelog { entries, .. } = boxed.as_ref()
         {
-            return Some(entries);
+            return Some(entries.as_slice());
         }
     }
     None

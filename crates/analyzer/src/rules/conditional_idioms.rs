@@ -30,6 +30,10 @@ pub static PREFER_BCOND_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// `%if 0%{?with_NAME}` pattern is the build-option idiom; use `%bcond_with NAME` instead.
+///
+/// See [`PREFER_BCOND_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct PreferBcondForBuildOptions {
     diagnostics: Vec<Diagnostic>,
@@ -133,6 +137,10 @@ pub static IF_ONLY_BR_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// `%if X BuildRequires: foo %endif` is stylistically heavy; consider `%bcond_with` or a conditional dependency clause.
+///
+/// See [`IF_ONLY_BR_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct IfOnlyBuildRequires {
     diagnostics: Vec<Diagnostic>,
@@ -233,6 +241,10 @@ pub static CONDITIONAL_BUILDARCH_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `BuildArch:` inside a `%if` block — RPM uses last-wins semantics, so this is fragile.
+///
+/// See [`CONDITIONAL_BUILDARCH_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ConditionalBuildArch {
     diagnostics: Vec<Diagnostic>,
@@ -340,6 +352,10 @@ pub static CONDITIONAL_NAME_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `Name:` inside a `%if` block — the package will have different names in different build contexts, which confuses downstream tooling.
+///
+/// See [`CONDITIONAL_NAME_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ConditionalNameTag {
     diagnostics: Vec<Diagnostic>,

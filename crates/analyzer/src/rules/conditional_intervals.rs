@@ -216,6 +216,10 @@ pub static REDUNDANCY_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// `X OP a && X OP b` where one constraint subsumes the other — drop the weaker side.
+///
+/// See [`REDUNDANCY_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct InequalityRedundancy {
     diagnostics: Vec<Diagnostic>,
@@ -288,6 +292,10 @@ pub static CONTRADICTION_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `&&`-chain has incompatible inequalities — the whole guard is always false.
+///
+/// See [`CONTRADICTION_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct InequalityContradiction {
     diagnostics: Vec<Diagnostic>,

@@ -39,6 +39,10 @@ pub static UNSUPPORTED_FEATURE_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// The spec uses a dependency feature (rich/boolean deps, weak deps, `Requires(meta)` qualifier) that the active profile's rpm does not advertise via `rpmlib(...)`. Builds will fail on that target.
+///
+/// See [`UNSUPPORTED_FEATURE_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct UnsupportedDependencyFeature {
     diagnostics: Vec<Diagnostic>,
@@ -135,6 +139,10 @@ pub static CONTRADICTORY_QUALIFIERS_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `Requires(meta, …)` combines the `meta` qualifier with ordered phase qualifiers (`pre`/`post`/`preun`/`postun`/`pretrans`/`posttrans`). The pair is contradictory; rpm silently keeps one.
+///
+/// See [`CONTRADICTORY_QUALIFIERS_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ContradictoryDependencyQualifiers {
     diagnostics: Vec<Diagnostic>,

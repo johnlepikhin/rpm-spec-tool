@@ -14,7 +14,7 @@
 //! the offending block so the human knows where to look.
 
 use rpm_spec::ast::{
-    CondExpr, Conditional, FilesContent, PreambleContent, Section, Span, SpecItem,
+    CondExpr, Conditional, FilesContent, PreambleContent, Section, Span, SpecFile, SpecItem,
 };
 
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
@@ -36,6 +36,10 @@ pub static CONSTANT_CONDITION_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// `%if 0` / `%if 1` has a fixed outcome; drop the block or simplify to the live branch.
+///
+/// See [`CONSTANT_CONDITION_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ConstantCondition {
     diagnostics: Vec<Diagnostic>,
@@ -114,10 +118,14 @@ pub static IDENTICAL_BRANCHES_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Every branch of this conditional has the same body — the block is a no-op.
+///
+/// See [`IDENTICAL_BRANCHES_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct IdenticalConditionalBranches {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
 }
 
 impl IdenticalConditionalBranches {
@@ -164,7 +172,8 @@ impl BranchItem for SpecItem<Span> {
             SpecItem::BuildCondition(b) => Some(b.data),
             SpecItem::Include(i) => Some(i.data),
             SpecItem::Comment(c) => Some(c.data),
-            SpecItem::Statement(_) | SpecItem::Blank => None,
+            // Statement, Blank, and future `#[non_exhaustive]` variants
+            // contribute no body span this rule cares about.
             _ => None,
         }
     }
@@ -176,7 +185,7 @@ impl BranchItem for PreambleContent<Span> {
             PreambleContent::Item(p) => Some(p.data),
             PreambleContent::Conditional(c) => Some(c.data),
             PreambleContent::Comment(c) => Some(c.data),
-            PreambleContent::Blank => None,
+            // Blank + future `#[non_exhaustive]` variants.
             _ => None,
         }
     }
@@ -188,7 +197,7 @@ impl BranchItem for FilesContent<Span> {
             FilesContent::Entry(e) => Some(e.data),
             FilesContent::Conditional(c) => Some(c.data),
             FilesContent::Comment(c) => Some(c.data),
-            FilesContent::Blank => None,
+            // Blank + future `#[non_exhaustive]` variants.
             _ => None,
         }
     }
@@ -293,8 +302,8 @@ impl Lint for IdenticalConditionalBranches {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
     }
 }
 
@@ -310,13 +319,13 @@ pub static REDUNDANT_NESTED_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Inner `%if` repeats an enclosing `%if`'s condition; the inner test always passes.
+///
+/// See [`REDUNDANT_NESTED_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct RedundantNestedCondition {
     diagnostics: Vec<Diagnostic>,
-    /// Stack of currently-open `%if` head expressions. Owned clones
-    /// keep the visit pass lifetime-free; `CondExpr` is small (a Text
-    /// plus a discriminant).
-    stack: Vec<CondExpr<Span>>,
 }
 
 impl RedundantNestedCondition {
@@ -324,8 +333,13 @@ impl RedundantNestedCondition {
         Self::default()
     }
 
-    fn enter(&mut self, expr: &CondExpr<Span>, anchor: Span) {
-        if self.stack.iter().any(|p| cond_expr_resolvably_eq(p, expr)) {
+    fn check_against_stack(
+        &mut self,
+        stack: &[&CondExpr<Span>],
+        expr: &CondExpr<Span>,
+        anchor: Span,
+    ) {
+        if stack.iter().any(|p| cond_expr_resolvably_eq(*p, expr)) {
             self.diagnostics.push(
                 Diagnostic::new(
                     &REDUNDANT_NESTED_METADATA,
@@ -340,50 +354,148 @@ impl RedundantNestedCondition {
                 )),
             );
         }
-        self.stack.push(expr.clone());
     }
 
-    fn leave(&mut self) {
-        self.stack.pop();
+    fn walk_items<'ast>(
+        &mut self,
+        items: &'ast [SpecItem<Span>],
+        stack: &mut Vec<&'ast CondExpr<Span>>,
+    ) {
+        for item in items {
+            match item {
+                SpecItem::Conditional(c) => self.walk_top_cond(c, stack),
+                SpecItem::Section(s) => self.walk_section(s.as_ref(), stack),
+                _ => {}
+            }
+        }
+    }
+
+    fn walk_top_cond<'ast>(
+        &mut self,
+        node: &'ast Conditional<Span, SpecItem<Span>>,
+        stack: &mut Vec<&'ast CondExpr<Span>>,
+    ) {
+        let pushed = if let Some(first) = node.branches.first() {
+            self.check_against_stack(stack, &first.expr, node.data);
+            stack.push(&first.expr);
+            true
+        } else {
+            false
+        };
+        for branch in &node.branches {
+            self.walk_items(&branch.body, stack);
+        }
+        if let Some(els) = &node.otherwise {
+            self.walk_items(els, stack);
+        }
+        if pushed {
+            stack.pop();
+        }
+    }
+
+    fn walk_section<'ast>(
+        &mut self,
+        s: &'ast rpm_spec::ast::Section<Span>,
+        stack: &mut Vec<&'ast CondExpr<Span>>,
+    ) {
+        match s {
+            Section::Package { content, .. } => {
+                for c in content {
+                    self.walk_preamble_content(c, stack);
+                }
+            }
+            Section::Files { content, .. } => {
+                for c in content {
+                    self.walk_files_content(c, stack);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn walk_preamble_content<'ast>(
+        &mut self,
+        node: &'ast PreambleContent<Span>,
+        stack: &mut Vec<&'ast CondExpr<Span>>,
+    ) {
+        if let PreambleContent::Conditional(c) = node {
+            self.walk_preamble_cond(c, stack);
+        }
+    }
+
+    fn walk_preamble_cond<'ast>(
+        &mut self,
+        node: &'ast Conditional<Span, PreambleContent<Span>>,
+        stack: &mut Vec<&'ast CondExpr<Span>>,
+    ) {
+        let pushed = if let Some(first) = node.branches.first() {
+            self.check_against_stack(stack, &first.expr, node.data);
+            stack.push(&first.expr);
+            true
+        } else {
+            false
+        };
+        for branch in &node.branches {
+            for c in &branch.body {
+                self.walk_preamble_content(c, stack);
+            }
+        }
+        if let Some(els) = &node.otherwise {
+            for c in els {
+                self.walk_preamble_content(c, stack);
+            }
+        }
+        if pushed {
+            stack.pop();
+        }
+    }
+
+    fn walk_files_content<'ast>(
+        &mut self,
+        node: &'ast FilesContent<Span>,
+        stack: &mut Vec<&'ast CondExpr<Span>>,
+    ) {
+        if let FilesContent::Conditional(c) = node {
+            self.walk_files_cond(c, stack);
+        }
+    }
+
+    fn walk_files_cond<'ast>(
+        &mut self,
+        node: &'ast Conditional<Span, FilesContent<Span>>,
+        stack: &mut Vec<&'ast CondExpr<Span>>,
+    ) {
+        let pushed = if let Some(first) = node.branches.first() {
+            self.check_against_stack(stack, &first.expr, node.data);
+            stack.push(&first.expr);
+            true
+        } else {
+            false
+        };
+        for branch in &node.branches {
+            for c in &branch.body {
+                self.walk_files_content(c, stack);
+            }
+        }
+        if let Some(els) = &node.otherwise {
+            for c in els {
+                self.walk_files_content(c, stack);
+            }
+        }
+        if pushed {
+            stack.pop();
+        }
     }
 }
 
 impl<'ast> Visit<'ast> for RedundantNestedCondition {
-    fn visit_top_conditional(&mut self, node: &'ast Conditional<Span, SpecItem<Span>>) {
-        let pushed = if let Some(first) = node.branches.first() {
-            self.enter(&first.expr, node.data);
-            true
-        } else {
-            false
-        };
-        visit::walk_top_conditional(self, node);
-        if pushed {
-            self.leave();
-        }
-    }
-    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
-        let pushed = if let Some(first) = node.branches.first() {
-            self.enter(&first.expr, node.data);
-            true
-        } else {
-            false
-        };
-        visit::walk_preamble_conditional(self, node);
-        if pushed {
-            self.leave();
-        }
-    }
-    fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
-        let pushed = if let Some(first) = node.branches.first() {
-            self.enter(&first.expr, node.data);
-            true
-        } else {
-            false
-        };
-        visit::walk_files_conditional(self, node);
-        if pushed {
-            self.leave();
-        }
+    fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
+        // Drive the walk ourselves so the parent-condition stack can
+        // hold `&'ast CondExpr<Span>` references rather than owned
+        // clones — `CondExpr` boxes `ExprAst`, and the previous
+        // `expr.clone()` per nested `%if` made each push O(AST size).
+        let mut stack: Vec<&'ast CondExpr<Span>> = Vec::new();
+        self.walk_items(&spec.items, &mut stack);
     }
 }
 
@@ -392,7 +504,6 @@ impl Lint for RedundantNestedCondition {
         &REDUNDANT_NESTED_METADATA
     }
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
-        self.stack.clear();
         std::mem::take(&mut self.diagnostics)
     }
 }
@@ -404,7 +515,7 @@ mod tests {
 
     fn run<L: Lint>(src: &str, mut lint: L) -> Vec<Diagnostic> {
         let outcome = parse(src);
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
         lint.visit_spec(&outcome.spec);
         lint.take_diagnostics()
     }

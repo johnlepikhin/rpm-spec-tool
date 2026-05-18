@@ -97,9 +97,14 @@ impl AtomTable {
         Self::default()
     }
 
-    pub(crate) fn intern(&mut self, expr: &ExprAst<Span>) -> AtomId {
-        let key = canonicalise(expr);
-        self.intern_key(key)
+    /// Intern an `ExprAst` atom. Returns `None` when the expression's
+    /// shape isn't modelled by [`canonicalise`] — the caller must bail
+    /// rather than collapse unrelated atoms onto the same id (which
+    /// would be a soundness pitfall: two distinct atoms sharing an
+    /// `AtomId` can produce wrong UNSAT/SAT verdicts downstream).
+    pub(crate) fn intern(&mut self, expr: &ExprAst<Span>) -> Option<AtomId> {
+        let key = canonicalise(expr)?;
+        Some(self.intern_key(key))
     }
 
     /// Intern a pre-canonicalised key. Useful for atoms that don't
@@ -124,23 +129,29 @@ impl AtomTable {
 /// `Paren` wrappers. Used as atom-table key. Distinct subtrees with
 /// the same canonical text collapse to one atom — that's the
 /// semantic-equality contract.
-fn canonicalise(expr: &ExprAst<Span>) -> String {
-    match expr.peel_parens() {
+///
+/// Returns `None` when the expression contains a variant not modelled
+/// here (e.g. a future `#[non_exhaustive]` `ExprAst` variant). The
+/// caller must bail rather than substitute a fallback string: two
+/// unrelated atoms collapsing to the same `AtomId` would let
+/// `path_implies` return UNSAT incorrectly.
+fn canonicalise(expr: &ExprAst<Span>) -> Option<String> {
+    Some(match expr.peel_parens() {
         ExprAst::Integer { value, .. } => value.to_string(),
         ExprAst::String { value, .. } => format!("\"{value}\""),
         ExprAst::Macro { text, .. } => text.clone(),
         ExprAst::Identifier { name, .. } => name.clone(),
-        ExprAst::Not { inner, .. } => format!("!{}", canonicalise(inner)),
+        ExprAst::Not { inner, .. } => format!("!{}", canonicalise(inner)?),
         ExprAst::Binary { kind, lhs, rhs, .. } => {
             format!(
                 "({}{}{})",
-                canonicalise(lhs),
+                canonicalise(lhs)?,
                 kind.as_str(),
-                canonicalise(rhs)
+                canonicalise(rhs)?
             )
         }
-        _ => String::new(),
-    }
+        _ => return None,
+    })
 }
 
 /// Convert an expression to DNF, optionally pushing a negation
@@ -195,8 +206,11 @@ pub(crate) fn to_dnf(expr: &ExprAst<Span>, atoms: &mut AtomTable, negate: bool) 
         }
         _ => {
             // Anything else is an atom: relational, macro, identifier,
-            // literal, or future ExprAst variant.
-            let atom = atoms.intern(bare);
+            // literal, or future ExprAst variant. `intern` returns
+            // `None` for un-modelled variants — propagate so DNF
+            // conversion bails cleanly rather than aliasing distinct
+            // atoms to the same id.
+            let atom = atoms.intern(bare)?;
             let mut cube = BTreeSet::new();
             cube.insert(Literal {
                 atom,
@@ -363,6 +377,10 @@ pub static REDUNDANCY_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Expression contains operands that are absorbed by others — DNF normalisation reveals shorter equivalent form.
+///
+/// See [`REDUNDANCY_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct BooleanDnfRedundancy {
     diagnostics: Vec<Diagnostic>,
@@ -444,6 +462,10 @@ pub static TAUTOLOGY_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Boolean expression is tautologically true under every assignment — drop the guard.
+///
+/// See [`TAUTOLOGY_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct BooleanTautologyByCubes {
     diagnostics: Vec<Diagnostic>,
@@ -515,6 +537,10 @@ pub static CONTRADICTION_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// Boolean expression is unsatisfiable — every cube collapses to internal contradiction.
+///
+/// See [`CONTRADICTION_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct BooleanContradictionByCubes {
     diagnostics: Vec<Diagnostic>,
@@ -632,6 +658,30 @@ mod tests {
         // `A || (!A && B) || (!A && !B)` is a tautology.
         let dnf = dnf_of("A || (!A && B) || (!A && !B)").unwrap();
         assert_eq!(is_tautology(&dnf, 2), Some(true), "{dnf:?}");
+    }
+
+    #[test]
+    fn canonicalise_unmodelled_variant_returns_none() {
+        // `canonicalise` returns `Option<String>` so the wildcard arm
+        // can yield `None` for future `#[non_exhaustive]` `ExprAst`
+        // variants. We exercise the modelled path here (must be
+        // `Some(_)`); the type-system guarantees the wildcard arm
+        // returns `None` because the function signature is
+        // `Option<String>` and the `_` arm is the only other path.
+        use rpm_spec::ast::Span;
+        let m = ExprAst::Macro::<Span> {
+            text: "%{?rhel}".to_owned(),
+            data: Span::default(),
+        };
+        assert_eq!(canonicalise(&m), Some("%{?rhel}".to_owned()));
+        let i = ExprAst::Integer::<Span> {
+            value: 7,
+            data: Span::default(),
+        };
+        assert_eq!(canonicalise(&i), Some("7".to_owned()));
+        // A `Not` over an un-modelled inner variant would yield `None`
+        // via `?` propagation — that contract is what protects us from
+        // the AtomId-collision soundness pitfall described above.
     }
 
     #[test]

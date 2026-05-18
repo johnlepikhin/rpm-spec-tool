@@ -38,6 +38,10 @@ pub static UNIT_NO_HELPERS_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// `%files` ships a systemd unit (`.service`/`.socket`/...), but no scriptlet invokes the distro's lifecycle helper macros (`%systemd_*` / `%service_*`). The unit is packaged but not registered.
+///
+/// See [`UNIT_NO_HELPERS_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SystemdUnitWithoutHelperMacros {
     diagnostics: Vec<Diagnostic>,
@@ -137,6 +141,10 @@ pub static UNIT_UNDER_ETC_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// A systemd unit is installed under `/etc/systemd/system` or carries `%config`. Unit files belong in `%{_unitdir}` (typically `/usr/lib/systemd/system`) and should not be `%config`.
+///
+/// See [`UNIT_UNDER_ETC_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SystemdUnitUnderEtcOrConfig {
     diagnostics: Vec<Diagnostic>,

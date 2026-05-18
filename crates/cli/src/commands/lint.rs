@@ -14,7 +14,7 @@ use rpm_spec_analyzer::profile::Profile;
 use rpm_spec_analyzer::{Diagnostic, Severity, analyze_with_profile_at};
 
 use crate::app::ColorChoice;
-use crate::config as cli_config;
+use crate::config::{self as cli_config, ConfigCacheCliExt as _};
 use crate::fixer;
 use crate::io;
 use crate::output;

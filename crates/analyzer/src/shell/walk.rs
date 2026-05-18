@@ -60,13 +60,19 @@ pub enum BodyLocation {
     /// `%trigger*` body. `kind` is kept for future trigger-aware
     /// rules even though no current consumer reads it.
     Trigger {
-        #[allow(dead_code)]
+        #[expect(
+            dead_code,
+            reason = "kept for future trigger-aware rules; no current consumer reads this field"
+        )]
         kind: rpm_spec::ast::TriggerKind,
         span: Span,
     },
     /// `%filetrigger*` body. See note on [`Self::Trigger::kind`].
     FileTrigger {
-        #[allow(dead_code)]
+        #[expect(
+            dead_code,
+            reason = "kept for future trigger-aware rules; no current consumer reads this field"
+        )]
         kind: rpm_spec::ast::FileTriggerKind,
         span: Span,
     },

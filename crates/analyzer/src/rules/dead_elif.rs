@@ -11,7 +11,8 @@ use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Sugge
 use crate::lint::{Lint, LintMetadata};
 use crate::rules::boolean_dnf::Dnf;
 use crate::rules::path_cond::{
-    BranchAnalyser, PathConditions, analyse_conditional, conjoin, is_unsat,
+    BranchAnalyser, PathConditions, analyse_conditional, conjoin, is_unsat, walk_files_body,
+    walk_preamble_body, walk_top_body,
 };
 use crate::visit::Visit;
 
@@ -24,6 +25,10 @@ pub static DEAD_ELIF_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `%elif` branch is unsatisfiable under the ancestor path-condition combined with negations of preceding sibling branches; its body is dead.
+///
+/// See [`DEAD_ELIF_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct DeadElif {
     diagnostics: Vec<Diagnostic>,
@@ -75,22 +80,6 @@ impl BranchAnalyser for DeadElif {
     }
 }
 
-fn walk_top_body(slf: &mut DeadElif, body: &[SpecItem<Span>]) {
-    for item in body {
-        slf.visit_item(item);
-    }
-}
-fn walk_preamble_body(slf: &mut DeadElif, body: &[PreambleContent<Span>]) {
-    for c in body {
-        slf.visit_preamble_content(c);
-    }
-}
-fn walk_files_body(slf: &mut DeadElif, body: &[FilesContent<Span>]) {
-    for c in body {
-        slf.visit_files_content(c);
-    }
-}
-
 impl<'ast> Visit<'ast> for DeadElif {
     fn visit_top_conditional(&mut self, node: &'ast Conditional<Span, SpecItem<Span>>) {
         analyse_conditional(self, node, walk_top_body);
@@ -115,13 +104,10 @@ impl Lint for DeadElif {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = DeadElif::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<DeadElif>(src)
     }
 
     #[test]

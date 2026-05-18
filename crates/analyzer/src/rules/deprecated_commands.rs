@@ -97,7 +97,7 @@ pub struct WordScanLint {
     meta: &'static LintMetadata,
     needles: &'static [Needle],
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
 }
 
 impl WordScanLint {
@@ -148,8 +148,8 @@ impl Lint for WordScanLint {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
     }
 }
 
@@ -241,7 +241,7 @@ mod tests {
     ) -> Vec<Diagnostic> {
         let outcome = parse(src);
         let mut lint = WordScanLint::new(meta, needles);
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
         lint.visit_spec(&outcome.spec);
         lint.take_diagnostics()
     }

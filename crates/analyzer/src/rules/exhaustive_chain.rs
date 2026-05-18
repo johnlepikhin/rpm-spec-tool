@@ -13,6 +13,7 @@ use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Sugge
 use crate::lint::{Lint, LintMetadata};
 use crate::rules::path_cond::{
     BranchAnalyser, PathConditions, analyse_conditional, conjoin, else_effective_dnf, is_unsat,
+    walk_files_body, walk_preamble_body, walk_top_body,
 };
 use crate::visit::Visit;
 
@@ -30,6 +31,10 @@ pub static EXHAUSTIVE_CHAIN_METADATA: LintMetadata = LintMetadata {
 /// is nothing to "spell out as `%else`".
 const MIN_CHAIN_FOR_ELSE_COLLAPSE: usize = 2;
 
+/// `%if`/`%elif` chain exhausts the path-condition space yet lacks an explicit `%else`; rewriting the last `%elif` as `%else` makes the chain clearer.
+///
+/// See [`EXHAUSTIVE_CHAIN_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ExhaustiveChain {
     diagnostics: Vec<Diagnostic>,
@@ -93,22 +98,6 @@ impl BranchAnalyser for ExhaustiveChain {
 
 use crate::rules::boolean_dnf::Dnf;
 
-fn walk_top_body(slf: &mut ExhaustiveChain, body: &[SpecItem<Span>]) {
-    for item in body {
-        slf.visit_item(item);
-    }
-}
-fn walk_preamble_body(slf: &mut ExhaustiveChain, body: &[PreambleContent<Span>]) {
-    for c in body {
-        slf.visit_preamble_content(c);
-    }
-}
-fn walk_files_body(slf: &mut ExhaustiveChain, body: &[FilesContent<Span>]) {
-    for c in body {
-        slf.visit_files_content(c);
-    }
-}
-
 impl<'ast> Visit<'ast> for ExhaustiveChain {
     fn visit_top_conditional(&mut self, node: &'ast Conditional<Span, SpecItem<Span>>) {
         analyse_conditional(self, node, walk_top_body);
@@ -133,13 +122,10 @@ impl Lint for ExhaustiveChain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = ExhaustiveChain::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<ExhaustiveChain>(src)
     }
 
     #[test]

@@ -24,10 +24,11 @@
 
 use std::collections::HashSet;
 
-use rpm_spec::ast::{Section, ShellBody, Span, SpecFile, SpecItem, Text, TextSegment};
+use rpm_spec::ast::{ShellBody, Span, SpecFile, Text, TextSegment};
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
 use crate::lint::{Lint, LintMetadata};
+use crate::rules::prep_model::{find_prep_body, find_prep_body_with_span};
 use crate::rules::util::{
     MACRO_AUTOPATCH, MACRO_AUTOSETUP, MACRO_PATCH_PREFIX, collect_declared_patches,
 };
@@ -41,6 +42,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `PatchN:` is declared but never applied in `%prep`; declare or apply, don't dangle.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct PatchDefinedNotApplied {
     diagnostics: Vec<Diagnostic>,
@@ -83,20 +88,6 @@ impl Lint for PatchDefinedNotApplied {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-}
-
-/// Locate the first top-level `%prep` body. Subpackage prep sections
-/// don't exist in RPM (it's a global step), so a flat scan suffices.
-fn find_prep_body(spec: &SpecFile<Span>) -> Option<&ShellBody> {
-    for item in &spec.items {
-        if let SpecItem::Section(boxed) = item
-            && let Section::BuildScript { kind, body, .. } = boxed.as_ref()
-            && *kind == rpm_spec::ast::BuildScriptKind::Prep
-        {
-            return Some(body);
-        }
-    }
-    None
 }
 
 /// Result of scanning a `%prep` body. `All` short-circuits the check
@@ -229,6 +220,10 @@ pub static APPLIED_TWICE_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `PatchN:` is declared but never applied in `%prep`; declare or apply, don't dangle.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct PatchAppliedMoreThanOnce {
     diagnostics: Vec<Diagnostic>,
@@ -242,7 +237,7 @@ impl PatchAppliedMoreThanOnce {
 
 impl<'ast> Visit<'ast> for PatchAppliedMoreThanOnce {
     fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
-        let Some((prep_body, prep_span)) = find_prep_body_and_span(spec) else {
+        let Some((prep_body, prep_span)) = find_prep_body_with_span(spec) else {
             return;
         };
 
@@ -340,18 +335,6 @@ impl Lint for PatchAppliedMoreThanOnce {
     }
 }
 
-fn find_prep_body_and_span(spec: &SpecFile<Span>) -> Option<(&ShellBody, Span)> {
-    for item in &spec.items {
-        if let SpecItem::Section(boxed) = item
-            && let Section::BuildScript { kind, body, data } = boxed.as_ref()
-            && *kind == rpm_spec::ast::BuildScriptKind::Prep
-        {
-            return Some((body, *data));
-        }
-    }
-    None
-}
-
 /// Yield every patch-related event observed on one `%prep` line.
 /// Decoupled from accumulation so RPM306's "applied twice" logic and
 /// any future caller can plug in their own folding strategy.
@@ -390,13 +373,11 @@ fn patch_events(line: &Text) -> Vec<PatchEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_support::run_lint;
     use crate::session::parse;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = PatchDefinedNotApplied::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<PatchDefinedNotApplied>(src)
     }
 
     fn run306(src: &str) -> Vec<Diagnostic> {

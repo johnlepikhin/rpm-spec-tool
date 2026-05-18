@@ -22,6 +22,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// A package declares a Conflicts entry naming itself, which blocks installation.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SelfConflict {
     diagnostics: Vec<Diagnostic>,
@@ -71,13 +75,10 @@ impl Lint for SelfConflict {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = SelfConflict::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<SelfConflict>(src)
     }
 
     #[test]

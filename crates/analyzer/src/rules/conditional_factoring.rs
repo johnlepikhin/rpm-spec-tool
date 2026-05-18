@@ -34,6 +34,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Same `%if` expression appears many times across the spec; consider factoring it into a `%global` flag.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ConditionMentionedManyTimes {
     diagnostics: Vec<Diagnostic>,
@@ -160,27 +164,49 @@ impl Lint for ConditionMentionedManyTimes {
     }
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         // Aggregate-time emission: now that visit_spec finished, emit
-        // diagnostics for keys above threshold.
+        // diagnostics for keys above threshold. We emit ONE diagnostic
+        // per repeated condition (anchored at the first occurrence),
+        // not one per occurrence — a 88-occurrence condition like
+        // `%{dual_life}||%{rebuild_from_scratch}` in `perl.spec` would
+        // otherwise produce 88 identical warnings.
         let mut occs = std::mem::take(&mut self.occurrences);
         // Sort keys for deterministic emit order.
         let mut entries: Vec<_> = occs.drain().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
+        // Cap on number of "also here" labels attached to the primary
+        // diagnostic to keep output readable when a condition repeats
+        // dozens of times.
+        const MAX_LABELS: usize = 4;
         for (key, spans) in entries {
             if spans.len() < THRESHOLD {
                 continue;
             }
             let count = spans.len();
-            for span in spans {
-                self.diagnostics.push(Diagnostic::new(
-                    &METADATA,
-                    Severity::Warn,
-                    format!(
-                        "condition `{key}` appears {count} times across this spec — \
-                         consider factoring into a `%global` flag"
-                    ),
-                    span,
-                ));
+            let mut iter = spans.into_iter();
+            let Some(primary) = iter.next() else {
+                continue;
+            };
+            let extra: Vec<Span> = iter.collect();
+            let attached = extra.len().min(MAX_LABELS);
+            let remaining = extra.len().saturating_sub(attached);
+            let message = if remaining > 0 {
+                format!(
+                    "condition `{key}` appears {count} times across this spec — consider \
+                     factoring into a `%global` flag (showing {attached} of {sites} other sites; \
+                     {remaining} more not labelled)",
+                    sites = extra.len(),
+                )
+            } else {
+                format!(
+                    "condition `{key}` appears {count} times across this spec — consider \
+                     factoring into a `%global` flag"
+                )
+            };
+            let mut diag = Diagnostic::new(&METADATA, Severity::Warn, message, primary);
+            for span in extra.into_iter().take(attached) {
+                diag = diag.with_label(span, "also here");
             }
+            self.diagnostics.push(diag);
         }
         std::mem::take(&mut self.diagnostics)
     }
@@ -189,13 +215,10 @@ impl Lint for ConditionMentionedManyTimes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = ConditionMentionedManyTimes::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<ConditionMentionedManyTimes>(src)
     }
 
     #[test]
@@ -203,6 +226,12 @@ mod tests {
         // 5 identical `%if 0%{?rhel} >= 8` blocks → at threshold (>=5).
         // Use a composite comparison so the trivial-condition filter
         // does not suppress the diagnostic.
+        //
+        // We emit exactly ONE diagnostic for the repeated condition
+        // (anchored at the first occurrence, with the count baked into
+        // the message and the other sites attached as labels). Emitting
+        // N identical warnings would drown the user in noise on real
+        // specs where the same condition can repeat 80+ times.
         let mut src = String::from("Name: x\n");
         for _ in 0..5 {
             src.push_str("%if 0%{?rhel} >= 8\nLicense: MIT\n%endif\n");
@@ -210,10 +239,16 @@ mod tests {
         let diags = run(&src);
         assert_eq!(
             diags.len(),
-            5,
-            "expected one diag per occurrence: {diags:?}"
+            1,
+            "expected exactly one aggregated diag: {diags:?}"
         );
         assert_eq!(diags[0].lint_id, "RPM093");
+        // Message should reflect the threshold-exceeding count.
+        assert!(
+            diags[0].message.contains("5 times"),
+            "message should mention occurrence count: {}",
+            diags[0].message
+        );
     }
 
     #[test]
@@ -273,5 +308,27 @@ mod tests {
         }
         let diags = run(&src);
         assert!(!diags.is_empty(), "composite expression should still fire");
+    }
+
+    #[test]
+    fn emits_single_diagnostic_for_n_occurrences() {
+        // Regression guard for the `perl.spec` FP: an `%if` repeated
+        // far above the threshold must collapse into ONE diagnostic
+        // with the count baked in, not N identical warnings.
+        let mut src = String::from("Name: x\n");
+        for _ in 0..12 {
+            src.push_str("%if 0%{?rhel} >= 8\nLicense: MIT\n%endif\n");
+        }
+        let diags = run(&src);
+        assert_eq!(
+            diags.len(),
+            1,
+            "12 occurrences must collapse to one diagnostic: {diags:?}"
+        );
+        assert!(
+            diags[0].message.contains("12 times"),
+            "message should report aggregated count: {}",
+            diags[0].message
+        );
     }
 }

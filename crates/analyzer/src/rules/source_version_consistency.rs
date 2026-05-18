@@ -43,6 +43,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// A `SourceN:` URL contains a hard-coded version different from `Version:`. After a version bump this points at the old upstream archive.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SourceVersionMismatch {
     diagnostics: Vec<Diagnostic>,
@@ -189,13 +193,10 @@ impl Lint for SourceVersionMismatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = SourceVersionMismatch::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<SourceVersionMismatch>(src)
     }
 
     #[test]

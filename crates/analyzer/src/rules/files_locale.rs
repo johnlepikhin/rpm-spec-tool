@@ -35,6 +35,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// A `.mo` translation under `/usr/share/locale/` is listed manually without `%lang(...)`. Prefer `%find_lang` in `%install` + `%files -f <name>.lang`, or annotate the entry with `%lang(<code>)`.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct LocaleFileNotLang {
     diagnostics: Vec<Diagnostic>,

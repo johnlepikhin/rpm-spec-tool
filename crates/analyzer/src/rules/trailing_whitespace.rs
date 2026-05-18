@@ -20,10 +20,14 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Trailing whitespace clutters diffs and serves no purpose.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct TrailingWhitespace {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
 }
 
 impl TrailingWhitespace {
@@ -34,7 +38,10 @@ impl TrailingWhitespace {
 
 impl<'ast> Visit<'ast> for TrailingWhitespace {
     fn visit_spec(&mut self, _spec: &'ast SpecFile<Span>) {
-        let Some(source) = self.source.clone() else {
+        // Bump the `Arc` refcount so the loop body can call
+        // `self.check_line` (which takes `&mut self`) without a
+        // borrow-checker conflict. Cheap — no deep copy.
+        let Some(source) = self.source.as_ref().map(std::sync::Arc::clone) else {
             return;
         };
         let mut line_start = 0usize;
@@ -93,22 +100,18 @@ impl Lint for TrailingWhitespace {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = TrailingWhitespace::new();
-        lint.set_source(src);
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<TrailingWhitespace>(src)
     }
 
     #[test]

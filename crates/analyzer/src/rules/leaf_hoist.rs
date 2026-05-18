@@ -50,10 +50,14 @@ pub static LEAF_HOIST_METADATA: LintMetadata = LintMetadata {
 /// same span.
 const MAX_REPORTED_LINES: usize = 6;
 
+/// A line appears on every root-to-leaf path of a nested `%if` tree — it can be hoisted outside the conditional to remove redundant duplication.
+///
+/// See [`LEAF_HOIST_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct CommonLeafLineHoistable {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
     /// Number of `%if` blocks currently being walked. The rule only
     /// fires when `depth == 0` (outermost) — the recursive
     /// path-set computation handles the entire sub-tree, so emitting
@@ -67,10 +71,10 @@ impl CommonLeafLineHoistable {
     }
 
     fn check<B: BodyNode>(&mut self, node: &Conditional<Span, B>) {
-        let Some(source) = self.source.clone() else {
+        let Some(source) = self.source.as_deref() else {
             return;
         };
-        let common = lines_in_all_paths::<B>(node, &source);
+        let common = lines_in_all_paths::<B>(node, source);
         if common.is_empty() {
             return;
         }
@@ -142,8 +146,8 @@ impl Lint for CommonLeafLineHoistable {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
     }
 }
 
@@ -249,14 +253,10 @@ fn canonicalise_line(slice: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = CommonLeafLineHoistable::new();
-        lint.set_source(src);
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<CommonLeafLineHoistable>(src)
     }
 
     #[test]

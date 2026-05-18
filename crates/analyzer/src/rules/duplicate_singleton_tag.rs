@@ -50,6 +50,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// A singleton preamble tag (Name, Version, Release, License, URL, Summary, Epoch, BuildArch, AutoReq/AutoProv/AutoReqProv) appears more than once in the same package scope; RPM keeps the last value and the earlier line is dead code.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct DuplicateSingletonTag {
     diagnostics: Vec<Diagnostic>,
@@ -209,13 +213,10 @@ impl Lint for DuplicateSingletonTag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = DuplicateSingletonTag::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<DuplicateSingletonTag>(src)
     }
 
     #[test]

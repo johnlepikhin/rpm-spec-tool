@@ -3,12 +3,76 @@
 //! Schema is the public contract — extensions allowed, breakage is not.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use rpm_spec::printer::PrinterConfig;
 use rpm_spec_profile::ProfileEntry;
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::Severity;
+
+/// Strongly-typed shellcheck code (e.g. `SC2086`).
+///
+/// Parsing accepts the canonical `SC<n>` form (case-insensitive) or a
+/// bare number such as `"2086"`. Anything else — `"sc20860"`, `"SC2"`,
+/// `"SCabc"`, … — is rejected at config-load time rather than silently
+/// becoming a no-op disable/enable entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShCode(u16);
+
+impl ShCode {
+    /// Construct from a raw 16-bit code (e.g. `2086`).
+    pub fn new(n: u16) -> Self {
+        Self(n)
+    }
+
+    /// Return the raw numeric code.
+    pub fn as_u16(self) -> u16 {
+        self.0
+    }
+
+    /// Parse from a string, accepting `SC<n>`, `sc<n>`, or bare digits.
+    /// The numeric tail must fit in a `u16`; this is the gate that
+    /// rejects typos like `"sc20860"` (overflow), `"SCabc"` (non-digits)
+    /// and `"SC"` (empty).
+    pub fn from_str_normalized(s: &str) -> Result<Self, ShCodeParseError> {
+        let s = s.trim();
+        let digits = s
+            .strip_prefix("SC")
+            .or_else(|| s.strip_prefix("sc"))
+            .or_else(|| s.strip_prefix("Sc"))
+            .unwrap_or(s);
+        digits
+            .parse::<u16>()
+            .map(Self)
+            .map_err(|_| ShCodeParseError)
+    }
+}
+
+impl fmt::Display for ShCode {
+    /// Renders as the canonical `SC<n>` form.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SC{}", self.0)
+    }
+}
+
+/// Error returned by [`ShCode::from_str_normalized`] on malformed input.
+#[derive(Debug, thiserror::Error)]
+#[error("invalid shellcheck code (expected `SC<n>` or `<n>` with n fitting in u16)")]
+pub struct ShCodeParseError;
+
+impl<'de> serde::Deserialize<'de> for ShCode {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Self::from_str_normalized(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+impl serde::Serialize for ShCode {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(&format_args!("SC{}", self.0))
+    }
+}
 
 /// Whole-file `.rpmspec.toml` schema.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -39,6 +103,32 @@ pub struct Config {
     pub warnings_as_errors: bool,
 }
 
+/// Shell dialect accepted by `shellcheck --shell=<dialect>`. Mirrors
+/// the upstream tool's documented dialect list; constructive parsing
+/// (typed enum vs. free-form string) means typos like `"fish"` are
+/// caught at config-load time instead of producing a runtime warning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum ShellDialect {
+    Sh,
+    Bash,
+    Dash,
+    Ksh,
+}
+
+impl ShellDialect {
+    /// Canonical token passed to `shellcheck --shell=`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sh => "sh",
+            Self::Bash => "bash",
+            Self::Dash => "dash",
+            Self::Ksh => "ksh",
+        }
+    }
+}
+
 /// Configuration for the `shellcheck` umbrella lint (RPM200).
 ///
 /// Severity is controlled through `[lints]` like every other rule
@@ -54,17 +144,18 @@ pub struct ShellcheckConfig {
     pub binary: Option<String>,
     /// SC codes to suppress *in addition to* the built-in RPM-context
     /// baseline. Accepts the canonical `SC<n>` form (case-insensitive)
-    /// or a bare number such as `"2086"`.
-    pub disable: Vec<String>,
+    /// or a bare number such as `"2086"`. Unparseable entries are
+    /// rejected at config-load time (no silent no-ops).
+    pub disable: Vec<ShCode>,
     /// SC codes to re-enable from the built-in baseline. Same accepted
     /// forms as `disable`. Useful for users who explicitly want
     /// `SC2164` (`pushd … || exit`) etc.
-    pub enable: Vec<String>,
+    pub enable: Vec<ShCode>,
     /// Shell dialect passed to `shellcheck --shell=<dialect>`. Defaults
     /// to `bash`, which matches `/bin/sh` on every major RPM-based
     /// distribution. Set to `sh` for strict POSIX checking. Accepted
     /// values: `sh`, `bash`, `dash`, `ksh`.
-    pub shell: Option<String>,
+    pub shell: Option<ShellDialect>,
     /// Per-section timeout, in seconds, for the shellcheck subprocess.
     /// On timeout the process is killed and a single `RPM201` is
     /// emitted; subsequent sections are skipped. Defaults to 30s.
@@ -356,6 +447,118 @@ disable = ["SC2086", "2155"]
 "#;
         let cfg = Config::from_toml_str(toml_str).unwrap();
         assert_eq!(cfg.shellcheck.binary.as_deref(), Some("/opt/sc"));
-        assert_eq!(cfg.shellcheck.disable, vec!["SC2086", "2155"]);
+        assert_eq!(
+            cfg.shellcheck.disable,
+            vec![ShCode::new(2086), ShCode::new(2155)]
+        );
+    }
+
+    #[test]
+    fn sh_code_parses_with_sc_prefix() {
+        assert_eq!(
+            ShCode::from_str_normalized("SC2086").unwrap(),
+            ShCode::new(2086)
+        );
+        assert_eq!(
+            ShCode::from_str_normalized("sc2086").unwrap(),
+            ShCode::new(2086)
+        );
+        assert_eq!(
+            ShCode::from_str_normalized("Sc2086").unwrap(),
+            ShCode::new(2086)
+        );
+        // Surrounding whitespace is tolerated.
+        assert_eq!(
+            ShCode::from_str_normalized("  SC2086  ").unwrap(),
+            ShCode::new(2086)
+        );
+    }
+
+    #[test]
+    fn sh_code_parses_bare_digits() {
+        assert_eq!(
+            ShCode::from_str_normalized("2086").unwrap(),
+            ShCode::new(2086)
+        );
+        assert_eq!(ShCode::from_str_normalized("0").unwrap(), ShCode::new(0));
+    }
+
+    #[test]
+    fn sh_code_rejects_typo() {
+        // Non-digit suffix.
+        assert!(ShCode::from_str_normalized("SCabc").is_err());
+        // Mixed letters interleaved with digits.
+        assert!(ShCode::from_str_normalized("SC20a86").is_err());
+        // Overflows u16 (max 65535) — catches typos that the old
+        // String-based config silently accepted, e.g. an extra trailing
+        // digit (`SC208600` → 208600 > u16::MAX).
+        assert!(ShCode::from_str_normalized("SC208600").is_err());
+        // SC prefix only, no digits.
+        assert!(ShCode::from_str_normalized("SC").is_err());
+        // Empty / whitespace-only.
+        assert!(ShCode::from_str_normalized("").is_err());
+        assert!(ShCode::from_str_normalized("   ").is_err());
+        // Negative numbers are rejected (u16 can't represent them).
+        assert!(ShCode::from_str_normalized("-1").is_err());
+    }
+
+    #[test]
+    fn sh_code_round_trip() {
+        // Serialize emits the canonical `SC<n>` form; deserialize then
+        // recovers the original code.
+        #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+        struct Wrap {
+            code: ShCode,
+        }
+        let original = Wrap {
+            code: ShCode::new(2086),
+        };
+        let toml_str = toml::to_string(&original).unwrap();
+        assert!(
+            toml_str.contains("SC2086"),
+            "expected canonical SC form, got: {toml_str}"
+        );
+        let parsed: Wrap = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn shellcheck_config_rejects_invalid_code() {
+        // Deserialization fails at config load — the old String-based
+        // field would have silently kept a no-op entry. `SCabc` is not
+        // parseable as an integer at all, the strongest reject case.
+        let toml_str = r#"
+[shellcheck]
+disable = ["SCabc"]
+"#;
+        let err = Config::from_toml_str(toml_str).expect_err("expected parse failure");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid shellcheck code") || msg.contains("shellcheck code"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn shell_dialect_round_trips() {
+        for (literal, expected) in [
+            ("sh", ShellDialect::Sh),
+            ("bash", ShellDialect::Bash),
+            ("dash", ShellDialect::Dash),
+            ("ksh", ShellDialect::Ksh),
+        ] {
+            let toml_str = format!("[shellcheck]\nshell = \"{literal}\"\n");
+            let cfg = Config::from_toml_str(&toml_str).unwrap();
+            assert_eq!(cfg.shellcheck.shell, Some(expected));
+            assert_eq!(expected.as_str(), literal);
+        }
+    }
+
+    #[test]
+    fn shell_dialect_rejects_unknown_value() {
+        // Typed parsing rejects `fish` at config-load time — no need
+        // for a runtime warn from the shellcheck rule.
+        let toml_str = "[shellcheck]\nshell = \"fish\"\n";
+        assert!(Config::from_toml_str(toml_str).is_err());
     }
 }

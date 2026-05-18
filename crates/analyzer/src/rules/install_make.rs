@@ -32,6 +32,10 @@ pub static MAKEINSTALL_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// `%makeinstall` is the legacy hard-coded form; prefer `%make_install` (which sets `DESTDIR=%{buildroot}`).
+///
+/// See [`MAKEINSTALL_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct MakeinstallWithoutUnderscore {
     diagnostics: Vec<Diagnostic>,
@@ -95,6 +99,10 @@ pub static MAKE_INSTALL_DESTDIR_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `make install` in `%install` without `DESTDIR=%{buildroot}` (or `$RPM_BUILD_ROOT`) installs onto the build host. Use `%make_install`, or pass `DESTDIR=` explicitly.
+///
+/// See [`MAKE_INSTALL_DESTDIR_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct MakeInstallMissingDestdir {
     diagnostics: Vec<Diagnostic>,

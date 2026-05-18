@@ -48,6 +48,10 @@ pub static DEEP_NESTING_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Conditional nesting beyond 4 levels is hard to read; refactor or split.
+///
+/// See [`DEEP_NESTING_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct DeepConditionalNesting {
     diagnostics: Vec<Diagnostic>,
@@ -117,6 +121,10 @@ pub static UNREACHABLE_ELIF_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `%elif` with the same expression as an earlier branch can never fire; likely a typo.
+///
+/// See [`UNREACHABLE_ELIF_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct UnreachableElifBranch {
     diagnostics: Vec<Diagnostic>,
@@ -184,6 +192,10 @@ pub static EMPTY_BRANCH_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Conditional block has no real content in any branch — drop the block.
+///
+/// See [`EMPTY_BRANCH_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct EmptyConditionalBranch {
     diagnostics: Vec<Diagnostic>,
@@ -268,6 +280,10 @@ pub static IFARCH_EMPTY_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `%ifarch`/`%ifos` with no architecture tokens is always false; likely a missing argument.
+///
+/// See [`IFARCH_EMPTY_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct IfarchEmptyList {
     diagnostics: Vec<Diagnostic>,
@@ -348,6 +364,10 @@ pub static SINGLE_COMMENT_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Conditional branch contains only a comment — likely a TODO left after a refactor.
+///
+/// See [`SINGLE_COMMENT_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SingleCommentOnlyBranch {
     diagnostics: Vec<Diagnostic>,
@@ -438,6 +458,10 @@ pub static IFARCH_NOARCH_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `%ifarch noarch` is suspicious — `noarch` is a build marker, not an architecture.
+///
+/// See [`IFARCH_NOARCH_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct IfarchNoarch {
     diagnostics: Vec<Diagnostic>,
@@ -512,10 +536,14 @@ pub static DUPLICATE_ARCH_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Duplicate token in `%ifarch`/`%ifos` list — drop the redundant one.
+///
+/// See [`DUPLICATE_ARCH_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct DuplicateArchInList {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
 }
 
 impl DuplicateArchInList {
@@ -631,8 +659,8 @@ impl Lint for DuplicateArchInList {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
     }
 }
 
@@ -652,6 +680,10 @@ pub static CYCLOMATIC_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Section contains more conditional branches than is comfortable to follow; refactor.
+///
+/// See [`CYCLOMATIC_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ConditionalCyclomaticComplexity {
     diagnostics: Vec<Diagnostic>,
@@ -865,7 +897,7 @@ mod tests {
     fn rpm091_flags_duplicate_arch() {
         let src = "Name: x\n%ifarch x86_64 x86_64\nVersion: 1\n%endif\n";
         let mut lint = DuplicateArchInList::new();
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
         let outcome = parse(src);
         lint.visit_spec(&outcome.spec);
         let diags = lint.take_diagnostics();

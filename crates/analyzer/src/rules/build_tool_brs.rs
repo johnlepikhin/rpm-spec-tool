@@ -37,6 +37,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// A build script invokes a tool (`cmake`, `meson`, `pkg-config`, ...) without a matching `BuildRequires:`. Clean-chroot builds will fail with command-not-found.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct BuildToolUsedWithoutBuildRequires {
     diagnostics: Vec<Diagnostic>,
@@ -118,7 +122,7 @@ impl Lint for BuildToolUsedWithoutBuildRequires {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint_with_profile;
     use rpm_spec_profile::{Family, Profile};
 
     fn fedora_profile() -> Profile {
@@ -128,11 +132,7 @@ mod tests {
     }
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = BuildToolUsedWithoutBuildRequires::new();
-        lint.set_profile(&fedora_profile());
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint_with_profile::<BuildToolUsedWithoutBuildRequires>(src, &fedora_profile())
     }
 
     #[test]

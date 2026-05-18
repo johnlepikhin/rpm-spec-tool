@@ -332,13 +332,10 @@ impl Lint for OptflagsOverridden {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = OptflagsOverridden::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<OptflagsOverridden>(src)
     }
 
     #[test]

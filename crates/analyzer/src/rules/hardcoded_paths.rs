@@ -32,7 +32,7 @@ use rpm_spec_profile::Profile;
 
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
 use crate::lint::{Lint, LintMetadata};
-use crate::rules::util::{FALLBACK_PATH_TABLE, is_path_boundary};
+use crate::rules::util::{DepTagKey, FALLBACK_PATH_TABLE, is_path_boundary};
 use crate::visit::{self, Visit};
 
 pub static METADATA: LintMetadata = LintMetadata {
@@ -43,13 +43,17 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Use the matching RPM macro instead of a hardcoded path (e.g. `%{_bindir}` for `/usr/bin`).
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug)]
 pub struct HardcodedPaths {
     diagnostics: Vec<Diagnostic>,
     /// Raw source bytes, set via [`Lint::set_source`] before each pass.
     /// Required because the rule scans the source slice covered by an
     /// anchor span to compute precise per-occurrence sub-spans.
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
     /// `(literal_prefix, "%{macro}")` pairs scanned top-down. Defaults
     /// to [`FALLBACK_PATH_TABLE`]; replaced from `profile.macros` in
     /// [`Lint::set_profile`] so distro-specific paths (e.g. `_libdir`
@@ -65,9 +69,27 @@ impl Default for HardcodedPaths {
             source: None,
             path_table: FALLBACK_PATH_TABLE
                 .iter()
-                .map(|(p, m)| ((*p).to_string(), (*m).to_string()))
+                .map(|(p, m)| ((*p).to_string(), rewrite_fallback_replacement(p, m)))
                 .collect(),
         }
+    }
+}
+
+/// Returns the safer replacement for a [`FALLBACK_PATH_TABLE`] entry.
+///
+/// The shared table contains `/usr/lib → %{_libdir}` for cases where
+/// the profile genuinely resolves `_libdir` to `/usr/lib`. But on 64-bit
+/// distros `_libdir = /usr/lib64`, so applying that suggestion to a
+/// literal `/usr/lib` silently rewrites the path. We rewrite the
+/// fallback to `%{_prefix}/lib`, which is always correct (`_prefix` is
+/// `/usr` on every layout we target).
+///
+/// All other entries are passed through unchanged.
+fn rewrite_fallback_replacement(path: &str, replacement: &str) -> String {
+    if path == "/usr/lib" && replacement == "%{_libdir}" {
+        "%{_prefix}/lib".to_owned()
+    } else {
+        replacement.to_owned()
     }
 }
 
@@ -106,6 +128,20 @@ impl HardcodedPaths {
         let mut idx = 0;
         while let Some(slash_offset) = slice[idx..].find('/') {
             let slash_pos = idx + slash_offset;
+            if is_on_hash_comment_line(slice, slash_pos) {
+                // Skip to next line so we don't re-scan the same comment.
+                match slice[slash_pos..].find('\n') {
+                    Some(nl) => idx = slash_pos + nl + 1,
+                    None => break,
+                }
+                continue;
+            }
+            if let Some(literal_len) = match_well_known_literal(&slice[slash_pos..]) {
+                // Canonical path everybody greps by literal name — skip
+                // both the suggestion and the prefix-match below.
+                idx = slash_pos + literal_len;
+                continue;
+            }
             if let Some((prefix_len, replacement)) = self.match_prefix(&slice[slash_pos..]) {
                 let abs_start = start + slash_pos;
                 let abs_end = abs_start + prefix_len;
@@ -130,32 +166,98 @@ impl HardcodedPaths {
     }
 }
 
+/// Canonical paths that are universally referenced by literal name in
+/// shell scripts and scriptlets — readers grep for the literal string,
+/// so rewriting them to `%{_sysconfdir}/os-release` or similar is
+/// technically correct but actively harmful for code review and
+/// cross-spec searches.
+///
+/// Real repro cases that previously produced false positives:
+/// - `systemd.spec`: `source /etc/os-release`
+/// - `kernel.spec`: `cat /etc/os-release`
+/// - `systemd.spec`: `/etc/rc.d/init.d`, `/etc/rc.d/rc.local`
+/// - countless shell scripts: `2>/dev/null`
+const WELL_KNOWN_LITERAL_PATHS: &[&str] = &[
+    // `/etc/rc.d/*` must come before `/etc` entries so longest-prefix
+    // matching picks the more specific path first; this isn't strictly
+    // required since each entry checks its own boundary, but matches
+    // the spirit of the prefix-table ordering below.
+    "/etc/rc.d/init.d",
+    "/etc/rc.d/rc.local",
+    "/etc/os-release",
+    "/etc/passwd",
+    "/etc/group",
+    "/etc/shadow",
+    "/etc/hosts",
+    "/etc/fstab",
+    "/etc/resolv.conf",
+    "/etc/nsswitch.conf",
+    "/etc/sysctl.conf",
+    "/dev/null",
+    "/dev/zero",
+    "/dev/random",
+    "/dev/urandom",
+];
+
+/// Returns `Some(len)` when `text` begins with one of
+/// [`WELL_KNOWN_LITERAL_PATHS`] followed by a path-boundary character
+/// (so `/dev/null` matches but `/dev/nullsomething` does not).
+fn match_well_known_literal(text: &str) -> Option<usize> {
+    for &path in WELL_KNOWN_LITERAL_PATHS {
+        if let Some(rest) = text.strip_prefix(path)
+            && is_path_boundary(rest)
+        {
+            return Some(path.len());
+        }
+    }
+    None
+}
+
+/// `true` when the byte at `slash_pos` lives on a line whose first
+/// non-whitespace character is `#` and no quote character (`"`/`'`)
+/// appears between that `#` and `slash_pos`. Used to silence the rule
+/// on shell/spec comments — these are documentation, not code, and
+/// real-world specs (kernel.spec, systemd.spec, …) routinely mention
+/// hardcoded paths in comments.
+///
+/// The quote heuristic guards against the unusual case of a literal
+/// `#` inside a quoted string starting a line — e.g. `echo "#/usr/bin"`.
+/// "First non-space is `#`" alone would over-silence such lines, so we
+/// require no `"` or `'` between the `#` and the slash to treat the
+/// line as a real comment.
+fn is_on_hash_comment_line(slice: &str, slash_pos: usize) -> bool {
+    let bytes = slice.as_bytes();
+    // Walk back to the start of the current line.
+    let line_start = bytes[..slash_pos]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |nl| nl + 1);
+    let prefix = &bytes[line_start..slash_pos];
+    // First non-whitespace byte on the line.
+    let Some(&first) = prefix.iter().find(|&&b| b != b' ' && b != b'\t') else {
+        return false;
+    };
+    if first != b'#' {
+        return false;
+    }
+    // No quote between the `#` and the slash → treat as a real comment.
+    !prefix.iter().any(|&b| b == b'"' || b == b'\'')
+}
+
 fn is_safe_tag(tag: &Tag) -> bool {
-    matches!(
+    // Free-form / URL / source tags — literal paths are expected.
+    if matches!(
         tag,
-        // Free-form / URL / source tags — literal paths are expected.
-        Tag::Source(_)
-            | Tag::Patch(_)
-            | Tag::URL
-            | Tag::Summary
-            | Tag::License
-            | Tag::Group
-            // Dependency tags — absolute paths are file-based deps,
-            // the canonical RPM idiom. Rewriting them to a macro is
-            // wrong: file deps resolve through rpm's file-provider
-            // table, not the macro-expanded path.
-            | Tag::Requires
-            | Tag::BuildRequires
-            | Tag::Provides
-            | Tag::Conflicts
-            | Tag::Obsoletes
-            | Tag::Recommends
-            | Tag::Suggests
-            | Tag::Supplements
-            | Tag::Enhances
-            | Tag::BuildConflicts
-            | Tag::OrderWithRequires
-    )
+        Tag::Source(_) | Tag::Patch(_) | Tag::URL | Tag::Summary | Tag::License | Tag::Group
+    ) {
+        return true;
+    }
+    // Dependency tags — absolute paths are file-based deps, the
+    // canonical RPM idiom. Rewriting them to a macro is wrong: file
+    // deps resolve through rpm's file-provider table, not the
+    // macro-expanded path. Use `DepTagKey::from_tag` so future
+    // dep-tag variants are covered automatically.
+    DepTagKey::from_tag(tag).is_some()
 }
 
 impl<'ast> Visit<'ast> for HardcodedPaths {
@@ -199,8 +301,8 @@ impl Lint for HardcodedPaths {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
     }
     fn set_profile(&mut self, profile: &Profile) {
         // Profile-derived entries: for each well-known path macro, try
@@ -219,11 +321,16 @@ impl Lint for HardcodedPaths {
         }
         // Append every fallback entry whose path the profile didn't
         // already cover. Preserves coverage of legacy/multi-arch
-        // aliases (e.g. `/usr/lib → %{_libdir}` even when the profile
-        // says `_libdir = /usr/lib64`).
+        // aliases — but `rewrite_fallback_replacement` swaps the
+        // `/usr/lib → %{_libdir}` alias for the always-correct
+        // `%{_prefix}/lib` because `_libdir` resolves to `/usr/lib64`
+        // on 64-bit profiles.
         for (path, macro_expr) in FALLBACK_PATH_TABLE {
             if seen.insert((*path).to_string()) {
-                table.push(((*path).to_string(), (*macro_expr).to_string()));
+                table.push((
+                    (*path).to_string(),
+                    rewrite_fallback_replacement(path, macro_expr),
+                ));
             }
         }
         // Longest prefix first, so `/usr/lib64` is checked before
@@ -254,14 +361,11 @@ const PATH_MACROS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_support::run_lint;
     use crate::session::parse;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = HardcodedPaths::new();
-        lint.set_source(src);
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<HardcodedPaths>(src)
     }
 
     #[test]
@@ -403,7 +507,7 @@ mod tests {
         let src = "Name: x\n%install\ncp libfoo.so /opt/myproj/lib/\n";
         let outcome = parse(src);
         let mut lint = HardcodedPaths::new();
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
 
         let mut profile = Profile::default();
         profile.macros.insert(
@@ -432,7 +536,7 @@ mod tests {
         let src = "Name: x\n%install\ncp libfoo.so /usr/lib64/\n";
         let outcome = parse(src);
         let mut lint = HardcodedPaths::new();
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
 
         let mut profile = Profile::default();
         profile
@@ -454,6 +558,100 @@ mod tests {
         assert!(diags[0].message.contains("%{_libdir}"));
     }
 
+    /// Comment lines mention hardcoded paths constantly in real-world
+    /// specs (kernel.spec, systemd.spec, …); the rule must skip them
+    /// instead of suggesting macro rewrites for documentation prose.
+    #[test]
+    fn silent_for_hardcoded_path_in_hash_comment() {
+        let src = "Name: x\n%install\n# install /usr/bin/foo manually\n";
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "comment line should produce no diagnostics; got {diags:?}"
+        );
+    }
+
+    /// `/usr/lib → %{_libdir}` is wrong on every 64-bit profile because
+    /// `_libdir = /usr/lib64` there: applying the suggestion silently
+    /// rewrites the path. The fallback must not suggest `%{_libdir}`
+    /// for a literal `/usr/lib`; either no suggestion or
+    /// `%{_prefix}/lib` is acceptable.
+    #[test]
+    fn usr_lib_suggestion_is_not_libdir_on_64bit() {
+        use rpm_spec_profile::{MacroEntry, Profile, Provenance};
+
+        let src = "Name: x\n%install\nmkdir -p /usr/lib/foo\n";
+        let outcome = parse(src);
+        let mut lint = HardcodedPaths::new();
+        lint.set_source(std::sync::Arc::from(src));
+
+        let mut profile = Profile::default();
+        profile.macros.insert(
+            "_libdir",
+            MacroEntry::literal("/usr/lib64", Provenance::Override),
+        );
+        profile
+            .macros
+            .insert("_prefix", MacroEntry::literal("/usr", Provenance::Override));
+        lint.set_profile(&profile);
+        lint.visit_spec(&outcome.spec);
+        let diags = lint.take_diagnostics();
+
+        for d in &diags {
+            assert!(
+                !d.message.contains("%{_libdir}"),
+                "must not suggest %{{_libdir}} for /usr/lib when _libdir is /usr/lib64; got {}",
+                d.message
+            );
+        }
+    }
+
+    /// Canonical configuration files like `/etc/os-release` are
+    /// universally referenced by literal name in shell scripts —
+    /// rewriting them to `%{_sysconfdir}/os-release` breaks grep-ability
+    /// and offers no real benefit. The allow-list must silence the
+    /// rule on these paths.
+    #[test]
+    fn silent_for_well_known_etc_os_release() {
+        let src = "Name: x\n%build\nsource /etc/os-release\n";
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "well-known canonical path /etc/os-release must not be flagged; got {diags:?}"
+        );
+    }
+
+    /// `/dev/null` is the canonical bit-bucket — rewriting it to
+    /// anything else is pure noise.
+    #[test]
+    fn silent_for_well_known_dev_null() {
+        let src = "Name: x\n%install\ncmd 2>/dev/null\n";
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "well-known canonical path /dev/null must not be flagged; got {diags:?}"
+        );
+    }
+
+    /// The allow-list must NOT over-match: an arbitrary `/etc/...` path
+    /// not in the well-known list should still be flagged with the
+    /// `%{_sysconfdir}` suggestion.
+    #[test]
+    fn still_flags_arbitrary_etc_path() {
+        let src = "Name: x\n%install\nfoo /etc/myconfig\n";
+        let diags = run(src);
+        assert_eq!(
+            diags.len(),
+            1,
+            "arbitrary /etc/... path should still be flagged: {diags:?}"
+        );
+        assert!(
+            diags[0].message.contains("%{_sysconfdir}"),
+            "expected %{{_sysconfdir}} suggestion; got {}",
+            diags[0].message
+        );
+    }
+
     /// When a profile's macro doesn't expand cleanly (e.g. a lua-bodied
     /// macro), the rule falls back to the hardcoded default so flagging
     /// still happens on standard FHS paths.
@@ -464,7 +662,7 @@ mod tests {
         let src = "Name: x\n%install\ncp foo /usr/bin/bar\n";
         let outcome = parse(src);
         let mut lint = HardcodedPaths::new();
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
 
         let mut profile = Profile::default();
         let mut bindir = MacroEntry::literal("", Provenance::Override);

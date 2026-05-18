@@ -34,13 +34,13 @@
 use std::collections::BTreeSet;
 
 use rpm_spec::ast::{
-    BoolDep, DepAtom, DepExpr, PreambleContent, PreambleItem, Section, Span, SpecFile, SpecItem,
-    Tag, TagValue,
+    BoolDep, DepAtom, DepExpr, PackageName, PreambleContent, PreambleItem, Section, Span, SpecFile,
+    SpecItem, Tag, TagValue,
 };
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
 use crate::lint::{Lint, LintMetadata};
-use crate::rules::util::iter_packages;
+use crate::rules::util::{DepTagKey, iter_packages, package_name, render_text_with_macros};
 use crate::visit::Visit;
 
 /// Normalised key used to dedup or look up an atom across tags.
@@ -158,6 +158,10 @@ pub static DUPLICATE_ATOM_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Same dependency atom appears more than once inside one tag's value list. RPM keeps one and ignores the rest; remove the duplicate.
+///
+/// See [`DUPLICATE_ATOM_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct DuplicateDependencyAtom {
     diagnostics: Vec<Diagnostic>,
@@ -169,24 +173,6 @@ impl DuplicateDependencyAtom {
     }
 }
 
-/// Tag-class entry: predicate matching the tag plus its human-
-/// readable label. Aliased so the const-array declarations below
-/// don't trip `clippy::type_complexity`.
-type TagClass = (fn(&Tag) -> bool, &'static str);
-
-/// Tag classes RPM320 inspects, paired with their human label.
-const DEP_CLASSES: &[TagClass] = &[
-    (|t| matches!(t, Tag::Requires), "Requires"),
-    (|t| matches!(t, Tag::BuildRequires), "BuildRequires"),
-    (|t| matches!(t, Tag::Provides), "Provides"),
-    (|t| matches!(t, Tag::Conflicts), "Conflicts"),
-    (|t| matches!(t, Tag::Obsoletes), "Obsoletes"),
-    (|t| matches!(t, Tag::Recommends), "Recommends"),
-    (|t| matches!(t, Tag::Suggests), "Suggests"),
-    (|t| matches!(t, Tag::Supplements), "Supplements"),
-    (|t| matches!(t, Tag::Enhances), "Enhances"),
-];
-
 impl<'ast> Visit<'ast> for DuplicateDependencyAtom {
     fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
         // Conditional-aware dedup: atoms in mutually-exclusive arms of
@@ -194,15 +180,15 @@ impl<'ast> Visit<'ast> for DuplicateDependencyAtom {
         // must not flag each other as duplicates. Each branch inherits
         // its parent scope's `seen` set, so a duplicate is flagged only
         // when the two atoms could co-exist in the same build.
-        for (matcher, label) in DEP_CLASSES {
+        //
+        // The set of dep-tag classes is centralised on `DepTagKey::ALL`
+        // — earlier versions inlined a `&[(fn, &str)]` table here that
+        // had to be kept in sync by hand.
+        for key in DepTagKey::ALL {
+            let key = *key;
+            let label = key.label();
             let initial = BTreeSet::new();
-            walk_spec_items_dedup(
-                &spec.items,
-                *matcher,
-                label,
-                &initial,
-                &mut self.diagnostics,
-            );
+            walk_spec_items_dedup(&spec.items, key, label, &initial, &mut self.diagnostics);
             for item in &spec.items {
                 if let SpecItem::Section(boxed) = item
                     && let Section::Package { content, .. } = boxed.as_ref()
@@ -210,7 +196,7 @@ impl<'ast> Visit<'ast> for DuplicateDependencyAtom {
                     let initial = BTreeSet::new();
                     walk_preamble_content_dedup(
                         content,
-                        *matcher,
+                        key,
                         label,
                         &initial,
                         &mut self.diagnostics,
@@ -222,13 +208,13 @@ impl<'ast> Visit<'ast> for DuplicateDependencyAtom {
 }
 
 /// Recurse over the main package's top-level item tree, flagging
-/// duplicate atoms on tags matching `matcher`. Each conditional branch
+/// duplicate atoms on tags matching `key`. Each conditional branch
 /// gets a fresh `seen` set cloned from its parent — so atoms in
 /// mutually-exclusive arms don't conflict, but a duplicate that the
 /// parent scope already declared is still caught inside the arm.
 fn walk_spec_items_dedup(
     items: &[SpecItem<Span>],
-    matcher: fn(&Tag) -> bool,
+    key: DepTagKey,
     label: &'static str,
     parent_seen: &BTreeSet<AtomKey>,
     out: &mut Vec<Diagnostic>,
@@ -237,14 +223,14 @@ fn walk_spec_items_dedup(
     for item in items {
         match item {
             SpecItem::Preamble(p) => {
-                check_item_for_dup(p, matcher, label, &mut local_seen, out);
+                check_item_for_dup(p, key, label, &mut local_seen, out);
             }
             SpecItem::Conditional(c) => {
                 for branch in &c.branches {
-                    walk_spec_items_dedup(&branch.body, matcher, label, &local_seen, out);
+                    walk_spec_items_dedup(&branch.body, key, label, &local_seen, out);
                 }
                 if let Some(els) = &c.otherwise {
-                    walk_spec_items_dedup(els, matcher, label, &local_seen, out);
+                    walk_spec_items_dedup(els, key, label, &local_seen, out);
                 }
             }
             _ => {}
@@ -257,7 +243,7 @@ fn walk_spec_items_dedup(
 /// [`walk_spec_items_dedup`].
 fn walk_preamble_content_dedup(
     items: &[PreambleContent<Span>],
-    matcher: fn(&Tag) -> bool,
+    key: DepTagKey,
     label: &'static str,
     parent_seen: &BTreeSet<AtomKey>,
     out: &mut Vec<Diagnostic>,
@@ -266,14 +252,14 @@ fn walk_preamble_content_dedup(
     for item in items {
         match item {
             PreambleContent::Item(p) => {
-                check_item_for_dup(p, matcher, label, &mut local_seen, out);
+                check_item_for_dup(p, key, label, &mut local_seen, out);
             }
             PreambleContent::Conditional(c) => {
                 for branch in &c.branches {
-                    walk_preamble_content_dedup(&branch.body, matcher, label, &local_seen, out);
+                    walk_preamble_content_dedup(&branch.body, key, label, &local_seen, out);
                 }
                 if let Some(els) = &c.otherwise {
-                    walk_preamble_content_dedup(els, matcher, label, &local_seen, out);
+                    walk_preamble_content_dedup(els, key, label, &local_seen, out);
                 }
             }
             _ => {}
@@ -287,12 +273,12 @@ fn walk_preamble_content_dedup(
 /// subpackage walkers.
 fn check_item_for_dup(
     p: &PreambleItem<Span>,
-    matcher: fn(&Tag) -> bool,
+    key: DepTagKey,
     label: &'static str,
     local_seen: &mut BTreeSet<AtomKey>,
     out: &mut Vec<Diagnostic>,
 ) {
-    if !matcher(&p.tag) {
+    if !key.matches_tag(&p.tag) {
         return;
     }
     let TagValue::Dep(expr) = &p.value else {
@@ -338,6 +324,10 @@ pub static WEAK_DUPLICATES_STRONG_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// A weak dependency (Recommends/Suggests/Supplements/Enhances) names a package already covered by a strong `Requires:`. The weak entry is dead weight.
+///
+/// See [`WEAK_DUPLICATES_STRONG_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct WeakDepDuplicatesStrongDep {
     diagnostics: Vec<Diagnostic>,
@@ -517,6 +507,10 @@ pub static SELF_WEAK_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// A weak dependency names the package itself. RPM treats self-dependencies as no-ops; the entry is almost always copy-paste from another spec.
+///
+/// See [`SELF_WEAK_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SelfWeakDependency {
     diagnostics: Vec<Diagnostic>,
@@ -588,6 +582,10 @@ pub static RUNTIME_LOOKS_BUILD_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `Requires:` mentions a build-only tool (`gcc`, `cmake`, a `*-devel` package, a `pkgconfig(...)` capability, …). Move it to `BuildRequires:`.
+///
+/// See [`RUNTIME_LOOKS_BUILD_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct RuntimeRequiresLooksLikeBuildRequires {
     diagnostics: Vec<Diagnostic>,
@@ -608,9 +606,164 @@ const BUILD_TOOL_NAMES: &[&str] = &[
     "rustc", "cargo",
 ];
 
+/// Suffixes that mark a subpackage as "development-class": header
+/// files, static libraries, and `pkg-config` glue legitimately belong
+/// here. A `-devel` package whose runtime users invoke `pkg-config`
+/// genuinely needs `Requires: pkgconfig` — flagging it produces noise
+/// on real-world Fedora specs (ffmpeg, libvirt, qt6, rpm.spec, …).
+const DEVEL_SUBPKG_SUFFIXES: &[&str] = &["-devel", "-static", "-headers", "-dev"];
+
+/// Main package names whose runtime closure legitimately includes
+/// build tools and `-devel` artifacts (compilers/interpreters/
+/// build-system frontends). GCC declares `Requires: make` because
+/// `lto-wrapper` invokes `make`; `gcc-c++` requires `libstdc++-devel`
+/// so users can compile C++; etc. Matched case-insensitively against
+/// the literal `Name:` value, with a permissive `starts_with` so
+/// cross-compiler variants (`mingw64-gcc`, `cross-gcc-aarch64`) are
+/// covered without per-variant entries.
+const TOOLCHAIN_NAME_PREFIXES: &[&str] = &[
+    "gcc",
+    "clang",
+    "llvm",
+    "rustc",
+    "rust",
+    "mingw",
+    "cross-gcc",
+    "automake",
+    "autoconf",
+    "cmake",
+    "meson",
+    "ninja-build",
+    "make",
+    "cargo",
+    "golang",
+    "nodejs",
+    "python3",
+    "ruby",
+    "perl",
+];
+
+/// `true` when the main package's literal `Name:` value matches one
+/// of [`TOOLCHAIN_NAME_PREFIXES`]. Comparison is case-insensitive on
+/// the head, then either an exact match or a `-`-suffixed extension
+/// (so `gcc`, `gcc-c++`, `mingw64-gcc` all match `gcc` / `mingw`).
+fn is_toolchain_main_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    TOOLCHAIN_NAME_PREFIXES.iter().any(|prefix| {
+        if lower == *prefix {
+            return true;
+        }
+        // `<prefix>-*` (e.g. `gcc-c++`, `gcc-fortran`) — extension by
+        // hyphen counts; `<prefix><other>` (e.g. `gccgo`) does not.
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            return rest.starts_with('-');
+        }
+        // Cross/MinGW variants: `mingw64-gcc`, `cross-gcc-aarch64`,
+        // `mingw32-gcc-c++` — any name containing the prefix between
+        // hyphens (or at start/end) qualifies.
+        let needle = format!("-{prefix}");
+        if lower.contains(&needle) {
+            return true;
+        }
+        false
+    })
+}
+
+/// `true` when `pkg_name` ends in a suffix from [`DEVEL_SUBPKG_SUFFIXES`].
+fn is_devel_subpackage(pkg_name: &str) -> bool {
+    let lower = pkg_name.to_ascii_lowercase();
+    DEVEL_SUBPKG_SUFFIXES
+        .iter()
+        .any(|suffix| lower.ends_with(suffix))
+}
+
+/// Render a [`PackageName`] back to its source-text form, preserving
+/// macro references as `%foo` / `%{foo}`. Used as a fall-back when
+/// the fully-resolved literal name is unavailable (macros in the
+/// subpkg argument prevent [`iter_packages`] from forming
+/// `<main>-<suffix>`), so we can still detect devel-class subpackages
+/// whose name is macro-templated like `%{pkg_name}-devel`.
+///
+/// Returns `None` when the rendered text is empty or the variant is
+/// not one of [`PackageName::Relative`] / [`PackageName::Absolute`]
+/// (the enum is `#[non_exhaustive]`).
+fn render_package_name_literal(arg: &PackageName) -> Option<String> {
+    let text = match arg {
+        PackageName::Relative(t) | PackageName::Absolute(t) => t,
+        _ => return None,
+    };
+    let rendered = render_text_with_macros(text);
+    let trimmed = rendered.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+/// Walk `spec` and collect every subpackage `Section::Package`'s header
+/// span paired with the rendered-with-macros literal name of its
+/// `%package` argument. Used by RPM323 as a fall-back for the
+/// devel-suffix check when the fully-resolved literal name is `None`
+/// (the typical case for `%package -n %{pkg_name}-devel`). Bare
+/// suffix form (`%package devel`) renders to just `devel`, which
+/// still ends with `-devel`? — no, `devel` literally doesn't. To
+/// catch that case, callers should rely on the resolved-name check.
+/// This helper exists only for the macro-templated path.
+fn collect_subpackage_literal_names(
+    spec: &SpecFile<Span>,
+) -> std::collections::HashMap<Span, String> {
+    let mut out = std::collections::HashMap::new();
+    for item in &spec.items {
+        if let SpecItem::Section(boxed) = item
+            && let Section::Package { name_arg, data, .. } = boxed.as_ref()
+            && let Some(rendered) = render_package_name_literal(name_arg)
+        {
+            out.insert(*data, rendered);
+        }
+    }
+    out
+}
+
 impl<'ast> Visit<'ast> for RuntimeRequiresLooksLikeBuildRequires {
     fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
+        // Toolchain/interpreter packages legitimately ship build tools
+        // in their runtime closure (`gcc` needs `make` for lto-wrapper,
+        // `rustc` needs `cargo`-companions, …). Bail on the whole spec
+        // — per-tag suppression would just spam the same allowance.
+        if let Some(main) = package_name(spec)
+            && is_toolchain_main_name(main)
+        {
+            return;
+        }
+        // Map of subpackage header span → rendered-with-macros literal
+        // name, used as a fall-back devel-suffix check when the fully
+        // resolved name is unavailable (macros in the subpkg arg).
+        let subpkg_literals = collect_subpackage_literal_names(spec);
         for pkg in iter_packages(spec) {
+            // `-devel` / `-static` / `-headers` subpackages: their
+            // users *consume* the build artifacts (headers, .pc files,
+            // .a archives) and therefore legitimately depend on
+            // `pkgconfig`, `*-devel` peers, etc. Convention is well
+            // established across Fedora/RHEL/openSUSE — skip the
+            // whole package's Requires.
+            if let Some(name) = pkg.name()
+                && is_devel_subpackage(name)
+            {
+                continue;
+            }
+            // Fall-back: macro-templated subpkg names like
+            // `%{pkg_name}-devel` resolve to `None` above, but the
+            // *literal* source text still ends in a devel suffix.
+            // Real repro: `ffmpeg.spec` declares
+            // `%package -n %{pkg_name}-devel` with `Requires: pkgconfig`
+            // inside — 6 false positives before this check.
+            if pkg.name().is_none()
+                && let Some(literal) = subpkg_literals.get(&pkg.header_span())
+                && is_devel_subpackage(literal)
+            {
+                continue;
+            }
             for_each_atom(
                 pkg.items(),
                 |t| matches!(t, Tag::Requires),
@@ -1047,5 +1200,85 @@ Recommends: foo\n\
         // BuildRequires: gcc is correct — RPM323 only inspects Requires.
         let src = "Name: x\nBuildRequires: gcc\n";
         assert!(run_323(src).is_empty());
+    }
+
+    #[test]
+    fn silent_for_pkgconfig_in_devel_subpackage() {
+        // Real-world FP: ffmpeg.spec / libvirt.spec / qt6 / rpm.spec
+        // declare `Requires: pkgconfig` in their `-devel` subpackages.
+        // That's correct: a devel subpackage installs `.pc` files and
+        // its consumers run `pkg-config` to read them.
+        let src = "Name: foo\n\
+%package -n libfoo-devel\n\
+Summary: dev\n\
+Requires: pkgconfig\n\
+%description -n libfoo-devel\n\
+X\n";
+        let diags = run_323(src);
+        assert!(
+            diags.is_empty(),
+            "expected no RPM323 diagnostics, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn silent_for_make_requires_in_compiler_package() {
+        // Real-world FP: gcc.spec declares `Requires: make` (lto-wrapper
+        // invokes make) and `Requires: glibc-devel` (so users can
+        // compile C programs). Both legitimate for a toolchain package.
+        let src = "Name: gcc\n\
+Version: 14\n\
+Release: 1\n\
+Summary: x\n\
+License: y\n\
+Requires: make\n\
+Requires: glibc-devel\n";
+        let diags = run_323(src);
+        assert!(
+            diags.is_empty(),
+            "main name 'gcc' is in the toolchain allow-list; expected no RPM323, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn silent_for_pkgconfig_in_macro_templated_devel_subpackage() {
+        // Real-world FP: ffmpeg.spec declares
+        // `%package -n %{pkg_name}-devel` and lists `Requires: pkgconfig`
+        // inside. The subpkg name doesn't resolve fully (macro in arg),
+        // but the literal source text ends in `-devel`, so the rule
+        // must skip the same way as a fully literal `libfoo-devel`.
+        let src = "Name: ffmpeg\n\
+%global pkg_name ffmpeg\n\
+%package -n %{pkg_name}-devel\n\
+Summary: dev\n\
+Requires: pkgconfig\n\
+%description -n %{pkg_name}-devel\n\
+X\n";
+        let diags = run_323(src);
+        assert!(
+            diags.is_empty(),
+            "macro-templated `-devel` subpkg must not trigger RPM323, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_pkgconfig_in_macro_templated_non_devel_subpackage() {
+        // Flip side: a macro-templated subpkg whose literal text does
+        // NOT end in a devel-class suffix (here `-runtime`) must still
+        // fire — the rule isn't a blanket "skip all macro-templated
+        // subpackages" allowance.
+        let src = "Name: ffmpeg\n\
+%global pkg_name ffmpeg\n\
+%package -n %{pkg_name}-runtime\n\
+Summary: rt\n\
+Requires: pkgconfig\n\
+%description -n %{pkg_name}-runtime\n\
+X\n";
+        let diags = run_323(src);
+        assert_eq!(
+            diags.len(),
+            1,
+            "non-devel macro-templated subpkg should still fire, got {diags:?}"
+        );
     }
 }

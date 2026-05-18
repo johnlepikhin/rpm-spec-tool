@@ -31,6 +31,10 @@ pub static STANDARD_DIR_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// A `%files` entry owns a standard directory (e.g. `%{_bindir}`, `%{_datadir}`) outright. Standard directories belong to `filesystem` (or the distro equivalent); list a package-specific sub-path instead.
+///
+/// See [`STANDARD_DIR_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct StandardDirOwned {
     diagnostics: Vec<Diagnostic>,
@@ -91,6 +95,10 @@ pub static BROAD_GLOB_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// A `%files` entry uses a broad glob (`%{_datadir}/*`, `%{_libdir}/*`, …). Such globs hide newly added or misnamed files between upstream releases — list a package-specific subdirectory instead.
+///
+/// See [`BROAD_GLOB_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct BroadFilesGlob {
     diagnostics: Vec<Diagnostic>,

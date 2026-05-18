@@ -31,6 +31,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// openSUSE/SLES Specfile Guidelines require every package to declare a Group: tag.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct GroupTagRequiredOnSuse {
     diagnostics: Vec<Diagnostic>,

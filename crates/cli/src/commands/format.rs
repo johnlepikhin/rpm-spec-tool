@@ -11,7 +11,7 @@ use rpm_spec_analyzer::parse;
 
 use crate::app::ColorChoice;
 use crate::commands::{MAX_INDENT_LEVEL, printer_config};
-use crate::config as cli_config;
+use crate::config::{self as cli_config, ConfigCacheCliExt as _};
 use crate::io;
 use crate::output::resolve_color;
 

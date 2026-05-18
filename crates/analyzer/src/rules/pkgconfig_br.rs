@@ -31,6 +31,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// `%files` ships a `.pc` file but `BuildRequires:` lacks `pkgconfig`. Without the BR, rpm's `pkgconfig(...)` provides generator does not run; downstream `-devel` consumers can't find the capability.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct PkgconfigFileWithoutPkgconfigBr {
     diagnostics: Vec<Diagnostic>,
@@ -107,6 +111,7 @@ impl Lint for PkgconfigFileWithoutPkgconfigBr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_support::run_lint_with_profile;
     use crate::session::parse;
     use rpm_spec_profile::{Family, MacroEntry, Profile, Provenance};
 
@@ -121,11 +126,7 @@ mod tests {
     }
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = PkgconfigFileWithoutPkgconfigBr::new();
-        lint.set_profile(&fedora_profile());
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint_with_profile::<PkgconfigFileWithoutPkgconfigBr>(src, &fedora_profile())
     }
 
     #[test]

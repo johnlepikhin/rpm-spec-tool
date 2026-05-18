@@ -35,6 +35,10 @@ pub static DIRECT_SYSTEMCTL_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// A scriptlet invokes `systemctl` directly. Use the distro-provided helpers (`%systemd_post` / `%service_add_post` etc.) so the unit lifecycle is managed by macros that handle non-systemd targets, chroots, and image builds.
+///
+/// See [`DIRECT_SYSTEMCTL_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct DirectSystemctlInScriptlet {
     diagnostics: Vec<Diagnostic>,
@@ -128,6 +132,10 @@ pub static STATE_OUTSIDE_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// Scriptlet writes scratch state under `/tmp` or `/var/tmp`. Those races with parallel transactions and leak on abort; use `$RPM_STATE_DIR` or `/var/lib/rpm-state/<pkg>` instead.
+///
+/// See [`STATE_OUTSIDE_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ScriptletStateOutsideRpmState {
     diagnostics: Vec<Diagnostic>,

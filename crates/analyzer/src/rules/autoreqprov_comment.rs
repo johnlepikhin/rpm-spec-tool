@@ -38,6 +38,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `AutoReqProv` / `AutoReq` / `AutoProv` is set to `no` without a neighbouring comment. Disabling RPM's auto-dependency generation is unusual and almost always needs justification.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct AutoreqprovWithoutComment {
     diagnostics: Vec<Diagnostic>,
@@ -181,13 +185,10 @@ impl Lint for AutoreqprovWithoutComment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = AutoreqprovWithoutComment::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<AutoreqprovWithoutComment>(src)
     }
 
     #[test]

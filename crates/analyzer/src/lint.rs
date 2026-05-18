@@ -62,7 +62,12 @@ pub trait Lint: for<'ast> Visit<'ast> + Send {
     /// whitespace / tab-indent checks that don't survive the AST round
     /// trip — store the slice here. The default is a no-op, so existing
     /// rules don't need to opt in.
-    fn set_source(&mut self, source: &str) {
+    ///
+    /// The source is passed as `Arc<str>` so the session builds it once
+    /// and every active rule shares the allocation via cheap refcount
+    /// bumps; for large specs this is the dominant allocation cost
+    /// otherwise.
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
         let _ = source;
     }
 

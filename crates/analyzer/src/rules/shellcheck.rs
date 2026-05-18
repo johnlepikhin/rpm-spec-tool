@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use rpm_spec::ast::{FileTrigger, Scriptlet, Section, Span, Trigger};
 use serde::Deserialize;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::config::Config;
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
@@ -51,11 +51,6 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Polling cadence for `wait_with_timeout`.
 const WAIT_POLL: Duration = Duration::from_millis(25);
-
-/// Shell dialects accepted by `--shell=`. Validated at config-load
-/// time so a typo (`shell = "fish"`) surfaces as a `warn!` rather
-/// than mysterious shellcheck-side stderr.
-const ALLOWED_SHELLS: &[&str] = &["sh", "bash", "dash", "ksh"];
 
 // Named SC codes so the disable list reads as English next to the
 // per-entry comment in `DEFAULT_DISABLED`.
@@ -172,7 +167,7 @@ enum ShellcheckError {
 #[derive(Debug)]
 pub struct ShellcheckLint {
     diagnostics: Vec<Diagnostic>,
-    source: String,
+    source: std::sync::Arc<str>,
     binary_override: Option<String>,
     shell: String,
     timeout: Duration,
@@ -197,7 +192,7 @@ impl ShellcheckLint {
     pub fn new() -> Self {
         Self {
             diagnostics: Vec::new(),
-            source: String::new(),
+            source: std::sync::Arc::from(""),
             binary_override: None,
             shell: DEFAULT_SHELL.to_owned(),
             timeout: DEFAULT_TIMEOUT,
@@ -431,54 +426,28 @@ impl Lint for ShellcheckLint {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = source.to_owned();
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = source;
     }
     fn set_config(&mut self, config: &Config) {
         self.binary_override = config.shellcheck.binary.clone();
-        if let Some(s) = config.shellcheck.shell.as_deref() {
-            if ALLOWED_SHELLS.contains(&s) {
-                self.shell = s.to_owned();
-            } else {
-                warn!(
-                    target: "rpm_spec_analyzer::shellcheck",
-                    shell = %s,
-                    allowed = ?ALLOWED_SHELLS,
-                    "[shellcheck].shell value not recognised; keeping default `{}`",
-                    DEFAULT_SHELL,
-                );
-            }
+        if let Some(dialect) = config.shellcheck.shell {
+            // Validation moved to TOML parse — `ShellDialect` is a
+            // closed enum, so we just consume its canonical token.
+            self.shell = dialect.as_str().to_owned();
         }
         if let Some(secs) = config.shellcheck.timeout_secs {
             self.timeout = Duration::from_secs(secs);
         }
         // Effective disable = baseline ∪ user-disable − user-enable.
-        // Unparseable entries (`"SC2O86"` with O instead of 0, etc.) are
-        // skipped with a `warn!` so a silent typo never costs coverage.
+        // Codes are already validated at config-load time by `ShCode`'s
+        // Deserialize impl, so this is a straight set operation.
         let mut disable: HashSet<u32> = DEFAULT_DISABLED.iter().copied().collect();
-        for s in &config.shellcheck.disable {
-            match parse_sc_code(s) {
-                Some(code) => {
-                    disable.insert(code);
-                }
-                None => warn!(
-                    target: "rpm_spec_analyzer::shellcheck",
-                    entry = %s,
-                    "ignoring unparseable [shellcheck].disable entry; expected SC<n> or <n>",
-                ),
-            }
+        for code in &config.shellcheck.disable {
+            disable.insert(u32::from(code.as_u16()));
         }
-        for s in &config.shellcheck.enable {
-            match parse_sc_code(s) {
-                Some(code) => {
-                    disable.remove(&code);
-                }
-                None => warn!(
-                    target: "rpm_spec_analyzer::shellcheck",
-                    entry = %s,
-                    "ignoring unparseable [shellcheck].enable entry; expected SC<n> or <n>",
-                ),
-            }
+        for code in &config.shellcheck.enable {
+            disable.remove(&u32::from(code.as_u16()));
         }
         self.disable = disable;
     }
@@ -887,20 +856,10 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Result<ExitStatus,
     }
 }
 
-/// Accept `"SC2086"`, `"sc2086"`, or `"2086"` and yield `2086`.
-fn parse_sc_code(s: &str) -> Option<u32> {
-    let s = s.trim();
-    let digits = s
-        .strip_prefix("SC")
-        .or_else(|| s.strip_prefix("sc"))
-        .or_else(|| s.strip_prefix("Sc"))
-        .unwrap_or(s);
-    digits.parse::<u32>().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ShCode;
 
     #[test]
     fn mask_macros_pads_to_length() {
@@ -1020,15 +979,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_sc_code_accepts_variants() {
-        assert_eq!(parse_sc_code("SC2086"), Some(2086));
-        assert_eq!(parse_sc_code("sc2086"), Some(2086));
-        assert_eq!(parse_sc_code("2086"), Some(2086));
-        assert_eq!(parse_sc_code("  SC2086  "), Some(2086));
-        assert_eq!(parse_sc_code("nope"), None);
-    }
-
-    #[test]
     fn line_range_returns_slice_offsets() {
         let slice = "abc\ndef\nghi";
         let offsets = compute_line_offsets(slice);
@@ -1058,7 +1008,7 @@ mod tests {
     fn set_config_normalizes_disable() {
         let mut lint = ShellcheckLint::new();
         let mut cfg = Config::default();
-        cfg.shellcheck.disable = vec!["SC2086".into(), "2155".into(), "bogus".into()];
+        cfg.shellcheck.disable = vec![ShCode::new(2086), ShCode::new(2155)];
         lint.set_config(&cfg);
         assert!(lint.disable.contains(&2086));
         assert!(lint.disable.contains(&2155));
@@ -1076,7 +1026,7 @@ mod tests {
         let mut cfg = Config::default();
         // User explicitly wants SC2164 back even though it is in
         // DEFAULT_DISABLED.
-        cfg.shellcheck.enable = vec!["SC2164".into()];
+        cfg.shellcheck.enable = vec![ShCode::new(2164)];
         lint.set_config(&cfg);
         assert!(!lint.disable.contains(&2164));
         // Other baseline codes remain suppressed.
@@ -1085,23 +1035,13 @@ mod tests {
 
     #[test]
     fn shell_override_takes_effect() {
+        use crate::config::ShellDialect;
         let mut lint = ShellcheckLint::new();
         assert_eq!(lint.shell, "bash");
         let mut cfg = Config::default();
-        cfg.shellcheck.shell = Some("sh".into());
+        cfg.shellcheck.shell = Some(ShellDialect::Sh);
         lint.set_config(&cfg);
         assert_eq!(lint.shell, "sh");
-    }
-
-    #[test]
-    fn shell_override_rejects_unknown_dialect() {
-        // `fish` is not in ALLOWED_SHELLS — the rule must keep the
-        // default rather than silently passing junk to `--shell=`.
-        let mut lint = ShellcheckLint::new();
-        let mut cfg = Config::default();
-        cfg.shellcheck.shell = Some("fish".into());
-        lint.set_config(&cfg);
-        assert_eq!(lint.shell, DEFAULT_SHELL);
     }
 
     #[test]
@@ -1122,7 +1062,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.shellcheck.binary = Some("/nonexistent/shellcheck-binary".into());
         lint.set_config(&cfg);
-        lint.set_source(&src);
+        lint.set_source(std::sync::Arc::from(src.as_str()));
         // Spans accurately cover each section's byte range.
         lint.process_section(Span::new(0, src1.len(), 1, 1, 2, 14));
         lint.process_section(Span::new(src1.len(), src.len(), 3, 1, 4, 10));
@@ -1170,7 +1110,7 @@ mod tests {
         let src = "%install\nfunc() { echo $@; }\nfunc a b\n";
         let mut lint = ShellcheckLint::new();
         lint.set_config(&Config::default());
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
         // The slice we feed to process_section covers the whole section
         // including header (the input shaper replaces the header).
         let span = Span::new(0, src.len(), 1, 1, 3, 11);
@@ -1198,26 +1138,26 @@ mod tests {
         // Baseline: at least one finding.
         let mut baseline = ShellcheckLint::new();
         baseline.set_config(&Config::default());
-        baseline.set_source(src);
+        baseline.set_source(std::sync::Arc::from(src));
         baseline.process_section(span);
         let baseline_diags = baseline.take_diagnostics();
         assert!(!baseline_diags.is_empty());
 
         // Disable every SC code we just saw → no diagnostics.
-        let codes: Vec<String> = baseline_diags
+        let codes: Vec<ShCode> = baseline_diags
             .iter()
             .filter_map(|d| {
                 let msg = &d.message;
                 let start = msg.find("[SC")? + 3;
                 let end = msg[start..].find(':')?;
-                Some(format!("SC{}", &msg[start..start + end]))
+                msg[start..start + end].parse::<u16>().ok().map(ShCode::new)
             })
             .collect();
         let mut cfg = Config::default();
         cfg.shellcheck.disable = codes;
         let mut filtered = ShellcheckLint::new();
         filtered.set_config(&cfg);
-        filtered.set_source(src);
+        filtered.set_source(std::sync::Arc::from(src));
         filtered.process_section(span);
         let filtered_diags = filtered.take_diagnostics();
         assert!(

@@ -32,6 +32,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// `%files` includes a `tmpfiles.d/*.conf` drop-in but no scriptlet runs the distro's `%tmpfiles_create*` macro. The directories described by the drop-in won't exist until the next reboot.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct TmpfilesWithoutCreate {
     diagnostics: Vec<Diagnostic>,

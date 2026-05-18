@@ -32,6 +32,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// A file whose basename looks like a license (`LICENSE`, `COPYING`, `NOTICE`, …) is marked `%doc` instead of `%license`. `%license` survives `rpm --excludedocs` and is recognised by compliance tooling.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct LicenseFileMarkedDoc {
     diagnostics: Vec<Diagnostic>,
@@ -59,25 +63,33 @@ impl<'ast> Visit<'ast> for LicenseFileMarkedDoc {
                 Some(p) => p.to_owned(),
                 None => fallback_literal(entry).unwrap_or_default(),
             };
-            let basename = path.rsplit('/').next().unwrap_or("");
-            if !looks_like_license(basename) {
-                return;
-            }
             // Only flag when the file is explicitly under `%doc`; a
             // raw entry without any directive is just packaging,
             // which a separate rule should catch.
             if !cls.directives.is_doc {
                 return;
             }
-            self.diagnostics.push(Diagnostic::new(
-                &METADATA,
-                Severity::Warn,
-                format!(
-                    "license file `{basename}` is marked `%doc`; switch to `%license` so it \
-                     survives `--excludedocs` and lands in `%{{_defaultlicensedir}}`"
-                ),
-                cls.span(),
-            ));
+            // A single `%doc` directive may list multiple files on one
+            // line, e.g. `%doc LICENSE NOTICE`. The classifier reports
+            // the whole line as one entry with a concatenated
+            // `resolved_path`. Split on whitespace and check each
+            // component independently so the diagnostic names the real
+            // filename rather than the whole concatenated string.
+            for component in path.split_ascii_whitespace() {
+                let basename = component.rsplit('/').next().unwrap_or("");
+                if !looks_like_license(basename) {
+                    continue;
+                }
+                self.diagnostics.push(Diagnostic::new(
+                    &METADATA,
+                    Severity::Warn,
+                    format!(
+                        "license file `{basename}` is marked `%doc`; switch to `%license` so it \
+                         survives `--excludedocs` and lands in `%{{_defaultlicensedir}}`"
+                    ),
+                    cls.span(),
+                ));
+            }
         });
     }
 }
@@ -146,13 +158,10 @@ fn fallback_literal(entry: &rpm_spec::ast::FileEntry<Span>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = LicenseFileMarkedDoc::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<LicenseFileMarkedDoc>(src)
     }
 
     #[test]
@@ -204,6 +213,41 @@ mod tests {
         // `LICENSEFAKE` has the prefix `LICENSE` but no separator,
         // so it should not be flagged.
         let src = "Name: x\n%files\n%doc LICENSEFAKE\n";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_each_license_basename_in_multi_name_doc() {
+        // `%doc LICENSE NOTICE` is exposed as a single FileEntry with a
+        // concatenated resolved path. Both names are license-like, so
+        // we emit one diagnostic per matching component, and each
+        // diagnostic must reference the bare filename — not the
+        // concatenated `"LICENSE NOTICE"` string the user can't act on.
+        let src = "Name: x\n%files\n%doc LICENSE NOTICE\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        assert!(diags.iter().all(|d| d.lint_id == "RPM363"));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("`LICENSE`") && !d.message.contains("LICENSE NOTICE")),
+            "expected a diag naming bare `LICENSE`, got {diags:?}"
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("`NOTICE`") && !d.message.contains("LICENSE NOTICE")),
+            "expected a diag naming bare `NOTICE`, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn silent_for_multi_name_doc_with_no_license_basename() {
+        // Neither README nor CHANGELOG matches a license-file pattern,
+        // so a multi-name `%doc` line containing only these must not
+        // raise RPM363 — even though the classifier hands us the
+        // concatenated path `"README CHANGELOG"`.
+        let src = "Name: x\n%files\n%doc README CHANGELOG\n";
         assert!(run(src).is_empty());
     }
 }

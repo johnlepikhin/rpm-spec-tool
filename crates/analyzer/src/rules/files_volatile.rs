@@ -26,6 +26,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// A file under `/var/run`, `/run`, or `/var/lock` is listed without `%ghost`. Those directories are volatile (tmpfs); package the entry as `%ghost` and recreate it with `tmpfiles.d`.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct VarRunVarLockNotGhost {
     diagnostics: Vec<Diagnostic>,
@@ -78,13 +82,10 @@ impl Lint for VarRunVarLockNotGhost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = VarRunVarLockNotGhost::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<VarRunVarLockNotGhost>(src)
     }
 
     #[test]

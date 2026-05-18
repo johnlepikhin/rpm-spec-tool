@@ -16,6 +16,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// %description bodies should not be empty.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct EmptyDescription {
     diagnostics: Vec<Diagnostic>,
@@ -66,13 +70,10 @@ impl Lint for EmptyDescription {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = EmptyDescription::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<EmptyDescription>(src)
     }
 
     #[test]

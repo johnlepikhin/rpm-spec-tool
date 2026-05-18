@@ -35,6 +35,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Two adjacent `%if` blocks share the same condition; merge them into one block.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct AdjacentMergeableConditionals {
     diagnostics: Vec<Diagnostic>,
@@ -179,6 +183,10 @@ pub static IF_NOT_X_AFTER_X_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Two adjacent `%if` blocks share the same condition; merge them into one block.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct IfNotXAfterIfX {
     diagnostics: Vec<Diagnostic>,
@@ -315,10 +323,14 @@ pub static MERGE_ELIF_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Two adjacent `%if` blocks share the same condition; merge them into one block.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct MergeElifSameBody {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
 }
 
 impl MergeElifSameBody {
@@ -344,9 +356,10 @@ impl MergeElifSameBody {
     }
 
     fn check<B: HasBodySpan>(&mut self, node: &Conditional<Span, B>) {
-        // Clone the source out of `self` so the loop body can call
-        // `self.emit` without a borrow-checker conflict.
-        let Some(source) = self.source.clone() else {
+        // Bump the `Arc` refcount so the loop body can call
+        // `self.emit` without a borrow-checker conflict. Cheap —
+        // no deep copy of the source string.
+        let Some(source) = self.source.as_ref().map(std::sync::Arc::clone) else {
             return;
         };
         for i in 1..node.branches.len() {
@@ -370,7 +383,7 @@ impl MergeElifSameBody {
 /// Compute the byte range covered by a body's items and slice the
 /// source. Returns `None` when the body has no item with a known
 /// span.
-fn body_text<'a, B: HasBodySpan>(body: &[B], source: &'a str) -> Option<&'a str> {
+pub(crate) fn body_text<'a, B: HasBodySpan>(body: &[B], source: &'a str) -> Option<&'a str> {
     let mut start: Option<usize> = None;
     let mut end: Option<usize> = None;
     for item in body {
@@ -383,7 +396,7 @@ fn body_text<'a, B: HasBodySpan>(body: &[B], source: &'a str) -> Option<&'a str>
     source.get(s..e)
 }
 
-fn bodies_source_eq<B: HasBodySpan>(a: &[B], b: &[B], source: &str) -> bool {
+pub(crate) fn bodies_source_eq<B: HasBodySpan>(a: &[B], b: &[B], source: &str) -> bool {
     let Some(t1) = body_text(a, source) else {
         return false;
     };
@@ -413,7 +426,9 @@ impl HasBodySpan for SpecItem<Span> {
             SpecItem::BuildCondition(b) => Some(b.data),
             SpecItem::Include(i) => Some(i.data),
             SpecItem::Comment(c) => Some(c.data),
-            SpecItem::Section(_) | SpecItem::Statement(_) | SpecItem::Blank => None,
+            // `SpecItem` is `#[non_exhaustive]`; remaining variants
+            // (Section, Statement, Blank, and any future addition)
+            // do not have a body span this rule cares about.
             _ => None,
         }
     }
@@ -425,7 +440,7 @@ impl HasBodySpan for PreambleContent<Span> {
             PreambleContent::Item(p) => Some(p.data),
             PreambleContent::Conditional(c) => Some(c.data),
             PreambleContent::Comment(c) => Some(c.data),
-            PreambleContent::Blank => None,
+            // Blank + future `#[non_exhaustive]` variants.
             _ => None,
         }
     }
@@ -437,7 +452,7 @@ impl HasBodySpan for FilesContent<Span> {
             FilesContent::Entry(e) => Some(e.data),
             FilesContent::Conditional(c) => Some(c.data),
             FilesContent::Comment(c) => Some(c.data),
-            FilesContent::Blank => None,
+            // Blank + future `#[non_exhaustive]` variants.
             _ => None,
         }
     }
@@ -465,21 +480,19 @@ impl Lint for MergeElifSameBody {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_support::run_lint;
     use crate::session::parse;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = AdjacentMergeableConditionals::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<AdjacentMergeableConditionals>(src)
     }
 
     #[test]
@@ -559,7 +572,7 @@ mod tests {
     fn run_merge(src: &str) -> Vec<Diagnostic> {
         let outcome = parse(src);
         let mut lint = MergeElifSameBody::new();
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
         lint.visit_spec(&outcome.spec);
         lint.take_diagnostics()
     }

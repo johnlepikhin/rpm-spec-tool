@@ -31,6 +31,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// A `%files` entry points at `/usr/lib/debug` or a `.build-id`/`.debug` path. Those are owned by the auto-generated `-debuginfo` subpackage; remove the manual entry to avoid install-time file conflicts.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct DebuginfoPathInMainFiles {
     diagnostics: Vec<Diagnostic>,
@@ -91,13 +95,10 @@ impl Lint for DebuginfoPathInMainFiles {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = DebuginfoPathInMainFiles::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<DebuginfoPathInMainFiles>(src)
     }
 
     #[test]

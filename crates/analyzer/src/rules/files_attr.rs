@@ -30,6 +30,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// `%attr(...)` grants suspicious permissions: world-writable, setuid/setgid, or 777 on a regular file.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SuspiciousAttrPermissions {
     diagnostics: Vec<Diagnostic>,
@@ -154,13 +158,10 @@ impl Lint for SuspiciousAttrPermissions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = SuspiciousAttrPermissions::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<SuspiciousAttrPermissions>(src)
     }
 
     #[test]

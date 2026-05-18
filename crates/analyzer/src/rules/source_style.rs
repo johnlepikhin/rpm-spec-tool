@@ -39,6 +39,10 @@ pub static SOURCE_WITHOUT_URL_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// `SourceN:` should be a URL (http/https/ftp) where the upstream tarball can be downloaded — Fedora packaging guideline.
+///
+/// See [`SOURCE_WITHOUT_URL_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SourceWithoutUrl {
     diagnostics: Vec<Diagnostic>,
@@ -132,6 +136,10 @@ pub static DESCRIPTION_LEADS_WITH_THIS_PACKAGE_METADATA: LintMetadata = LintMeta
     category: LintCategory::Style,
 };
 
+/// `%description` body begins with `This package …` / `The X package …` — Fedora style guide prefers leading with the subject of the description.
+///
+/// See [`DESCRIPTION_LEADS_WITH_THIS_PACKAGE_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct DescriptionLeadsWithThisPackage {
     diagnostics: Vec<Diagnostic>,

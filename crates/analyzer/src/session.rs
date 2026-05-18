@@ -399,9 +399,13 @@ impl LintSession {
     /// runs [`sort_and_dedup`]) instead of post-processing themselves.
     pub fn run(&mut self, spec: &SpecFile<Span>, source: &str) -> Vec<Diagnostic> {
         let line_table = build_line_table(source);
+        // Build the shared `Arc<str>` once so every active rule pays
+        // only a refcount bump instead of cloning the full source —
+        // dominant allocation cost for large specs otherwise.
+        let shared: std::sync::Arc<str> = std::sync::Arc::from(source);
         let mut out = Vec::new();
         for ActiveLint { lint, severity } in &mut self.lints {
-            lint.set_source(source);
+            lint.set_source(std::sync::Arc::clone(&shared));
             lint.visit_spec(spec);
             for mut diag in lint.take_diagnostics() {
                 diag.severity = *severity;

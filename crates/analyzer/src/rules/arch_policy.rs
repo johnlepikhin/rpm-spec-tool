@@ -17,11 +17,11 @@
 
 use std::collections::BTreeSet;
 
-use rpm_spec::ast::{Span, SpecFile, Tag, TagValue, Text};
+use rpm_spec::ast::{Span, SpecFile, Tag, TagValue};
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
 use crate::lint::{Lint, LintMetadata};
-use crate::rules::util::collect_top_level_preamble;
+use crate::rules::util::{collect_top_level_preamble, literal_archs};
 use crate::visit::Visit;
 
 pub static METADATA: LintMetadata = LintMetadata {
@@ -33,6 +33,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// `BuildArch: noarch` is combined with `ExclusiveArch`/`ExcludeArch`, or `ExclusiveArch` and `ExcludeArch` list overlapping architectures.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ArchPolicyContradiction {
     diagnostics: Vec<Diagnostic>,
@@ -56,19 +60,19 @@ impl<'ast> Visit<'ast> for ArchPolicyContradiction {
             match &item.tag {
                 Tag::BuildArch => {
                     if let TagValue::ArchList(list) = &item.value
-                        && literal_archs(list).contains("noarch")
+                        && literal_archs(list).unwrap_or_default().contains("noarch")
                     {
                         buildarch_noarch = Some(item.data);
                     }
                 }
                 Tag::ExclusiveArch => {
                     if let TagValue::ArchList(list) = &item.value {
-                        exclusive.push((item.data, literal_archs(list)));
+                        exclusive.push((item.data, literal_archs(list).unwrap_or_default()));
                     }
                 }
                 Tag::ExcludeArch => {
                     if let TagValue::ArchList(list) = &item.value {
-                        exclude.push((item.data, literal_archs(list)));
+                        exclude.push((item.data, literal_archs(list).unwrap_or_default()));
                     }
                 }
                 _ => {}
@@ -127,14 +131,6 @@ impl<'ast> Visit<'ast> for ArchPolicyContradiction {
     }
 }
 
-fn literal_archs(list: &[Text]) -> BTreeSet<String> {
-    list.iter()
-        .filter_map(|t| t.literal_str())
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 impl Lint for ArchPolicyContradiction {
     fn metadata(&self) -> &'static LintMetadata {
         &METADATA
@@ -147,13 +143,10 @@ impl Lint for ArchPolicyContradiction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = ArchPolicyContradiction::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<ArchPolicyContradiction>(src)
     }
 
     #[test]

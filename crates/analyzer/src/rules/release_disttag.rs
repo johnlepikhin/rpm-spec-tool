@@ -37,6 +37,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// `Release:` should reference `%{?dist}` and not hard-code a per-distro suffix (`.fc40`, `.el9`, ...). Family-gated to Fedora-derived distros.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct ReleaseDisttagPolicy {
     diagnostics: Vec<Diagnostic>,

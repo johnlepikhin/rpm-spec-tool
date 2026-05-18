@@ -38,6 +38,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// A macro is redefined at the same scope; the earlier definition is dead code. Definitions in alternative %if/%else branches are not redefinitions and are ignored.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct MacroRedefinition {
     diagnostics: Vec<Diagnostic>,
@@ -142,13 +146,10 @@ impl Lint for MacroRedefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = MacroRedefinition::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<MacroRedefinition>(src)
     }
 
     #[test]

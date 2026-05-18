@@ -21,8 +21,9 @@
 use std::collections::BTreeMap;
 
 use rpm_spec::ast::{
-    BoolDep, BuildCondStyle, BuildCondition, CondExpr, Conditional, DepExpr, ExprAst, MacroRef,
-    PreambleContent, PreambleItem, Section, Span, SpecFile, SpecItem, TagValue, Text, TextSegment,
+    BoolDep, BuildCondStyle, BuildCondition, CondExpr, Conditional, DepExpr, ExprAst, FileTrigger,
+    MacroRef, PreambleContent, PreambleItem, Scriptlet, Section, ShellBody, Span, SpecFile,
+    SpecItem, TagValue, Text, TextBody, TextSegment, Trigger,
 };
 
 use crate::diagnostic::{Diagnostic, LintCategory, Severity};
@@ -202,14 +203,20 @@ impl WithKind {
 
 #[derive(Debug, Clone, Copy)]
 struct BcondDecl {
-    #[allow(dead_code)] // future-proof for cross-rule queries.
+    #[expect(
+        dead_code,
+        reason = "future-proof for cross-rule queries that distinguish bcond polarity"
+    )]
     polarity: BcondPolarity,
     span: Span,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct BcondRef {
-    #[allow(dead_code)] // future-proof for cross-rule queries.
+    #[expect(
+        dead_code,
+        reason = "future-proof for cross-rule queries that distinguish with/without references"
+    )]
     kind: WithKind,
     span: Span,
 }
@@ -332,13 +339,48 @@ fn parse_with_without_from_text(s: &str) -> Option<(WithKind, &str)> {
 }
 
 fn walk_section(section: &Section<Span>, out: &mut BcondUsage) {
-    if let Section::Package { content, .. } = section {
-        walk_preamble_content(content, out);
+    match section {
+        Section::Package { content, .. } => walk_preamble_content(content, out),
+        // Script-bearing sections may host `%if %{with NAME}` lines —
+        // the parser keeps the conditional as plain text, so the
+        // `%{with NAME}` macro reference shows up as a
+        // `TextSegment::Macro` on one of the body lines.
+        Section::BuildScript { body, data, .. }
+        | Section::Verify { body, data, .. }
+        | Section::Sepolicy { body, data, .. } => walk_shell_body(body, *data, out),
+        Section::Scriptlet(s) => walk_scriptlet(s, out),
+        Section::Trigger(t) => walk_trigger(t, out),
+        Section::FileTrigger(t) => walk_file_trigger(t, out),
+        Section::Description { body, data, .. } => walk_text_body(body, *data, out),
+        // `Files`, `Changelog`, `SourceList`, `PatchList` are unlikely
+        // to host `%{with NAME}` references in practice; their bodies
+        // are not RPM-language `%if` hosts.
+        _ => {}
     }
-    // Other section bodies (shell, files, changelog) rarely contain
-    // bcond declarations or with-references. The parser stores them
-    // as Text; bcond usage there is exotic enough to skip until a
-    // real-world hit appears.
+}
+
+fn walk_shell_body(body: &ShellBody, anchor: Span, out: &mut BcondUsage) {
+    for line in &body.lines {
+        walk_text_for_refs(line, anchor, out);
+    }
+}
+
+fn walk_text_body(body: &TextBody, anchor: Span, out: &mut BcondUsage) {
+    for line in &body.lines {
+        walk_text_for_refs(line, anchor, out);
+    }
+}
+
+fn walk_scriptlet(s: &Scriptlet<Span>, out: &mut BcondUsage) {
+    walk_shell_body(&s.body, s.data, out);
+}
+
+fn walk_trigger(t: &Trigger<Span>, out: &mut BcondUsage) {
+    walk_shell_body(&t.body, t.data, out);
+}
+
+fn walk_file_trigger(t: &FileTrigger<Span>, out: &mut BcondUsage) {
+    walk_shell_body(&t.body, t.data, out);
 }
 
 fn walk_preamble_content(items: &[PreambleContent<Span>], out: &mut BcondUsage) {
@@ -577,6 +619,33 @@ mod tests {
         let src = "%bcond_with foo\nName: x\n\
 %if %{?with foo}\nBuildRequires: extra\n%endif\n";
         assert!(run_401(src).is_empty(), "{:?}", run_401(src));
+    }
+
+    #[test]
+    fn silent_when_with_used_inside_build_section() {
+        // `%if %{with FOO}` inside a `%build` body — the parser keeps
+        // the conditional as text lines, so the macro reference must
+        // still be picked up by the bcond usage walker.
+        let src = "Name: x\n%bcond_with FOO\n%prep\n%build\n\
+%if %{with FOO}\necho on\n%endif\n";
+        let diags = run_401(src);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn silent_when_with_used_inside_check_section() {
+        let src = "Name: x\n%bcond_with FOO\n%check\n\
+%if %{with FOO}\nmake check\n%endif\n";
+        let diags = run_401(src);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn silent_when_without_used_inside_install_section() {
+        let src = "Name: x\n%bcond_with FOO\n%install\n\
+%if %{without FOO}\nrm extra\n%endif\n";
+        let diags = run_401(src);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]

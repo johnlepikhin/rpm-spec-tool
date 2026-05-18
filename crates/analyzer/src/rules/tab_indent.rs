@@ -30,10 +30,14 @@ pub static METADATA: LintMetadata = LintMetadata {
 /// alignment column convention.
 const TAB_WIDTH: usize = 8;
 
+/// Lines indented with tabs make alignment fragile; use spaces instead.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct TabIndent {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
 }
 
 impl TabIndent {
@@ -100,6 +104,14 @@ fn collect_from_item(item: &SpecItem<Span>, out: &mut Vec<(usize, usize)>) {
             Section::FileTrigger(t) => {
                 out.push((t.data.start_byte, t.data.end_byte));
             }
+            // `%changelog` is convention-tab-indented for continuation
+            // lines (`* Mon Jan 01 …\n\tDetail line`). Real-world specs
+            // like gcc.spec generate hundreds of false positives here,
+            // so the whole section is exempt — same treatment as shell
+            // bodies, just for a different "tabs are routine" reason.
+            Section::Changelog { data, .. } => {
+                out.push((data.start_byte, data.end_byte));
+            }
             // Non-shell sections: preamble/text/list bodies still get
             // the indentation lint, so they contribute no range. Listed
             // explicitly (no `_`) so a new variant in upstream
@@ -108,7 +120,6 @@ fn collect_from_item(item: &SpecItem<Span>, out: &mut Vec<(usize, usize)>) {
             Section::Description { .. }
             | Section::Package { .. }
             | Section::Files { .. }
-            | Section::Changelog { .. }
             | Section::SourceList { .. }
             | Section::PatchList { .. } => {}
             // `Section` is `#[non_exhaustive]`; future upstream variants
@@ -116,6 +127,10 @@ fn collect_from_item(item: &SpecItem<Span>, out: &mut Vec<(usize, usize)>) {
             // human triages whether they own a shell body. The explicit
             // arms above force that triage by failing the match if a
             // currently-known variant is renamed.
+            // NOTE: kept as `#[allow]` (not `#[expect]`) because the wildcard
+            // arm is reachable today — `#[non_exhaustive]` makes it valid for
+            // current rustc, so `#[expect(unreachable_patterns)]` would emit
+            // `unfulfilled_lint_expectations`.
             #[allow(unreachable_patterns)]
             _ => {}
         },
@@ -181,22 +196,18 @@ impl Lint for TabIndent {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = TabIndent::new();
-        lint.set_source(src);
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<TabIndent>(src)
     }
 
     #[test]
@@ -233,5 +244,21 @@ mod tests {
         assert_eq!(diags.len(), 1);
         let leading = &diags[0].suggestions[0].edits[0];
         assert_eq!(leading.span.end_byte - leading.span.start_byte, 1);
+    }
+
+    /// `%changelog` continuation lines are conventionally tab-indented;
+    /// gcc.spec alone produces 311 false positives without this guard.
+    /// Treat the whole section as exempt, like shell bodies.
+    #[test]
+    fn silent_for_tab_in_changelog() {
+        let src = "Name: x\n\
+%changelog\n\
+* Mon Jan 01 2024 X Y <x@y> - 1.0-1\n\
+\tcontinuation line with leading tab\n";
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "changelog tab-indent should be silent; got {diags:?}"
+        );
     }
 }

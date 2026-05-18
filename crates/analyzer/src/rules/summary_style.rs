@@ -105,10 +105,14 @@ fn value_start_offset(line: &str) -> Option<usize> {
 // RPM055 summary-ends-with-dot
 // =====================================================================
 
+/// Package name should not appear in its own Summary.
+///
+/// See [`NAME_IN_SUMMARY_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SummaryEndsWithDot {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
 }
 
 impl SummaryEndsWithDot {
@@ -163,8 +167,8 @@ impl Lint for SummaryEndsWithDot {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
     }
 }
 
@@ -172,10 +176,14 @@ impl Lint for SummaryEndsWithDot {
 // RPM056 summary-not-capitalized
 // =====================================================================
 
+/// Package name should not appear in its own Summary.
+///
+/// See [`NAME_IN_SUMMARY_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SummaryNotCapitalized {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
 }
 
 impl SummaryNotCapitalized {
@@ -233,8 +241,8 @@ impl Lint for SummaryNotCapitalized {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         std::mem::take(&mut self.diagnostics)
     }
-    fn set_source(&mut self, source: &str) {
-        self.source = Some(source.to_owned());
+    fn set_source(&mut self, source: std::sync::Arc<str>) {
+        self.source = Some(source);
     }
 }
 
@@ -242,6 +250,10 @@ impl Lint for SummaryNotCapitalized {
 // RPM057 summary-too-long
 // =====================================================================
 
+/// Package name should not appear in its own Summary.
+///
+/// See [`NAME_IN_SUMMARY_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SummaryTooLong {
     diagnostics: Vec<Diagnostic>,
@@ -283,6 +295,10 @@ impl Lint for SummaryTooLong {
 // RPM058 name-in-summary
 // =====================================================================
 
+/// Package name should not appear in its own Summary.
+///
+/// See [`NAME_IN_SUMMARY_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct NameInSummary {
     diagnostics: Vec<Diagnostic>,
@@ -355,6 +371,9 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
 
 // `TextSegment` is only used via the helper; suppress the unused import
 // warning that fires when none of the rule bodies happen to mention it.
+// NOTE: kept as `#[allow]` (not `#[expect]`) because the const reference
+// already counts as a use of `TextSegment`, so `dead_code` does not fire
+// and `#[expect]` would emit `unfulfilled_lint_expectations`.
 #[allow(dead_code)]
 const _: Option<TextSegment> = None;
 
@@ -366,14 +385,14 @@ mod tests {
     fn run_ends_dot(src: &str) -> Vec<Diagnostic> {
         let outcome = parse(src);
         let mut lint = SummaryEndsWithDot::new();
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
         lint.visit_spec(&outcome.spec);
         lint.take_diagnostics()
     }
     fn run_capital(src: &str) -> Vec<Diagnostic> {
         let outcome = parse(src);
         let mut lint = SummaryNotCapitalized::new();
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
         lint.visit_spec(&outcome.spec);
         lint.take_diagnostics()
     }

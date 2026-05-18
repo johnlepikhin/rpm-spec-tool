@@ -26,6 +26,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// Main package %description is shorter than its Summary — looks like a placeholder. Subpackage descriptions are not checked yet.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct DescriptionShorterThanSummary {
     diagnostics: Vec<Diagnostic>,
@@ -121,13 +125,10 @@ impl Lint for DescriptionShorterThanSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = DescriptionShorterThanSummary::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<DescriptionShorterThanSummary>(src)
     }
 
     #[test]

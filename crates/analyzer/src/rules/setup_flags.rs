@@ -28,6 +28,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// `%setup` should always be invoked with `-q` to silence tarball extraction noise.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SetupWithoutQFlag {
     diagnostics: Vec<Diagnostic>,
@@ -148,13 +152,10 @@ fn is_quiet_flag(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = SetupWithoutQFlag::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<SetupWithoutQFlag>(src)
     }
 
     #[test]

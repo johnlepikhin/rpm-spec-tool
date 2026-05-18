@@ -34,6 +34,10 @@ pub static OUTSIDE_BUILDROOT_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// An `%install` step writes to a real system path (e.g. `/usr/bin`, `/etc`) without `%{buildroot}` / `$RPM_BUILD_ROOT`. Stage everything under the buildroot so RPM packages exactly what `%install` produced.
+///
+/// See [`OUTSIDE_BUILDROOT_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct InstallWritesOutsideBuildroot {
     diagnostics: Vec<Diagnostic>,
@@ -144,6 +148,10 @@ pub static RM_RF_BUILDROOT_METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// `%install` begins with `rm -rf %{buildroot}` / `$RPM_BUILD_ROOT`. Modern RPM (≥ 4.6) cleans the buildroot for you; the manual rm is at best dead, at worst dangerous if `%{buildroot}` resolves to an unexpected path.
+///
+/// See [`RM_RF_BUILDROOT_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct RmRfBuildrootInInstall {
     diagnostics: Vec<Diagnostic>,

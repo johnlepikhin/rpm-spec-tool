@@ -7,14 +7,19 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
-// TODO(pre-1.0): document the public surface and remove this allow.
+// TODO(pre-1.0): document the public surface and remove this expect.
 // Currently 537 items lack `///` doc comments — chiefly per-rule
 // structs in `rules/` and per-layer config types. Tracked separately
 // from publication.
-#![allow(missing_docs)]
+#![expect(
+    missing_docs,
+    reason = "pre-1.0: 537 items lack /// — track and reduce; expect form fires loudly when the backlog reaches zero"
+)]
 
 pub mod config;
+pub mod config_cache;
 pub mod diagnostic;
+pub mod error_format;
 pub(crate) mod files;
 pub mod lint;
 pub(crate) mod policy;

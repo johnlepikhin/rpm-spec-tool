@@ -23,6 +23,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// Explicit `Provides:` of the package's own name is redundant with rpm's auto-provides.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct UselessExplicitProvides {
     diagnostics: Vec<Diagnostic>,
@@ -88,13 +92,10 @@ impl Lint for UselessExplicitProvides {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = UselessExplicitProvides::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<UselessExplicitProvides>(src)
     }
 
     #[test]

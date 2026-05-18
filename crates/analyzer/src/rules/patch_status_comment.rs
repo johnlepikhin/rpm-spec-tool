@@ -42,6 +42,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Style,
 };
 
+/// openSUSE: every `Patch:` tag should be preceded by a comment carrying a status marker (`PATCH-FIX-UPSTREAM`, `PATCH-FIX-OPENSUSE`, `PATCH-FEATURE-*`, `PATCH-NEEDS-*`, ...). Without it reviewers can't tell whether the patch is upstream-bound.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct PatchStatusCommentMissing {
     diagnostics: Vec<Diagnostic>,

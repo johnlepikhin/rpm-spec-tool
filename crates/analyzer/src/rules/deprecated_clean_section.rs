@@ -29,6 +29,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Packaging,
 };
 
+/// The %clean section is unnecessary; modern rpm cleans the buildroot automatically.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct DeprecatedCleanSection {
     diagnostics: Vec<Diagnostic>,
@@ -112,13 +116,11 @@ impl Lint for DeprecatedCleanSection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_support::run_lint;
     use crate::session::parse;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = DeprecatedCleanSection::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<DeprecatedCleanSection>(src)
     }
 
     fn run_with_family(src: &str, family: Option<Family>) -> Vec<Diagnostic> {

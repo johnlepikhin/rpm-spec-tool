@@ -36,6 +36,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// A `%global` / `%define` with `%(...)` shell or `%{lua:...}` side-effects appears before `BuildArch:`. RPM re-parses the spec at `BuildArch:`, so the side effect runs twice and may yield different values. Move the definition below `BuildArch:` or remove the side effect.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct BuildarchReparseHazard {
     diagnostics: Vec<Diagnostic>,
@@ -157,13 +161,10 @@ impl Lint for BuildarchReparseHazard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = BuildarchReparseHazard::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<BuildarchReparseHazard>(src)
     }
 
     #[test]

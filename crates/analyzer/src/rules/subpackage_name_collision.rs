@@ -44,6 +44,10 @@ pub static METADATA: LintMetadata = LintMetadata {
     category: LintCategory::Correctness,
 };
 
+/// Two `%package` blocks (or `%package` and the main package) resolve to the same canonical name; RPM keeps the last block and the earlier one's `%files` / `%description` becomes dead code.
+///
+/// See [`METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug, Default)]
 pub struct SubpackageNameCollision {
     diagnostics: Vec<Diagnostic>,
@@ -200,13 +204,10 @@ impl Lint for SubpackageNameCollision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::parse;
+    use crate::rules::test_support::run_lint;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        let outcome = parse(src);
-        let mut lint = SubpackageNameCollision::new();
-        lint.visit_spec(&outcome.spec);
-        lint.take_diagnostics()
+        run_lint::<SubpackageNameCollision>(src)
     }
 
     #[test]

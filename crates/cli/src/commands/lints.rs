@@ -376,6 +376,10 @@ fn category_label(c: LintCategory) -> &'static str {
         // Mirror sites that must stay in sync when a new variant lands:
         // `CategoryArg` (variant list above), `group_by_category`
         // (`order` array), `CategoryArg::matches`.
+        // NOTE: kept as `#[allow]` (not `#[expect]`) because the wildcard
+        // arm is reachable today — `#[non_exhaustive]` makes it valid for
+        // current rustc, so `#[expect(unreachable_patterns)]` would emit
+        // `unfulfilled_lint_expectations`.
         #[allow(unreachable_patterns)]
         _ => unreachable!("unhandled LintCategory variant — extend category_label"),
     }

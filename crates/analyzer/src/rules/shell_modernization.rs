@@ -71,7 +71,7 @@ pub static CONFIGURE_MACRO_METADATA: LintMetadata = LintMetadata {
 #[derive(Debug)]
 pub struct MakeWithoutMakeBuild {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
     macro_available: bool,
 }
 
@@ -91,10 +91,14 @@ impl MakeWithoutMakeBuild {
     }
 }
 
+/// Use `%configure` instead of plain `./configure` / `../configure`; the macro supplies `--prefix`, `--libdir`, hardening flags and other distro defaults.
+///
+/// See [`CONFIGURE_MACRO_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug)]
 pub struct MakeInstallWithoutMakeInstall {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
     macro_available: bool,
 }
 
@@ -114,10 +118,14 @@ impl MakeInstallWithoutMakeInstall {
     }
 }
 
+/// Use `%configure` instead of plain `./configure` / `../configure`; the macro supplies `--prefix`, `--libdir`, hardening flags and other distro defaults.
+///
+/// See [`CONFIGURE_MACRO_METADATA`] for the rule's ID, name, default severity, and
+/// category.
 #[derive(Debug)]
 pub struct ConfigureWithoutConfigureMacro {
     diagnostics: Vec<Diagnostic>,
-    source: Option<String>,
+    source: Option<std::sync::Arc<str>>,
     macro_available: bool,
 }
 
@@ -204,8 +212,8 @@ macro_rules! impl_rule {
             fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
                 std::mem::take(&mut self.diagnostics)
             }
-            fn set_source(&mut self, source: &str) {
-                self.source = Some(source.to_owned());
+            fn set_source(&mut self, source: std::sync::Arc<str>) {
+                self.source = Some(source);
             }
             fn set_profile(&mut self, profile: &Profile) {
                 // The rule is meaningful only when the replacement
@@ -429,7 +437,7 @@ mod tests {
 
     fn run<L: Lint>(src: &str, mut lint: L) -> Vec<Diagnostic> {
         let outcome = parse(src);
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
         lint.visit_spec(&outcome.spec);
         lint.take_diagnostics()
     }
@@ -578,7 +586,7 @@ mod tests {
                 .insert(*name, MacroEntry::literal("", Provenance::Override));
         }
         lint.set_profile(&profile);
-        lint.set_source(src);
+        lint.set_source(std::sync::Arc::from(src));
         lint.visit_spec(&outcome.spec);
         lint.take_diagnostics()
     }
