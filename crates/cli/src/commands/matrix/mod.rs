@@ -20,6 +20,7 @@ pub mod check;
 pub mod coverage;
 pub mod explain;
 pub mod portability;
+pub mod verify_contract;
 
 pub use check::{AD_HOC_TARGET_SET_ID, CheckOpts};
 
@@ -92,6 +93,10 @@ pub enum Action {
     /// and inactive on others, or report the per-profile value of a
     /// named macro.
     Explain(explain::ExplainOpts),
+    /// Verify the spec against a per-profile contract: declared
+    /// must-have / must-not-have BuildRequires for every member
+    /// profile of a target set. Fails on any violation.
+    VerifyContract(verify_contract::VerifyContractOpts),
 }
 
 impl Cmd {
@@ -102,6 +107,7 @@ impl Cmd {
             Action::Portability(opts) => portability::run(opts, self.config.as_deref()),
             Action::Coverage(opts) => coverage::run(opts, self.config.as_deref()),
             Action::Explain(opts) => explain::run(opts, self.config.as_deref()),
+            Action::VerifyContract(opts) => verify_contract::run(opts, self.config.as_deref()),
         }
     }
 }

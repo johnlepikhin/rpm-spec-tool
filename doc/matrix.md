@@ -531,6 +531,121 @@ Both modes use `--format json` to emit a tagged envelope:
 `value: null` — i.e. the macro is registered but its body can't be
 reduced to a literal at lint time.
 
+## Contract verification
+
+`matrix verify-contract` gates the spec against per-profile
+expectations declared in a separate TOML contract document. Phase 7
+ships `must_have_buildrequires` / `must_not_have_buildrequires` only;
+future phases can add `binary_packages` / `files` / `arch` assertions
+additively (`#[serde(default)]` on every new field keeps older
+contracts forward-compatible).
+
+```bash
+rpm-spec-tool matrix verify-contract product.spec \
+  --target-set product-2026q2 \
+  --contract product-contract.toml
+```
+
+`--contract PATH` is required — without explicit expectations the
+command would silently pass and a misconfigured CI step couldn't be
+distinguished from a healthy run.
+
+### Contract schema
+
+```toml
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["gcc", "make"]
+must_not_have_buildrequires = ["egrep"]
+
+[profiles."altlinux-10-x86_64"]
+must_have_buildrequires = ["rpm-build"]
+```
+
+Keys under `[profiles."..."]` are profile identifiers, matched
+case-sensitively against the resolved `--target-set` / `--profiles`
+member list. Profiles absent from the contract are silently skipped
+during verification — they surface as a `(no contract — skipping)`
+row so operators can spot the missing block.
+
+Unknown top-level or per-profile fields are rejected
+(`#[serde(deny_unknown_fields)]`) so a typo can't be mistaken for a
+no-op.
+
+### Output
+
+Human output:
+
+```text
+# Matrix verify-contract: target set `product-2026q2` (3 profiles)
+
+## product.spec
+  rhel-9-x86_64: FAIL (1 violation(s))
+    [missing] missing-pkg
+  altlinux-10-x86_64: PASS
+  sles-15-x86_64: (no contract — skipping)
+```
+
+JSON output reuses the analyzer's `ContractReport` shape verbatim:
+
+```json
+{
+  "target_set": "product-2026q2",
+  "profiles": ["rhel-9-x86_64", "altlinux-10-x86_64"],
+  "files": [
+    {
+      "path": "product.spec",
+      "per_profile": [
+        {
+          "profile_id": "rhel-9-x86_64",
+          "status": {
+            "kind": "violations",
+            "violations": [
+              {"kind": "missing_required", "package": "missing-pkg"},
+              {"kind": "forbidden_present", "package": "egrep", "found_as": "egrep"}
+            ]
+          }
+        },
+        {
+          "profile_id": "altlinux-10-x86_64",
+          "status": {"kind": "pass"}
+        }
+      ]
+    }
+  ]
+}
+```
+
+The `status.kind` discriminator is one of `pass` / `no_contract` /
+`violations`. Each violation carries its own `kind` discriminator
+(`missing_required` or `forbidden_present`). All discriminators use
+`snake_case`.
+
+### Exit codes
+
+* `0` — every profile either passes or has no contract.
+* `1` — at least one profile in at least one spec reports
+  violations.
+* `2` — input error: missing `--contract`, malformed contract TOML,
+  unresolvable target set, etc.
+
+### Conditional-unaware MVP
+
+The collector walks the spec AST and records every `BuildRequires:`
+line, regardless of enclosing `%if` / `%ifarch`. This is intentional
+for CI gating ("did anyone forget to declare a required build dep,
+even behind a guard?") but it does mean a contract that asks for
+`foo` on a RHEL profile will be satisfied by `BuildRequires: foo`
+inside `%if 0%{?fedora}`. Branch-aware contract verification is a
+follow-up; it will require deciding the semantics for "must `foo` be
+required when `cond` is false?" which is policy-laden enough to
+deserve its own design pass.
+
+Rich/boolean deps in the source spec are flattened conservatively:
+`And` / `Or` clauses register every named atom (so
+`(gcc and make)` satisfies both `gcc` and `make`), while `If` /
+`Unless` / `Not` arms are skipped — the conditional semantics there
+are too policy-laden to interpret at lint time.
+
 ## Limitations of Phase 1
 
 * No `matrix diff` / `impact` yet — those land in a future phase

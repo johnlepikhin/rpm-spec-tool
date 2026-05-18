@@ -3683,3 +3683,510 @@ BuildRequires: rhel-only
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// matrix verify-contract
+// ---------------------------------------------------------------------------
+
+mod matrix_verify_contract {
+    use super::*;
+
+    const VC_SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+BuildRequires: gcc
+BuildRequires: make
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+
+    fn write_contract_and_spec(content: &str) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        let contract = dir.path().join("contract.toml");
+        std::fs::write(&spec, VC_SPEC).expect("write spec");
+        std::fs::write(&contract, content).expect("write contract");
+        (dir, spec, contract)
+    }
+
+    #[test]
+    fn verify_contract_passes_when_all_required_present() {
+        let (_dir, spec, contract) = write_contract_and_spec(
+            r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["gcc", "make"]
+"#,
+        );
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        assert!(
+            stdout.contains("rhel-9-x86_64: PASS"),
+            "expected PASS row; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn verify_contract_fails_on_missing_required() {
+        let (_dir, spec, contract) = write_contract_and_spec(
+            r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["gcc", "missing-pkg"]
+"#,
+        );
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 1, "missing required must trigger exit 1");
+        assert!(
+            stdout.contains("[missing] missing-pkg"),
+            "expected [missing] tag in output; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn verify_contract_fails_on_forbidden_present() {
+        let (_dir, spec, contract) = write_contract_and_spec(
+            r#"
+[profiles."rhel-9-x86_64"]
+must_not_have_buildrequires = ["gcc"]
+"#,
+        );
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 1);
+        assert!(
+            stdout.contains("[forbidden] gcc"),
+            "expected [forbidden] tag in output; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn verify_contract_skips_profile_without_contract() {
+        let (_dir, spec, contract) = write_contract_and_spec(
+            r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["gcc"]
+"#,
+        );
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "altlinux-10-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "no contract for profile must exit 0");
+        // Pin the full user-facing label so a renderer rename
+        // surfaces here rather than slipping past a partial-match
+        // grep.
+        assert!(
+            stdout.contains("(no contract — skipping)"),
+            "expected exact `(no contract — skipping)` label; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn verify_contract_missing_file_exits_2() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, VC_SPEC).expect("write spec");
+        let missing = dir.path().join("does-not-exist.toml");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--contract",
+                missing.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2, "missing contract file must surface as user-error");
+        assert!(
+            stderr.contains("opening contract"),
+            "expected open-failure context in stderr; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn verify_contract_invalid_toml_exits_2() {
+        let (_dir, spec, contract) = write_contract_and_spec("not valid toml = = ===");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2);
+        assert!(
+            stderr.contains("parsing contract") || stderr.contains("TOML"),
+            "expected TOML parse error; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn verify_contract_rejects_unknown_field() {
+        let (_dir, spec, contract) = write_contract_and_spec(
+            r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["gcc"]
+typo_field = "oops"
+"#,
+        );
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2, "deny_unknown_fields must trigger exit 2");
+        assert!(
+            stderr.contains("typo_field") || stderr.contains("unknown"),
+            "expected unknown-field error; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn verify_contract_json_shape() {
+        let (_dir, spec, contract) = write_contract_and_spec(
+            r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["gcc", "missing-pkg"]
+"#,
+        );
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 1);
+        let v: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        assert_eq!(v["target_set"], "<ad-hoc>");
+        let files = v["files"].as_array().expect("files");
+        let pp = files[0]["per_profile"].as_array().expect("per_profile");
+        let row = &pp[0];
+        assert_eq!(row["profile_id"], "rhel-9-x86_64");
+        assert_eq!(row["status"]["kind"], "violations");
+        let violations = row["status"]["violations"].as_array().expect("violations");
+        assert!(violations.iter().any(|v| {
+            v["kind"] == "missing_required" && v["package"] == "missing-pkg"
+        }));
+    }
+
+    #[test]
+    fn verify_contract_requires_contract_flag() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, VC_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_ne!(rc, 0, "missing --contract must fail");
+        assert!(
+            stderr.contains("--contract"),
+            "expected clap mention of --contract; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn verify_contract_matches_macro_bearing_dep_by_surface_form() {
+        // `BuildRequires: %{name}-devel` records canonical=surface
+        // form. A contract entry writing the same surface form must
+        // match; a literal-only form must NOT match.
+        const SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+BuildRequires: %{name}-devel
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        let contract = dir.path().join("contract.toml");
+        std::fs::write(&spec, SPEC).expect("write spec");
+        std::fs::write(
+            &contract,
+            r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["%{name}-devel"]
+
+[profiles."altlinux-10-x86_64"]
+# Literal form — must NOT silently match the macro-bearing dep
+# because the analyzer doesn't statically expand %{name}.
+must_have_buildrequires = ["foo-devel"]
+"#,
+        )
+        .expect("write contract");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        // Non-zero because altlinux profile's literal entry should
+        // fail to match the macro-bearing dep.
+        assert_eq!(rc, 1);
+        let v: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let pp = v["files"][0]["per_profile"].as_array().expect("per_profile");
+        let rhel = pp
+            .iter()
+            .find(|r| r["profile_id"] == "rhel-9-x86_64")
+            .expect("rhel row");
+        assert_eq!(rhel["status"]["kind"], "pass");
+        let alt = pp
+            .iter()
+            .find(|r| r["profile_id"] == "altlinux-10-x86_64")
+            .expect("alt row");
+        assert_eq!(alt["status"]["kind"], "violations");
+    }
+
+    #[test]
+    fn verify_contract_skips_rich_if_dep() {
+        // MVP: `BuildRequires: (libfoo if systemd)` is a BoolDep::If
+        // which the collector conservatively skips. Document the
+        // behaviour so a future "recurse into rich deps" change
+        // surfaces here.
+        const SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+BuildRequires: (libfoo if systemd)
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        let contract = dir.path().join("contract.toml");
+        std::fs::write(&spec, SPEC).expect("write spec");
+        std::fs::write(
+            &contract,
+            r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["libfoo"]
+"#,
+        )
+        .expect("write contract");
+        let (rc, _, _) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        // Conservative skip → libfoo is NOT registered → missing.
+        assert_eq!(rc, 1, "rich If-dep must be conservatively skipped");
+    }
+
+    #[test]
+    fn verify_contract_json_no_contract_discriminator() {
+        // Lock the `no_contract` discriminator on the JSON wire
+        // format. Documented in doc/matrix.md.
+        let (_dir, spec, contract) = write_contract_and_spec(
+            r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["gcc"]
+"#,
+        );
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "altlinux-10-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let row = &v["files"][0]["per_profile"][0];
+        assert_eq!(row["profile_id"], "altlinux-10-x86_64");
+        assert_eq!(row["status"]["kind"], "no_contract");
+    }
+
+    #[test]
+    fn verify_contract_surfaces_parser_diagnostics() {
+        // Broken spec (missing %endif) produces parser diagnostics;
+        // the CLI must warn on stderr before reporting the verdict
+        // so the operator knows the contract was checked against a
+        // recovered partial AST.
+        const BROKEN: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+
+%if 0%{?rhel}
+BuildRequires: gcc
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        let contract = dir.path().join("contract.toml");
+        std::fs::write(&spec, BROKEN).expect("write spec");
+        std::fs::write(
+            &contract,
+            r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["gcc"]
+"#,
+        )
+        .expect("write contract");
+        let (_rc, _, stderr) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert!(
+            stderr.contains("parser diagnostic")
+                || stderr.contains("recovered AST"),
+            "expected parser-diagnostic banner; got stderr={stderr:?}"
+        );
+    }
+
+    #[test]
+    fn verify_contract_requires_target_or_profiles_flag() {
+        let (_dir, spec, contract) = write_contract_and_spec(
+            r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["gcc"]
+"#,
+        );
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--contract",
+                contract.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_ne!(rc, 0);
+        assert!(
+            stderr.contains("--target-set") || stderr.contains("--profiles"),
+            "expected clap to mention required flags; got {stderr}"
+        );
+    }
+}
