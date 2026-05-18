@@ -615,6 +615,100 @@ consumers can re-read the spec themselves and join on `line`. The
 * `2` — usage error: missing `--target-set`/`--profiles`,
   unresolvable target set, multiple input specs, etc.
 
+## Diff mode
+
+`matrix diff` answers "what actually changes between profile A and
+profile B?" by walking the spec branch-aware per profile and
+comparing the resulting `BuildRequires` and `Requires` sets.
+
+```bash
+rpm-spec-tool matrix diff product.spec \
+  --profiles rhel-9-x86_64,altlinux-10-x86_64
+```
+
+Exactly two distinct profiles. The diff is binary by design; for
+N-profile classification use the future `matrix classes` command
+(equivalence groups).
+
+### Branch-aware semantics
+
+Conditional resolution uses the *Skip* indeterminate policy:
+deps inside an indeterminate branch (e.g. arithmetic the evaluator
+can't model) appear in neither bucket. This is conservative —
+under-reports rather than over-reports — and matches the PR-review
+use case where a false "only on rhel-9" flag is more confusing
+than a quietly-skipped uncertainty.
+
+Rich/boolean dep flattening (`And` / `Or` / `With` conjunctive
+forms; `Without` left-side; `If` / `Unless` skipped) uses the
+shared `analyzer::dep_walk` walker — the same one
+`matrix verify-contract` uses. Future consumers (artifact
+comparator, etc.) plug into the same primitive so the rich-dep
+policy stays in one place.
+
+### Human output
+
+```text
+# Matrix diff: rhel-9-x86_64 vs altlinux-10-x86_64
+## product.spec
+
+  BuildRequires
+    common (2): gcc, make
+    only rhel-9-x86_64 (1): systemd-rpm-macros
+    only altlinux-10-x86_64 (1): rpm-build-systemd
+
+  Requires
+    common (1): glibc
+    only rhel-9-x86_64 (1): rhel-only-pkg
+    only altlinux-10-x86_64 (0): (none)
+```
+
+Items are sorted alphabetically within each bucket. Count is shown
+in parentheses for quick scanning.
+
+### JSON output
+
+```json
+{
+  "profile_a": "rhel-9-x86_64",
+  "profile_b": "altlinux-10-x86_64",
+  "path": "product.spec",
+  "groups": [
+    {
+      "tag": "BuildRequires",
+      "common": ["gcc", "make"],
+      "only_a": ["systemd-rpm-macros"],
+      "only_b": ["rpm-build-systemd"]
+    },
+    {
+      "tag": "Requires",
+      "common": ["glibc"],
+      "only_a": ["rhel-only-pkg"],
+      "only_b": []
+    }
+  ]
+}
+```
+
+`tag` is the canonical Display form (`"BuildRequires"`,
+`"Requires"`); buckets are sorted strings.
+
+### Exit codes
+
+* `0` — always (informational).
+* `2` — usage error: not exactly two profiles, identical profiles,
+  multiple input specs, etc.
+
+### Limitations of Phase 1 diff
+
+* Only `BuildRequires` and `Requires` are compared. `Provides` /
+  `Conflicts` / `Obsoletes` are interesting too and additive to
+  the JSON shape; deferred.
+* Self-diff is rejected (`A,A`) — the resolver dedups by profile
+  ID and the diff partition is empty anyway.
+* Skip policy hides indeterminate branches. Use `matrix coverage`
+  on the same target set to identify which branches were dropped.
+
 ## Contract verification
 
 `matrix verify-contract` gates the spec against per-profile
@@ -712,23 +806,38 @@ The `status.kind` discriminator is one of `pass` / `no_contract` /
 * `2` — input error: missing `--contract`, malformed contract TOML,
   unresolvable target set, etc.
 
-### Conditional-unaware MVP
+### Branch-aware verification
 
-The collector walks the spec AST and records every `BuildRequires:`
-line, regardless of enclosing `%if` / `%ifarch`. This is intentional
-for CI gating ("did anyone forget to declare a required build dep,
-even behind a guard?") but it does mean a contract that asks for
-`foo` on a RHEL profile will be satisfied by `BuildRequires: foo`
-inside `%if 0%{?fedora}`. Branch-aware contract verification is a
-follow-up; it will require deciding the semantics for "must `foo` be
-required when `cond` is false?" which is policy-laden enough to
-deserve its own design pass.
+The verifier walks the spec **branch-aware**: a `BuildRequires:`
+line inside `%if 0%{?fedora}` does NOT satisfy a contract on a RHEL
+profile, because the evaluator marks that branch Inactive on RHEL
+and the body is pruned during collection.
 
-Rich/boolean deps in the source spec are flattened conservatively:
-`And` / `Or` clauses register every named atom (so
-`(gcc and make)` satisfies both `gcc` and `make`), while `If` /
-`Unless` / `Not` arms are skipped — the conditional semantics there
-are too policy-laden to interpret at lint time.
+Each profile is checked under two projections of the spec:
+
+* **required-side** uses the *Skip* indeterminate policy. A dep
+  inside an indeterminate branch (e.g. `%if 0%{?rhel} >= 8` —
+  arithmetic the evaluator can't model) does NOT count toward
+  `must_have_buildrequires`. Conservative: prefer reporting
+  "missing required" only when the dep is definitely missing.
+* **forbidden-side** uses the *Include* indeterminate policy. A dep
+  inside an indeterminate branch DOES count toward
+  `must_not_have_buildrequires`. Conservative the other way:
+  prefer flagging "forbidden present" if the dep might be there.
+
+Net effect: the verifier never overlooks a forbidden dep that could
+reach the build, and never spuriously fails a required dep that is
+only declared inside an undecidable branch. Indeterminate branches
+degrade gracefully toward "fail loud, not silent".
+
+Rich/boolean deps in the source spec are flattened conservatively
+via the shared `analyzer::dep_walk` walker: `And` / `Or` / `With`
+conjunctive clauses register every named atom (so
+`(gcc and make)` satisfies both `gcc` and `make`); `Without` keeps
+the left side only; `If` / `Unless` arms are skipped — the
+conditional semantics there are too policy-laden to interpret at
+lint time. `matrix diff` uses the same walker so both commands
+report the same atom set for the same source.
 
 ## Limitations of Phase 1
 

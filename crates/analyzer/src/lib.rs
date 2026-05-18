@@ -17,8 +17,10 @@
 )]
 
 pub mod baseline;
+pub mod branch_aware;
 pub mod branch_coverage;
 pub mod config;
+pub mod dep_walk;
 pub mod config_cache;
 pub mod contract;
 pub mod diagnostic;
@@ -36,6 +38,8 @@ pub(crate) mod shell;
 pub mod visit;
 
 pub use baseline::{Baseline, BaselineEntry, BaselineError};
+pub use branch_aware::{IndeterminatePolicy, ProfileBranchSelection, SelectedBody};
+pub use dep_walk::{for_each_dep_atom, render_text_with_macros};
 pub use branch_coverage::{
     BranchActivity, BranchCoverage, CollectedBranch, CollectedConditional, CoverageEntry,
     CoverageReport, EvalError,

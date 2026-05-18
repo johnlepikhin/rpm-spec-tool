@@ -18,6 +18,7 @@ use rpm_spec_analyzer::profile::{
 pub mod baseline;
 pub mod check;
 pub mod coverage;
+pub mod diff;
 pub mod expand;
 pub mod explain;
 pub mod portability;
@@ -204,6 +205,9 @@ pub enum Action {
     /// Print the spec source per profile with each `%if`/`%ifarch`
     /// directive line tagged `[ACTIVE]`/`[INACTIVE]`/`[INDETERMINATE]`.
     Expand(expand::ExpandOpts),
+    /// Structural diff between exactly two profiles: which deps are
+    /// common, which are only on A, which are only on B. Branch-aware.
+    Diff(diff::DiffOpts),
 }
 
 impl Cmd {
@@ -216,6 +220,7 @@ impl Cmd {
             Action::Explain(opts) => explain::run(opts, self.config.as_deref()),
             Action::VerifyContract(opts) => verify_contract::run(opts, self.config.as_deref()),
             Action::Expand(opts) => expand::run(opts, self.config.as_deref()),
+            Action::Diff(opts) => diff::run(opts, self.config.as_deref()),
         }
     }
 }

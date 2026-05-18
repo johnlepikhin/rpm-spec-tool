@@ -83,12 +83,6 @@ pub(super) fn run(opts: VerifyContractOpts, config_override: Option<&Path>) -> R
         }
     };
 
-    let profile_ids: Vec<String> = resolved
-        .targets
-        .iter()
-        .map(|t| t.profile_id.clone())
-        .collect();
-
     let sources = io::read_sources(&opts.input.paths)?;
     let mut any_violations = false;
     let mut reports: Vec<(io::Source, ContractReport)> = Vec::with_capacity(sources.len());
@@ -116,7 +110,7 @@ pub(super) fn run(opts: VerifyContractOpts, config_override: Option<&Path>) -> R
                 source.display_name()
             );
         }
-        let report = ContractReport::compute(&parsed.spec, &contract, &profile_ids);
+        let report = ContractReport::compute(&parsed.spec, &contract, &resolved);
         if report.has_violations() {
             any_violations = true;
         }

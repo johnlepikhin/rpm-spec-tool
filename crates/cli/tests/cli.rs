@@ -4041,6 +4041,363 @@ BuildRequires: gcc
 }
 
 // ---------------------------------------------------------------------------
+// matrix diff
+// ---------------------------------------------------------------------------
+
+mod matrix_diff {
+    use super::*;
+
+    const DIFF_SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: Test
+License: MIT
+BuildRequires: gcc
+BuildRequires: make
+Requires: glibc
+
+%if 0%{?rhel}
+BuildRequires: systemd-rpm-macros
+Requires: rhel-only-pkg
+%else
+BuildRequires: rpm-build-systemd
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+
+    #[test]
+    fn diff_human_groups_common_and_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, DIFF_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "diff must succeed; stderr={stderr}");
+        // BR groups
+        assert!(
+            stdout.contains("common (2): gcc, make"),
+            "expected common BR line; got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("only rhel-9-x86_64 (1): systemd-rpm-macros"),
+            "expected rhel-only BR line; got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("only altlinux-10-x86_64 (1): rpm-build-systemd"),
+            "expected alt-only BR line; got:\n{stdout}"
+        );
+        // Requires group
+        assert!(
+            stdout.contains("Requires"),
+            "expected Requires group header; got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("only rhel-9-x86_64 (1): rhel-only-pkg"),
+            "expected rhel-only Requires line; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn diff_json_shape() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, DIFF_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        // Envelope keys — pin both names and types so a serde rename
+        // to camelCase or a dropped field surfaces here rather than
+        // breaking downstream tooling silently.
+        assert_eq!(v["profile_a"], "rhel-9-x86_64");
+        assert_eq!(v["profile_b"], "altlinux-10-x86_64");
+        assert!(v["path"].as_str().is_some_and(|p| p.ends_with("foo.spec")));
+        let groups = v["groups"].as_array().expect("groups");
+        // Two compared tags: BuildRequires + Requires.
+        assert_eq!(groups.len(), 2);
+        // Per-group keys must use exactly these `snake_case` names.
+        for g in groups {
+            let obj = g.as_object().expect("group is object");
+            assert!(obj.contains_key("tag"), "group missing `tag`");
+            assert!(obj.contains_key("common"), "group missing `common`");
+            assert!(obj.contains_key("only_a"), "group missing `only_a`");
+            assert!(obj.contains_key("only_b"), "group missing `only_b`");
+        }
+        // First group is BuildRequires by COMPARED_TAGS order.
+        assert_eq!(groups[0]["tag"], "BuildRequires");
+        let common: Vec<&str> = groups[0]["common"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(common.contains(&"gcc"));
+        assert!(common.contains(&"make"));
+        // Second group is Requires.
+        assert_eq!(groups[1]["tag"], "Requires");
+    }
+
+    #[test]
+    fn diff_empty_bucket_serialises_as_empty_array() {
+        // Spec has BuildRequires but NO Requires line — the Requires
+        // group must serialise every bucket as `[]`, not omit them.
+        // Downstream `jq` pipes rely on the schema being uniform.
+        const NO_REQUIRES: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+BuildRequires: gcc
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, NO_REQUIRES).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let req = &v["groups"][1];
+        assert_eq!(req["tag"], "Requires");
+        assert!(req["common"].as_array().expect("common is array").is_empty());
+        assert!(req["only_a"].as_array().expect("only_a is array").is_empty());
+        assert!(req["only_b"].as_array().expect("only_b is array").is_empty());
+    }
+
+    #[test]
+    fn diff_rejects_identical_profiles() {
+        // Self-diff is degenerate (empty buckets) AND resolver dedups
+        // by ID so the internal `targets` vec collapses to length 1,
+        // which would panic the indexer. Reject with a clear message.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, DIFF_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64,rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2);
+        assert!(
+            stderr.contains("distinct profiles"),
+            "expected distinct-profiles error; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn diff_rejects_wrong_profile_count() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, DIFF_SPEC).expect("write spec");
+        // One profile.
+        let (rc1, _, stderr1) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc1, 2, "1 profile must be rejected; stderr={stderr1}");
+        assert!(stderr1.contains("exactly two profiles"));
+        // Three profiles.
+        let (rc3, _, stderr3) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64,sles-15-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc3, 2, "3 profiles must be rejected; stderr={stderr3}");
+        assert!(stderr3.contains("exactly two profiles"));
+    }
+
+    #[test]
+    fn diff_rejects_multiple_specs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let a = dir.path().join("a.spec");
+        let b = dir.path().join("b.spec");
+        std::fs::write(&a, DIFF_SPEC).expect("write a");
+        std::fs::write(&b, DIFF_SPEC).expect("write b");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                a.to_str().unwrap(),
+                b.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 2);
+        assert!(
+            stderr.contains("exactly one spec"),
+            "expected multi-spec rejection; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn diff_skip_policy_drops_indeterminate_branch_deps() {
+        // Arithmetic Raw `%if 0%{?rhel} >= 8` → Indeterminate. Under
+        // the Skip policy that diff uses, the BR inside is hidden on
+        // both profiles → it appears in neither bucket, NOT in
+        // only-A or only-B. Documents the conservative semantic.
+        const ARITH: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+BuildRequires: outside
+
+%if 0%{?rhel} >= 8
+BuildRequires: maybe-rhel
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, ARITH).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let br = &v["groups"][0];
+        let join_all = |arr: &serde_json::Value| -> String {
+            arr.as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let all_text = format!(
+            "{}|{}|{}",
+            join_all(&br["common"]),
+            join_all(&br["only_a"]),
+            join_all(&br["only_b"])
+        );
+        assert!(
+            !all_text.contains("maybe-rhel"),
+            "Skip policy must hide indeterminate-branch dep; got buckets={all_text}"
+        );
+        assert!(
+            all_text.contains("outside"),
+            "outside-of-cond dep must survive in common; got buckets={all_text}"
+        );
+    }
+
+    #[test]
+    fn diff_surfaces_parser_diagnostics() {
+        const BROKEN: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+
+%if 0%{?rhel}
+BuildRequires: gcc
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BROKEN).expect("write spec");
+        let (_rc, _, stderr) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert!(
+            stderr.contains("parser diagnostic") || stderr.contains("recovered AST"),
+            "expected parser-diagnostic banner; got stderr={stderr:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // matrix verify-contract
 // ---------------------------------------------------------------------------
 

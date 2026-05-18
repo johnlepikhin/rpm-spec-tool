@@ -8,14 +8,28 @@
 //! `#[serde(deny_unknown_fields)]` so typos surface up-front; new
 //! fields land as additive `#[serde(default)]`).
 //!
-//! The verifier is conditional-unaware in this phase: it collects
-//! every `BuildRequires:` line in the spec, regardless of enclosing
-//! `%if`/`%ifarch`. That is the right semantic for CI gating ("did
-//! someone forget to declare a required build dep, even behind a
-//! guard?") but it does mean a `BuildRequires: foo` inside
-//! `%if 0%{?fedora}` will satisfy a contract that asks for `foo` on
-//! a RHEL profile. Document the limitation; the branch-aware variant
-//! is a follow-up.
+//! The verifier is **branch-aware**: a `BuildRequires:` line inside
+//! `%if 0%{?fedora}` does NOT satisfy a contract that asks for the
+//! dep on a RHEL profile, because the evaluator marks that branch
+//! Inactive on RHEL and the body is pruned during collection.
+//!
+//! ## Two-walk semantics
+//!
+//! Each profile gets two collections via [`crate::branch_aware`]:
+//!
+//! * **required-side** uses [`IndeterminatePolicy::Skip`]: a dep
+//!   inside an indeterminate branch does NOT count toward
+//!   `must_have_buildrequires`. Conservative — prefer reporting
+//!   "missing required" only when the dep is definitely missing.
+//! * **forbidden-side** uses [`IndeterminatePolicy::Include`]: a dep
+//!   inside an indeterminate branch DOES count toward
+//!   `must_not_have_buildrequires`. Conservative the other way —
+//!   prefer reporting "forbidden present" if the dep might be there.
+//!
+//! Net effect: the verifier never overlooks a forbidden dep that
+//! could reach the build, and never spuriously flags a required dep
+//! that is only declared inside an undecidable branch. Indeterminate
+//! branches degrade gracefully toward "fail loud, not silent".
 //!
 //! Rich/boolean deps in the source spec are flattened conservatively:
 //! `And` / `Or` clauses register every named atom (so
@@ -29,41 +43,13 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use rpm_spec::ast::{
-    BoolDep, Conditional, DepExpr, FilesContent, MacroKind, PreambleContent, PreambleItem, Span,
-    SpecFile, SpecItem, Tag, TagValue, Text, TextSegment,
-};
+use rpm_spec::ast::{PreambleItem, Span, SpecFile, Tag, TagValue, Text};
+use rpm_spec_profile::ResolvedTargetSet;
 use serde::Serialize;
 
-use crate::visit::{self, Visit};
-
-/// Render a [`Text`] preserving macro surface form. `%name` / `%{name}`
-/// segments come back as-typed so the contract author can match
-/// macro-bearing dep names verbatim (e.g. `%{?systemd_requires}`).
-fn render_text(text: &Text) -> String {
-    let mut out = String::new();
-    for seg in &text.segments {
-        match seg {
-            TextSegment::Literal(s) => out.push_str(s),
-            TextSegment::Macro(m) => match m.kind {
-                MacroKind::Plain => {
-                    out.push('%');
-                    out.push_str(&m.name);
-                }
-                _ => {
-                    out.push_str("%{");
-                    out.push_str(&m.name);
-                    out.push('}');
-                }
-            },
-            // `TextSegment` is `#[non_exhaustive]` — unknown variants
-            // contribute nothing so we don't mis-render an unfamiliar
-            // shape into a misleading surface form.
-            _ => {}
-        }
-    }
-    out
-}
+use crate::branch_aware::{IndeterminatePolicy, ProfileBranchSelection, walk_active_preamble};
+use crate::branch_coverage::CoverageReport;
+use crate::dep_walk::{for_each_dep_atom, render_text_with_macros};
 
 /// Top-level shape of a contract TOML document.
 ///
@@ -189,28 +175,50 @@ pub enum ContractViolation {
 impl ContractReport {
     /// Compute the per-profile verdict against `spec`.
     ///
-    /// `profile_ids` is the declared order from the matrix run; the
-    /// report's `per_profile` mirrors it so CLI renderers can pair
-    /// rows with the matrix's profile column ordering without an
-    /// extra sort step.
-    pub fn compute(spec: &SpecFile<Span>, contract: &Contract, profile_ids: &[String]) -> Self {
-        // Collect once, share across profiles. BuildRequires
-        // extraction is profile-agnostic in this phase (see module
-        // doc), so the cost is paid once per spec rather than per
-        // profile.
-        let mut collector = BuildRequiresCollector::default();
-        visit::walk_spec(&mut collector, spec);
-        let found = collector.found;
+    /// Walks the spec branch-aware per profile, with two independent
+    /// projections: `Skip`-policy for the required-side check and
+    /// `Include`-policy for the forbidden-side check. See the module
+    /// doc for the rationale.
+    ///
+    /// `target_set` supplies both the profile-ID order (mirrored into
+    /// the report's `per_profile` for stable column alignment) and
+    /// the macro registries the [`CoverageReport`] needs to evaluate
+    /// each branch's condition.
+    pub fn compute(
+        spec: &SpecFile<Span>,
+        contract: &Contract,
+        target_set: &ResolvedTargetSet,
+    ) -> Self {
+        // CoverageReport is profile-agnostic per spec — one pass over
+        // the AST per call site. Sharing it across the per-profile
+        // loop is the whole point of the report's existence.
+        let coverage = CoverageReport::compute(spec, target_set);
 
-        let per_profile = profile_ids
+        let per_profile = target_set
+            .targets
             .iter()
-            .map(|pid| {
-                let status = match contract.profiles.get(pid) {
+            .map(|rt| {
+                let profile_id = rt.profile_id.as_str();
+                let status = match contract.profiles.get(profile_id) {
                     None => ContractProfileStatus::NoContract,
-                    Some(pc) => verify_one(pc, &found),
+                    Some(pc) => {
+                        let required_found = collect_branch_aware(
+                            spec,
+                            &coverage,
+                            profile_id,
+                            IndeterminatePolicy::Skip,
+                        );
+                        let forbidden_found = collect_branch_aware(
+                            spec,
+                            &coverage,
+                            profile_id,
+                            IndeterminatePolicy::Include,
+                        );
+                        verify_one(pc, &required_found, &forbidden_found)
+                    }
                 };
                 ProfileContractReport {
-                    profile_id: pid.clone(),
+                    profile_id: rt.profile_id.clone(),
                     status,
                 }
             })
@@ -227,21 +235,41 @@ impl ContractReport {
     }
 }
 
-fn verify_one(pc: &ProfileContract, found: &[FoundBuildRequire]) -> ContractProfileStatus {
-    // Index the spec's BuildRequires once: HashMap by canonical
-    // name → first-occurrence surface form. O(F) build, O(1) lookup
-    // per contract entry — turns the verifier from O(F·(R+N)) into
-    // O(F + R + N) where F is found count, R is must_have count,
-    // N is must_not_have count. The "first occurrence" choice
-    // matches the previous Vec::find behaviour so output stays
-    // identical when a forbidden dep appears in multiple places.
-    let index: HashMap<&str, &FoundBuildRequire> =
-        found
-            .iter()
-            .fold(HashMap::with_capacity(found.len()), |mut acc, f| {
-                acc.entry(f.canonical.as_str()).or_insert(f);
-                acc
-            });
+/// Collect every `BuildRequires` atom active on `profile_id` under
+/// `policy`. Reuses the [`BuildRequiresCollector`] logic but feeds
+/// it only items inside active branches via [`walk_active_preamble`].
+fn collect_branch_aware(
+    spec: &SpecFile<Span>,
+    coverage: &CoverageReport,
+    profile_id: &str,
+    policy: IndeterminatePolicy,
+) -> Vec<FoundBuildRequire> {
+    let selection = ProfileBranchSelection::compute(coverage, profile_id, policy);
+    let mut collector = BuildRequiresCollector::default();
+    walk_active_preamble(spec, &selection, |item| collector.consume_preamble_item(item));
+    collector.found
+}
+
+fn verify_one(
+    pc: &ProfileContract,
+    required_found: &[FoundBuildRequire],
+    forbidden_found: &[FoundBuildRequire],
+) -> ContractProfileStatus {
+    // Two independent HashMaps so the required-check sees only deps
+    // collected under Skip policy and the forbidden-check sees the
+    // permissive Include-policy set. See module doc for the rationale.
+    let required_index: HashMap<&str, &FoundBuildRequire> = required_found
+        .iter()
+        .fold(HashMap::with_capacity(required_found.len()), |mut acc, f| {
+            acc.entry(f.canonical.as_str()).or_insert(f);
+            acc
+        });
+    let forbidden_index: HashMap<&str, &FoundBuildRequire> = forbidden_found
+        .iter()
+        .fold(HashMap::with_capacity(forbidden_found.len()), |mut acc, f| {
+            acc.entry(f.canonical.as_str()).or_insert(f);
+            acc
+        });
 
     let mut violations = Vec::new();
 
@@ -256,7 +284,7 @@ fn verify_one(pc: &ProfileContract, found: &[FoundBuildRequire]) -> ContractProf
         if key.is_empty() {
             continue;
         }
-        if !index.contains_key(key) {
+        if !required_index.contains_key(key) {
             violations.push(ContractViolation::MissingRequired {
                 package: required.clone(),
             });
@@ -270,7 +298,7 @@ fn verify_one(pc: &ProfileContract, found: &[FoundBuildRequire]) -> ContractProf
         if key.is_empty() {
             continue;
         }
-        if let Some(found_match) = index.get(key) {
+        if let Some(found_match) = forbidden_index.get(key) {
             violations.push(ContractViolation::ForbiddenPresent {
                 package: forbidden.clone(),
                 found_as: found_match.surface.clone(),
@@ -308,6 +336,21 @@ struct BuildRequiresCollector {
 }
 
 impl BuildRequiresCollector {
+    /// Entry point called by [`walk_active_preamble`] for each
+    /// preamble item that survives branch projection. Filters on
+    /// `Tag::BuildRequires` and records the dep atoms.
+    fn consume_preamble_item(&mut self, item: &PreambleItem<Span>) {
+        if matches!(item.tag, Tag::BuildRequires) {
+            if let TagValue::Dep(dep) = &item.value {
+                // Delegate rich-dep traversal to the shared walker
+                // in `crate::dep_walk` so the And/Or flattening
+                // and If/Unless/Not skip policy stay aligned with
+                // `matrix diff` and any future consumer.
+                for_each_dep_atom(dep, |name| self.record_atom_name(name));
+            }
+        }
+    }
+
     fn record_atom_name(&mut self, name: &Text) {
         // Prefer the pure-literal projection when the dep name has
         // no macro segments — that's the canonical key contracts
@@ -315,7 +358,7 @@ impl BuildRequiresCollector {
         // we fall back to the with-macros rendering so the canonical
         // and the surface form coincide; the contract author can
         // still match it but must write the verbatim form.
-        let surface = render_text(name);
+        let surface = render_text_with_macros(name);
         let canonical = name
             .literal_str()
             .map(|s| s.to_string())
@@ -330,74 +373,33 @@ impl BuildRequiresCollector {
             surface: trimmed_surface,
         });
     }
-
-    fn record_dep(&mut self, dep: &DepExpr) {
-        match dep {
-            DepExpr::Atom(atom) => self.record_atom_name(&atom.name),
-            DepExpr::Rich(boxed) => self.record_bool_dep(boxed),
-            // Defensive: the AST is `#[non_exhaustive]`. Future
-            // variants are silently skipped — the contract verifier
-            // is conservative on unknown shapes (no false-positive
-            // missing-required when we couldn't read the spec).
-            _ => {}
-        }
-    }
-
-    fn record_bool_dep(&mut self, b: &BoolDep) {
-        // Rich-dep handling for MVP: flatten And/Or so a clause like
-        // `(gcc and make)` registers both `gcc` and `make`. `If`/
-        // `Unless`/`Not` arms are too policy-laden to interpret here
-        // (e.g. "must `foo` count if it's only required when `cond`?")
-        // — we skip them and document the gap.
-        match b {
-            BoolDep::And(items) | BoolDep::Or(items) => {
-                for d in items {
-                    self.record_dep(d);
-                }
-            }
-            // Conservative skip for conditional/negation rich deps.
-            _ => {}
-        }
-    }
 }
 
-impl<'ast> Visit<'ast> for BuildRequiresCollector {
-    fn visit_preamble(&mut self, item: &'ast PreambleItem<Span>) {
-        if matches!(item.tag, Tag::BuildRequires) {
-            if let TagValue::Dep(dep) = &item.value {
-                self.record_dep(dep);
-            }
-        }
-        visit::walk_preamble(self, item);
-    }
-
-    // Conditional bodies recurse normally so BuildRequires inside
-    // `%if` / `%ifarch` are still collected. The module doc records
-    // that this is the intended MVP behaviour.
-    fn visit_top_conditional(&mut self, c: &'ast Conditional<Span, SpecItem<Span>>) {
-        visit::walk_top_conditional(self, c);
-    }
-    fn visit_preamble_conditional(
-        &mut self,
-        c: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
-        visit::walk_preamble_conditional(self, c);
-    }
-    fn visit_files_conditional(&mut self, c: &'ast Conditional<Span, FilesContent<Span>>) {
-        visit::walk_files_conditional(self, c);
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::session::parse;
 
+    fn target_set_with(profiles: &[&str]) -> ResolvedTargetSet {
+        use rpm_spec_profile::{ProfileSection, ResolveOptions, TargetEntry, resolve_target_set};
+        let section = ProfileSection::new(None, std::collections::BTreeMap::new());
+        let target = TargetEntry::from_profiles(profiles.iter().map(|s| s.to_string()).collect());
+        resolve_target_set(
+            &section,
+            "test",
+            &target,
+            std::path::Path::new("/tmp"),
+            ResolveOptions::default(),
+        )
+        .expect("resolve")
+    }
+
     fn run_report(spec_src: &str, contract_toml: &str, profile_ids: &[&str]) -> ContractReport {
         let parsed = parse(spec_src);
         let contract = Contract::from_toml_str(contract_toml).expect("parse contract");
-        let ids: Vec<String> = profile_ids.iter().map(|s| s.to_string()).collect();
-        ContractReport::compute(&parsed.spec, &contract, &ids)
+        let ts = target_set_with(profile_ids);
+        ContractReport::compute(&parsed.spec, &contract, &ts)
     }
 
     const SPEC_WITH_GCC: &str = "\
@@ -422,10 +424,10 @@ B
     #[test]
     fn contract_pass_when_all_required_present() {
         let contract = r#"
-[profiles."rhel-9"]
+[profiles."rhel-9-x86_64"]
 must_have_buildrequires = ["gcc", "make"]
 "#;
-        let r = run_report(SPEC_WITH_GCC, contract, &["rhel-9"]);
+        let r = run_report(SPEC_WITH_GCC, contract, &["rhel-9-x86_64"]);
         assert!(!r.has_violations());
         match &r.per_profile[0].status {
             ContractProfileStatus::Pass => {}
@@ -436,10 +438,10 @@ must_have_buildrequires = ["gcc", "make"]
     #[test]
     fn contract_fails_on_missing_required() {
         let contract = r#"
-[profiles."rhel-9"]
+[profiles."rhel-9-x86_64"]
 must_have_buildrequires = ["gcc", "missing-pkg"]
 "#;
-        let r = run_report(SPEC_WITH_GCC, contract, &["rhel-9"]);
+        let r = run_report(SPEC_WITH_GCC, contract, &["rhel-9-x86_64"]);
         assert!(r.has_violations());
         match &r.per_profile[0].status {
             ContractProfileStatus::Violations { violations } => {
@@ -456,10 +458,10 @@ must_have_buildrequires = ["gcc", "missing-pkg"]
     #[test]
     fn contract_fails_on_forbidden_present() {
         let contract = r#"
-[profiles."rhel-9"]
+[profiles."rhel-9-x86_64"]
 must_not_have_buildrequires = ["gcc"]
 "#;
-        let r = run_report(SPEC_WITH_GCC, contract, &["rhel-9"]);
+        let r = run_report(SPEC_WITH_GCC, contract, &["rhel-9-x86_64"]);
         assert!(r.has_violations());
         match &r.per_profile[0].status {
             ContractProfileStatus::Violations { violations } => {
@@ -476,10 +478,10 @@ must_not_have_buildrequires = ["gcc"]
     #[test]
     fn profile_without_contract_is_skipped() {
         let contract = r#"
-[profiles."rhel-9"]
+[profiles."rhel-9-x86_64"]
 must_have_buildrequires = ["gcc"]
 "#;
-        let r = run_report(SPEC_WITH_GCC, contract, &["altlinux-10"]);
+        let r = run_report(SPEC_WITH_GCC, contract, &["altlinux-10-x86_64"]);
         assert!(!r.has_violations());
         match &r.per_profile[0].status {
             ContractProfileStatus::NoContract => {}
@@ -493,11 +495,11 @@ must_have_buildrequires = ["gcc"]
         // any profile that is declared. Sanity for contracts in
         // early bootstrap.
         let contract = r#"
-[profiles."rhel-9"]
+[profiles."rhel-9-x86_64"]
 must_have_buildrequires = []
 must_not_have_buildrequires = []
 "#;
-        let r = run_report(SPEC_WITH_GCC, contract, &["rhel-9"]);
+        let r = run_report(SPEC_WITH_GCC, contract, &["rhel-9-x86_64"]);
         assert!(!r.has_violations());
         assert!(matches!(r.per_profile[0].status, ContractProfileStatus::Pass));
     }
@@ -507,7 +509,7 @@ must_not_have_buildrequires = []
         let contract = r#"
 not_a_real_field = true
 
-[profiles."rhel-9"]
+[profiles."rhel-9-x86_64"]
 must_have_buildrequires = ["gcc"]
 "#;
         let err = Contract::from_toml_str(contract).unwrap_err();
@@ -536,10 +538,10 @@ B
 - init
 ";
         let contract = r#"
-[profiles."rhel-9"]
+[profiles."rhel-9-x86_64"]
 must_have_buildrequires = ["gcc", "make"]
 "#;
-        let r = run_report(SPEC, contract, &["rhel-9"]);
+        let r = run_report(SPEC, contract, &["rhel-9-x86_64"]);
         assert!(!r.has_violations());
     }
 
@@ -568,10 +570,10 @@ B
 - init
 ";
         let contract = r#"
-[profiles."rhel-9"]
+[profiles."rhel-9-x86_64"]
 must_not_have_buildrequires = ["gcc"]
 "#;
-        let r = run_report(SPEC, contract, &["rhel-9"]);
+        let r = run_report(SPEC, contract, &["rhel-9-x86_64"]);
         match &r.per_profile[0].status {
             ContractProfileStatus::Violations { violations } => {
                 assert_eq!(violations.len(), 1);
@@ -594,17 +596,21 @@ must_not_have_buildrequires = ["gcc"]
         // `verify_one` trims contract entries to keep symmetry with
         // the spec-side `record_atom_name` trimming.
         let contract = r#"
-[profiles."rhel-9"]
+[profiles."rhel-9-x86_64"]
 must_have_buildrequires = ["  gcc  ", "make"]
 "#;
-        let r = run_report(SPEC_WITH_GCC, contract, &["rhel-9"]);
+        let r = run_report(SPEC_WITH_GCC, contract, &["rhel-9-x86_64"]);
         assert!(!r.has_violations(), "trimmed entry must match");
     }
 
     #[test]
-    fn buildrequires_inside_conditional_still_collected() {
-        // MVP semantics: conditional-unaware. BuildRequires inside
-        // `%if 0%{?rhel}` is found even for non-RHEL profiles.
+    fn buildrequires_in_rhel_branch_invisible_to_alt_profile() {
+        // Branch-aware semantics: `BuildRequires: gcc` inside
+        // `%if 0%{?rhel}` is Active only on rhel-* profiles. An
+        // altlinux profile that asks for gcc as required must see
+        // it as MissingRequired — the dep is gated away on that
+        // profile. The old MVP swallowed this; the upgrade flips
+        // it to the honest answer.
         const SPEC: &str = "\
 Name: foo
 Version: 1.0
@@ -625,12 +631,223 @@ B
 - init
 ";
         let contract = r#"
-[profiles."altlinux-10"]
+[profiles."altlinux-10-x86_64"]
 must_have_buildrequires = ["gcc"]
 "#;
-        let r = run_report(SPEC, contract, &["altlinux-10"]);
-        // Conditional-unaware: contract passes even on alt because
-        // the `BuildRequires` exists in source. Document via test.
-        assert!(!r.has_violations());
+        let r = run_report(SPEC, contract, &["altlinux-10-x86_64"]);
+        assert!(
+            r.has_violations(),
+            "alt profile must see gcc as missing — it is gated on %if 0%{{?rhel}}"
+        );
+        match &r.per_profile[0].status {
+            ContractProfileStatus::Violations { violations } => {
+                assert!(
+                    violations.iter().any(|v| matches!(
+                        v,
+                        ContractViolation::MissingRequired { package } if package == "gcc"
+                    )),
+                    "expected MissingRequired(gcc); got {violations:?}"
+                );
+            }
+            other => panic!("expected Violations, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn buildrequires_in_rhel_branch_visible_on_rhel_profile() {
+        // Mirror image of the above: gcc IS active on rhel, so the
+        // same contract passes there.
+        const SPEC: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+%if 0%{?rhel}
+BuildRequires: gcc
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let contract = r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["gcc"]
+"#;
+        let r = run_report(SPEC, contract, &["rhel-9-x86_64"]);
+        assert!(!r.has_violations(), "rhel profile must see gcc as active");
+        assert!(matches!(r.per_profile[0].status, ContractProfileStatus::Pass));
+    }
+
+    #[test]
+    fn forbidden_dep_in_indeterminate_branch_still_flagged() {
+        // Indeterminate branches under Include policy (forbidden-side):
+        // a forbidden dep that COULD reach the build must surface as a
+        // violation. Use `%if 0%{?rhel} >= 8` arithmetic Raw → always
+        // Indeterminate. The forbidden check uses Include policy so
+        // the dep DOES count.
+        const SPEC: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+%if 0%{?rhel} >= 8
+BuildRequires: banned-pkg
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let contract = r#"
+[profiles."rhel-9-x86_64"]
+must_not_have_buildrequires = ["banned-pkg"]
+"#;
+        let r = run_report(SPEC, contract, &["rhel-9-x86_64"]);
+        assert!(
+            r.has_violations(),
+            "forbidden dep in an indeterminate branch must be flagged"
+        );
+    }
+
+    #[test]
+    fn else_branch_supplies_required_dep_on_inactive_profile() {
+        // Reciprocal of `buildrequires_in_rhel_branch_invisible_to_alt_profile`:
+        // when `%if 0%{?rhel}` is Inactive on alt, the `%else` body
+        // runs → its BR satisfies a contract that asks for the dep
+        // on alt. Pins SelectedBody::Otherwise correctness.
+        const SPEC: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+%if 0%{?rhel}
+BuildRequires: rhel-pkg
+%else
+BuildRequires: gcc
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let contract = r#"
+[profiles."altlinux-10-x86_64"]
+must_have_buildrequires = ["gcc"]
+"#;
+        let r = run_report(SPEC, contract, &["altlinux-10-x86_64"]);
+        assert!(
+            !r.has_violations(),
+            "alt profile must see gcc via %else body; got {:?}",
+            r.per_profile[0].status
+        );
+    }
+
+    #[test]
+    fn skip_and_include_binding_is_correct() {
+        // Catch a Skip↔Include swap bug in `ContractReport::compute`
+        // by exercising BOTH semantics in one test: a forbidden dep
+        // in an indeterminate branch (must surface via Include path)
+        // AND a required dep in another indeterminate branch (must
+        // surface as missing via Skip path).
+        const SPEC: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+%if 0%{?rhel} >= 8
+BuildRequires: banned-pkg
+%endif
+%if 0%{?rhel} >= 9
+BuildRequires: maybe-required
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let contract = r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["maybe-required"]
+must_not_have_buildrequires = ["banned-pkg"]
+"#;
+        let r = run_report(SPEC, contract, &["rhel-9-x86_64"]);
+        match &r.per_profile[0].status {
+            ContractProfileStatus::Violations { violations } => {
+                let has_missing = violations.iter().any(|v| matches!(
+                    v, ContractViolation::MissingRequired { package } if package == "maybe-required"
+                ));
+                let has_forbidden = violations.iter().any(|v| matches!(
+                    v, ContractViolation::ForbiddenPresent { package, .. } if package == "banned-pkg"
+                ));
+                assert!(
+                    has_missing,
+                    "required-side Skip must hide indeterminate dep → MissingRequired; got {violations:?}"
+                );
+                assert!(
+                    has_forbidden,
+                    "forbidden-side Include must surface indeterminate dep → ForbiddenPresent; got {violations:?}"
+                );
+            }
+            other => panic!("expected Violations, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn required_dep_only_in_indeterminate_branch_is_missing() {
+        // Mirror of the above: required-side uses Skip policy, so a
+        // dep that ONLY appears inside an indeterminate branch is NOT
+        // collected for required-check → reports as MissingRequired.
+        // Conservative: prefer false positive ("missing") over false
+        // negative ("ok") when we genuinely don't know.
+        const SPEC: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+%if 0%{?rhel} >= 8
+BuildRequires: maybe-gcc
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let contract = r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["maybe-gcc"]
+"#;
+        let r = run_report(SPEC, contract, &["rhel-9-x86_64"]);
+        assert!(r.has_violations(), "required-side Skip policy must hide indeterminate dep");
     }
 }
