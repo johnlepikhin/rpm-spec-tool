@@ -12,7 +12,6 @@
 //! 10 profiles already produces 2k lines, batching would drown the
 //! signal.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
@@ -23,6 +22,8 @@ use rpm_spec_analyzer::profile::ResolvedTargetSet;
 use rpm_spec_analyzer::{CoverageReport, EvalError, session::parse};
 use serde::Serialize;
 
+use super::coverage_style::Style;
+use crate::app::ColorChoice;
 use crate::io;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -64,7 +65,11 @@ pub struct ExpandOpts {
     pub bcond: crate::app::BcondOverridesArg,
 }
 
-pub(super) fn run(opts: ExpandOpts, config_override: Option<&Path>) -> Result<ExitCode> {
+pub(super) fn run(
+    opts: ExpandOpts,
+    config_override: Option<&Path>,
+    color: ColorChoice,
+) -> Result<ExitCode> {
     let ctx = match super::prepare_matrix(
         config_override,
         opts.target_set.as_deref(),
@@ -105,7 +110,10 @@ pub(super) fn run(opts: ExpandOpts, config_override: Option<&Path>) -> Result<Ex
     let coverage = CoverageReport::compute(&parsed.spec, &resolved, &opts.bcond.to_overrides());
 
     match opts.format {
-        OutputFormat::Human => render_human(&source, &coverage, &resolved)?,
+        OutputFormat::Human => {
+            let style = Style::new(color);
+            render_human(&source, &coverage, &resolved, &style)?;
+        }
         OutputFormat::Json => render_json(&source, &coverage, &resolved)?,
     }
     Ok(ExitCode::SUCCESS)
@@ -133,14 +141,26 @@ enum BranchStatus<'a> {
 }
 
 impl BranchStatus<'_> {
-    /// Human-renderer tag. Static strings are returned by reference
-    /// so the common Active/Inactive paths don't allocate; only the
-    /// rare `Indeterminate` arm pays for `format!`.
-    fn tag(&self) -> Cow<'static, str> {
+    /// Tag rendered through the colour painter. Returns an owned
+    /// `String` because the styled forms always carry ANSI
+    /// escapes (or are identity-mapped when colour is disabled,
+    /// matching plain `tag()` byte-for-byte).
+    ///
+    /// Palette:
+    /// * green `[ACTIVE]` — the branch fires on this profile;
+    ///   highlighted so the eye lands on what's actually built.
+    /// * dim `[INACTIVE]` — the branch is skipped here. Dim
+    ///   rather than red because inactive isn't a problem — it's
+    ///   the expected matrix outcome, just visual noise on the
+    ///   parts of the spec the profile doesn't reach.
+    /// * blue `[INDETERMINATE: ...]` — evaluator couldn't decide;
+    ///   matches the coverage palette so operators read both
+    ///   commands the same way.
+    fn tag_styled(&self, style: &Style) -> String {
         match self {
-            Self::Active => Cow::Borrowed("[ACTIVE]"),
-            Self::Inactive => Cow::Borrowed("[INACTIVE]"),
-            Self::Indeterminate(reason) => Cow::Owned(format!("[INDETERMINATE: {reason}]")),
+            Self::Active => style.always_tag("[ACTIVE]"),
+            Self::Inactive => style.dim("[INACTIVE]"),
+            Self::Indeterminate(reason) => style.indet_tag(&format!("[INDETERMINATE: {reason}]")),
         }
     }
 
@@ -199,27 +219,35 @@ fn render_human(
     source: &io::Source,
     coverage: &CoverageReport,
     target_set: &ResolvedTargetSet,
+    style: &Style,
 ) -> Result<()> {
     use std::io::Write;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     writeln!(
         out,
-        "# Matrix expand: target set `{}` ({} profiles)",
-        target_set.id,
-        target_set.targets.len()
+        "{}",
+        style.header(&format!(
+            "Matrix expand: target set `{}` ({} profiles)",
+            target_set.id,
+            target_set.targets.len()
+        ))
     )?;
-    writeln!(out, "## {}", source.display_name())?;
+    writeln!(out, "{} {}", style.header("==>"), source.display_name())?;
 
     for rt in &target_set.targets {
         let index = build_profile_index(coverage, &rt.profile_id);
         writeln!(out)?;
-        writeln!(out, "== Profile {} ==", rt.profile_id)?;
+        writeln!(
+            out,
+            "{}",
+            style.header(&format!("== Profile {} ==", rt.profile_id))
+        )?;
         // Source lines are 1-based; `Span::start_line` mirrors that.
         for (line_no, line) in source.contents.lines().enumerate() {
             let line_no = (line_no + 1) as u32;
             match index.get(&line_no) {
-                Some(info) => writeln!(out, "{line}  {}", info.status.tag())?,
+                Some(info) => writeln!(out, "{line}  {}", info.status.tag_styled(style))?,
                 None => writeln!(out, "{line}")?,
             }
         }

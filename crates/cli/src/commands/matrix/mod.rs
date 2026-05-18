@@ -330,7 +330,7 @@ impl Cmd {
             Action::Coverage(opts) => coverage::run(opts, self.config.as_deref(), color),
             Action::Explain(opts) => explain::run(opts, self.config.as_deref()),
             Action::VerifyContract(opts) => verify_contract::run(opts, self.config.as_deref()),
-            Action::Expand(opts) => expand::run(opts, self.config.as_deref()),
+            Action::Expand(opts) => expand::run(opts, self.config.as_deref(), color),
             Action::Diff(opts) => diff::run(opts, self.config.as_deref()),
             Action::Classes(opts) => classes::run(opts, self.config.as_deref()),
             Action::Impact(opts) => impact::run(opts, self.config.as_deref()),
