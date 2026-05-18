@@ -1,6 +1,7 @@
 //! `matrix coverage` — show which `%if`/`%ifarch` branches activate
 //! on which profiles.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -88,11 +89,7 @@ pub(super) fn run(opts: CoverageOpts, config_override: Option<&Path>) -> Result<
 
     for source in sources {
         let parsed = parse(&source.contents);
-        let report = CoverageReport::compute(
-            &parsed.spec,
-            &resolved,
-            &opts.bcond.to_overrides(),
-        );
+        let report = CoverageReport::compute(&parsed.spec, &resolved, &opts.bcond.to_overrides());
         if report.dead_branches() > 0 {
             any_dead = true;
         }
@@ -161,9 +158,10 @@ fn render_human(
             continue;
         }
         writeln!(out)?;
+        let total_profiles = target_set.targets.len();
         for c in &report.conditionals {
             for b in &c.branches {
-                write_branch(&mut out, b)?;
+                write_branch(&mut out, b, total_profiles)?;
             }
         }
         writeln!(out)?;
@@ -171,7 +169,11 @@ fn render_human(
     Ok(())
 }
 
-fn write_branch<W: std::io::Write>(out: &mut W, b: &BranchCoverage) -> Result<()> {
+fn write_branch<W: std::io::Write>(
+    out: &mut W,
+    b: &BranchCoverage,
+    total_profiles: usize,
+) -> Result<()> {
     let tag = if b.is_dead() {
         " [DEAD]"
     } else if b.is_universally_active() {
@@ -187,34 +189,90 @@ fn write_branch<W: std::io::Write>(out: &mut W, b: &BranchCoverage) -> Result<()
     writeln!(
         out,
         "    active: {}",
-        format_or_none(&b.active_on)
+        format_profile_list(&b.active_on, total_profiles)
     )?;
     writeln!(
         out,
         "    inactive: {}",
-        format_or_none(&b.inactive_on)
+        format_profile_list(&b.inactive_on, total_profiles)
     )?;
     if !b.indeterminate_on.is_empty() {
-        // Render each indeterminate profile with its reason inline
-        // when available. Format: `pid (reason), pid (reason), ...`.
-        let mut parts = Vec::with_capacity(b.indeterminate_on.len());
+        // Group profiles by their indeterminate reason so each reason
+        // is printed once with the profile list that triggered it,
+        // rather than once per profile. On a 23-profile target set
+        // that turns 23 repetitions of the same reason into a single
+        // line, making the report scannable.
+        let mut by_reason: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+        let mut no_reason: Vec<&str> = Vec::new();
         for pid in &b.indeterminate_on {
             match b.indeterminate_reasons.get(pid) {
-                Some(reason) => parts.push(format!("{pid} ({reason})")),
-                None => parts.push(pid.clone()),
+                Some(reason) => by_reason
+                    .entry(reason.to_string())
+                    .or_default()
+                    .push(pid.as_str()),
+                None => no_reason.push(pid.as_str()),
             }
         }
-        writeln!(out, "    indeterminate: {}", parts.join(", "))?;
+        // Single reason and it covers every indeterminate profile:
+        // fold into a one-line inline form so a typical "macro X not
+        // defined" branch stays compact.
+        if no_reason.is_empty() && by_reason.len() == 1 {
+            let (reason, profiles) = by_reason.iter().next().expect("len==1");
+            writeln!(
+                out,
+                "    indeterminate ({reason}): {}",
+                summarise_profiles(profiles, total_profiles)
+            )?;
+        } else {
+            writeln!(out, "    indeterminate:")?;
+            for (reason, profiles) in &by_reason {
+                writeln!(
+                    out,
+                    "      ({reason}): {}",
+                    summarise_profiles(profiles, total_profiles)
+                )?;
+            }
+            if !no_reason.is_empty() {
+                writeln!(
+                    out,
+                    "      (no reason recorded): {}",
+                    summarise_profiles(&no_reason, total_profiles)
+                )?;
+            }
+        }
     }
     Ok(())
 }
 
-fn format_or_none(ids: &[String]) -> String {
+/// Lists with fewer profiles than this are rendered verbose
+/// (`a, b, c`) even when they cover the whole target set. The
+/// collapsed form `(all N profiles)` only pays off when the
+/// verbose form would dominate the line; below this threshold
+/// the operator wants to see the names directly, and existing
+/// snapshot tests rely on the verbose form for small fixtures.
+const COLLAPSE_THRESHOLD: usize = 4;
+
+/// Render a profile-id list either as `(none)`, `(all N profiles)`
+/// when it covers the whole (sufficiently large) target set, or the
+/// comma-joined IDs.
+fn format_profile_list(ids: &[String], total_profiles: usize) -> String {
     if ids.is_empty() {
-        "(none)".to_string()
-    } else {
-        ids.join(", ")
+        return "(none)".to_string();
     }
+    if total_profiles >= COLLAPSE_THRESHOLD && ids.len() == total_profiles {
+        return format!("(all {total_profiles} profiles)");
+    }
+    ids.join(", ")
+}
+
+/// Render a borrowed profile-id slice the same way [`format_profile_list`]
+/// does for owned-`String` slices. Used inside the grouped
+/// indeterminate renderer where the source is `Vec<&str>`.
+fn summarise_profiles(profiles: &[&str], total_profiles: usize) -> String {
+    if total_profiles >= COLLAPSE_THRESHOLD && profiles.len() == total_profiles {
+        return format!("(all {total_profiles} profiles)");
+    }
+    profiles.join(", ")
 }
 
 fn render_json(
@@ -253,6 +311,7 @@ fn render_json(
                                 inactive_on: &b.inactive_on,
                                 indeterminate_on: &b.indeterminate_on,
                                 indeterminate_reasons: &b.indeterminate_reasons,
+                                indeterminate_groups: build_indeterminate_groups(b),
                             })
                             .collect(),
                     })
@@ -307,4 +366,36 @@ struct CoverageJsonBranch<'a> {
     /// previous `BTreeMap<String, String>` representation. Empty
     /// (`{}`) when no profile produced an indeterminate verdict.
     indeterminate_reasons: &'a std::collections::BTreeMap<String, EvalError>,
+    /// Derived view of `indeterminate_reasons` pivoted to
+    /// `[{reason, profiles}]`. Lets tooling skip the
+    /// re-grouping step the human renderer also does, and keeps
+    /// the per-reason profile-set explicit when many profiles
+    /// share one reason. Omitted when no profile is indeterminate.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    indeterminate_groups: Vec<IndeterminateGroup>,
+}
+
+#[derive(Debug, Serialize)]
+struct IndeterminateGroup {
+    reason: String,
+    profiles: Vec<String>,
+}
+
+fn build_indeterminate_groups(b: &BranchCoverage) -> Vec<IndeterminateGroup> {
+    if b.indeterminate_on.is_empty() {
+        return Vec::new();
+    }
+    let mut by_reason: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for pid in &b.indeterminate_on {
+        if let Some(reason) = b.indeterminate_reasons.get(pid) {
+            by_reason
+                .entry(reason.to_string())
+                .or_default()
+                .push(pid.clone());
+        }
+    }
+    by_reason
+        .into_iter()
+        .map(|(reason, profiles)| IndeterminateGroup { reason, profiles })
+        .collect()
 }

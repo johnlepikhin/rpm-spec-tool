@@ -30,8 +30,8 @@
 use std::collections::{BTreeMap, HashSet};
 
 use rpm_spec::ast::{
-    CondBranch, CondExpr, CondKind, Conditional, ExprAst, FilesContent, MacroRef,
-    PreambleContent, Span, SpecFile, SpecItem, Text, TextSegment,
+    CondBranch, CondExpr, CondKind, Conditional, ExprAst, FilesContent, MacroRef, PreambleContent,
+    Span, SpecFile, SpecItem, Text, TextSegment,
 };
 use rpm_spec_profile::{MacroRegistry, Profile, ResolvedTargetSet};
 use serde::{Serialize, Serializer};
@@ -354,10 +354,7 @@ impl<'ast> Visit<'ast> for ConditionalCollector {
         walk_top_conditional(self, node);
     }
 
-    fn visit_preamble_conditional(
-        &mut self,
-        node: &'ast Conditional<Span, PreambleContent<Span>>,
-    ) {
+    fn visit_preamble_conditional(&mut self, node: &'ast Conditional<Span, PreambleContent<Span>>) {
         self.record(node);
         walk_preamble_conditional(self, node);
     }
@@ -387,11 +384,7 @@ fn render_condition(kind: CondKind, expr: &CondExpr<Span>) -> String {
     let body = match expr {
         CondExpr::Raw(text) => render_text(text),
         CondExpr::Parsed(boxed) => render_expr_ast(boxed),
-        CondExpr::ArchList(items) => items
-            .iter()
-            .map(render_text)
-            .collect::<Vec<_>>()
-            .join(" "),
+        CondExpr::ArchList(items) => items.iter().map(render_text).collect::<Vec<_>>().join(" "),
         _ => "?".to_string(),
     };
     format!("{head} {body}")
@@ -571,10 +564,7 @@ enum EvalValue {
 /// place. The bcond-syntax detection itself lives in
 /// [`rpm_spec::ast::parse_bcond_verbatim`] — a single source of truth
 /// shared with future consumers (LSP, formatter, lint rules).
-fn resolve_bcond(
-    verbatim: &str,
-    bcond: &crate::bcond::BcondMap,
-) -> Option<Result<i64, EvalError>> {
+fn resolve_bcond(verbatim: &str, bcond: &crate::bcond::BcondMap) -> Option<Result<i64, EvalError>> {
     use rpm_spec::ast::BcondForm;
     let (form, name) = rpm_spec::ast::parse_bcond_verbatim(verbatim)?;
     let state = match form {
@@ -610,7 +600,21 @@ fn evaluate_expr_ast(
 ) -> Result<EvalValue, EvalError> {
     match expr {
         ExprAst::Integer { value, .. } => Ok(EvalValue::Int(*value)),
-        ExprAst::String { value, .. } => Ok(EvalValue::Str(value.clone())),
+        ExprAst::String { value, .. } => {
+            // The parser stores the literal source of a `%if`-string,
+            // so `"%{edition}"` arrives here as the byte string
+            // `%{edition}` rather than its expanded value. Without
+            // running it through the same macro lexer the bare
+            // `ExprAst::Macro` path uses, a `%if "%{edition}" == "ent"`
+            // comparison would test the literal `%{edition}` against
+            // `ent` and always be false — turning every legitimate
+            // `-D edition ent` build into a spurious `[DEAD]` verdict.
+            // `expand_raw_string` is the same expander the `Raw`
+            // condition path uses, so behaviour is consistent across
+            // both `CondExpr` shapes the parser produces.
+            let expanded = expand_raw_string(value, macros, bcond)?;
+            Ok(EvalValue::Str(expanded))
+        }
         ExprAst::Macro { text, .. } => {
             // Try the bcond syntactic forms first. `%{with FOO}` /
             // `%{without FOO}` are RPM-builtin reads from the per-spec
@@ -666,9 +670,7 @@ fn evaluate_expr_ast(
                 Ok(EvalValue::Str(lit))
             }
         }
-        ExprAst::Identifier { name, .. } => {
-            Err(EvalError::IdentifierUnsupported(name.clone()))
-        }
+        ExprAst::Identifier { name, .. } => Err(EvalError::IdentifierUnsupported(name.clone())),
         ExprAst::Paren { inner, .. } => evaluate_expr_ast(inner, macros, bcond),
         ExprAst::Not { inner, .. } => {
             let v = evaluate_expr_ast(inner, macros, bcond)?;
@@ -836,7 +838,11 @@ fn macro_ref_to_source(mr: &MacroRef) -> String {
         }
         MacroKind::Lua => {
             let body = mr.args.first().map(flatten_text).unwrap_or_default();
-            let kw = if mr.name.is_empty() { "lua" } else { mr.name.as_str() };
+            let kw = if mr.name.is_empty() {
+                "lua"
+            } else {
+                mr.name.as_str()
+            };
             format!("%{{{kw}:{body}}}")
         }
         // `With` / `Without` use a SPACE separator and store the
@@ -886,8 +892,8 @@ fn expand_raw_string(
             i += 1;
             continue;
         }
-        let r = scan_macro_ref(bytes, i)
-            .ok_or(EvalError::Unsupported("malformed macro reference"))?;
+        let r =
+            scan_macro_ref(bytes, i).ok_or(EvalError::Unsupported("malformed macro reference"))?;
         // Bcond fast-path: `%{with NAME}` / `%{without NAME}` are
         // RPM built-ins resolving to 0/1 from the spec's BcondMap,
         // NOT regular profile-macro lookups. Detect from the full
@@ -908,7 +914,10 @@ fn expand_raw_string(
                     .ok_or_else(|| EvalError::UndefinedMacro(r.name.to_string()))?;
                 out.push_str(&v);
             }
-            LexKind::Braced { conditional: None, has_default: false } => {
+            LexKind::Braced {
+                conditional: None,
+                has_default: false,
+            } => {
                 let v = macros
                     .expand_to_literal(r.name, EXPAND_DEPTH)
                     .ok_or_else(|| EvalError::UndefinedMacro(r.name.to_string()))?;
@@ -943,7 +952,10 @@ fn expand_raw_string(
                 // both branches when there's no default body.
                 let _ = macros.get(r.name);
             }
-            LexKind::Braced { conditional: None, has_default: true } => {
+            LexKind::Braced {
+                conditional: None,
+                has_default: true,
+            } => {
                 return Err(EvalError::UnmodelledDefault);
             }
             LexKind::ShellExpansion => return Err(EvalError::ShellExpansion),
@@ -989,9 +1001,7 @@ fn expand_text(t: &Text, macros: &MacroRegistry) -> Result<String, EvalError> {
                     // upstream — surface unmodelled variants rather
                     // than guessing semantics.
                     _ => {
-                        return Err(EvalError::Unsupported(
-                            "unknown ConditionalMacro variant",
-                        ));
+                        return Err(EvalError::Unsupported("unknown ConditionalMacro variant"));
                     }
                 }
             }
@@ -1001,13 +1011,10 @@ fn expand_text(t: &Text, macros: &MacroRegistry) -> Result<String, EvalError> {
     Ok(out)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rpm_spec_profile::{
-        ProfileSection, ResolveOptions, TargetEntry, resolve_target_set,
-    };
+    use rpm_spec_profile::{ProfileSection, ResolveOptions, TargetEntry, resolve_target_set};
     use std::path::Path;
 
     fn resolved(profiles: &[&str]) -> ResolvedTargetSet {
@@ -1171,7 +1178,10 @@ B\n\
         let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         let total = b.active_on.len() + b.inactive_on.len() + b.indeterminate_on.len();
-        assert_eq!(total, 1, "every profile must be classified exactly once: {b:?}");
+        assert_eq!(
+            total, 1,
+            "every profile must be classified exactly once: {b:?}"
+        );
     }
 
     #[test]
@@ -1291,6 +1301,47 @@ B\n\
         );
     }
 
+    fn resolved_with_defines(profiles: &[&str], defines: &[&str]) -> ResolvedTargetSet {
+        let section = ProfileSection::default();
+        let target =
+            TargetEntry::from_profiles(profiles.iter().map(|s| (*s).to_string()).collect());
+        let defines_owned: Vec<String> = defines.iter().map(|s| (*s).to_string()).collect();
+        resolve_target_set(
+            &section,
+            "T",
+            &target,
+            Path::new("."),
+            ResolveOptions::default().with_defines(&defines_owned),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn string_literal_with_macro_ref_is_expanded_before_comparison() {
+        // Regression for the postgrespro.centos.spec false-positive:
+        // `%if "%{edition}" == "ent"` with `-D edition ent` used to
+        // mis-evaluate to DEAD because `ExprAst::String` returned the
+        // raw source `%{edition}` rather than its expanded value.
+        // Cover both the braced (%{edition}) and unbraced (%edition)
+        // forms — the parser emits the same `ExprAst::String` shape
+        // for both, so a single fix covers both at once.
+        for cond in [
+            r#"%if "%{edition}" == "ent""#,
+            r#"%if "%edition" == "ent""#,
+            r#"%if "%{edition}" == "ent" || "%{edition}" == "ent1c""#,
+        ] {
+            let set = resolved_with_defines(&["rhel-9-x86_64"], &["edition ent"]);
+            let spec = spec_with_conditional(cond);
+            let report =
+                CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
+            assert_eq!(
+                report.conditionals[0].branches[0].active_on,
+                vec!["rhel-9-x86_64"],
+                "expected `{cond}` active on rhel-9 when edition=ent"
+            );
+        }
+    }
+
     #[test]
     fn ifarch_match_is_order_independent() {
         // Regression: an unevaluable macro before the matching arch
@@ -1299,11 +1350,12 @@ B\n\
         let set = resolved(&["rhel-9-x86_64"]);
         let spec_before = spec_with_conditional("%ifarch %{undefined_arch_xyz} x86_64");
         let spec_after = spec_with_conditional("%ifarch x86_64 %{undefined_arch_xyz}");
-        let r1 = CoverageReport::compute(&spec_before, &set, &crate::bcond::BcondOverrides::default());
-        let r2 = CoverageReport::compute(&spec_after, &set, &crate::bcond::BcondOverrides::default());
+        let r1 =
+            CoverageReport::compute(&spec_before, &set, &crate::bcond::BcondOverrides::default());
+        let r2 =
+            CoverageReport::compute(&spec_after, &set, &crate::bcond::BcondOverrides::default());
         assert_eq!(
-            r1.conditionals[0].branches[0].active_on,
-            r2.conditionals[0].branches[0].active_on,
+            r1.conditionals[0].branches[0].active_on, r2.conditionals[0].branches[0].active_on,
             "ifarch evaluation must not depend on token order"
         );
         // And both should resolve to Active (x86_64 matches).
@@ -1338,7 +1390,11 @@ B\n\
         let spec = spec_with_conditional("%ifarch noarch");
         let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
-        assert_eq!(b.active_on.len(), 2, "noarch must match both profiles: {b:?}");
+        assert_eq!(
+            b.active_on.len(),
+            2,
+            "noarch must match both profiles: {b:?}"
+        );
     }
 
     #[test]
@@ -1387,8 +1443,7 @@ B\n\
         );
         let rendered = reason.to_string();
         assert!(
-            rendered.contains("not defined")
-                && rendered.contains("this_macro_is_not_defined"),
+            rendered.contains("not defined") && rendered.contains("this_macro_is_not_defined"),
             "reason should name the undefined macro: {rendered}"
         );
     }
@@ -1567,8 +1622,7 @@ B\n\
         );
         // Should land in either Inactive (if Parsed path resolves)
         // or Indeterminate (if Raw path bails with Unsupported).
-        let total =
-            b.active_on.len() + b.inactive_on.len() + b.indeterminate_on.len();
+        let total = b.active_on.len() + b.inactive_on.len() + b.indeterminate_on.len();
         assert_eq!(total, 1, "every profile classified exactly once: {b:?}");
     }
 }

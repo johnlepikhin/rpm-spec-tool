@@ -2302,10 +2302,7 @@ profiles = ["generic", "rhel-9-x86_64"]
         let dir = tempfile::tempdir().expect("tempdir");
         let spec = dir.path().join("foo.spec");
         std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
-        let (code, _, stderr) = run(
-            &["matrix", "check", spec.to_str().unwrap()],
-            None,
-        );
+        let (code, _, stderr) = run(&["matrix", "check", spec.to_str().unwrap()], None);
         assert_ne!(code, 0, "expected clap rejection; stderr={stderr}");
         assert!(
             stderr.contains("--target-set") || stderr.contains("--profiles"),
@@ -2355,7 +2352,10 @@ profiles = ["generic", "rhel-9-x86_64"]
         // matrix_signature is the 16-hex-char form documented for Phase 1.
         let sig = r125["matrix_signature"].as_str().expect("sig string");
         assert_eq!(sig.len(), 16);
-        assert!(sig.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            sig.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
     }
 
     #[test]
@@ -2364,17 +2364,14 @@ profiles = ["generic", "rhel-9-x86_64"]
         // (path "-" reads stdin). The display name in output must be
         // `<stdin>` so consumers can tell sources apart.
         let (code, stdout, stderr) = run(
-            &[
-                "matrix",
-                "check",
-                "--profiles",
-                "generic",
-                "-",
-            ],
+            &["matrix", "check", "--profiles", "generic", "-"],
             Some(PROFILE_DIFF_SPEC),
         );
         assert_eq!(code, 0, "stderr={stderr}\nstdout={stdout}");
-        assert!(stdout.contains("<stdin>"), "expected <stdin> in output, got:\n{stdout}");
+        assert!(
+            stdout.contains("<stdin>"),
+            "expected <stdin> in output, got:\n{stdout}"
+        );
     }
 
     #[test]
@@ -2593,11 +2590,8 @@ A test package.
         let spec = dir.path().join("foo.spec");
         std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
         let baseline = dir.path().join("future.json");
-        std::fs::write(
-            &baseline,
-            r#"{ "baseline_version": 99, "entries": [] }"#,
-        )
-        .expect("write baseline");
+        std::fs::write(&baseline, r#"{ "baseline_version": 99, "entries": [] }"#)
+            .expect("write baseline");
         let (rc, _, stderr) = run(
             &[
                 "matrix",
@@ -2682,11 +2676,8 @@ A test package.
         let spec = dir.path().join("foo.spec");
         std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
         let baseline = dir.path().join("empty.json");
-        std::fs::write(
-            &baseline,
-            r#"{ "baseline_version": 1, "entries": [] }"#,
-        )
-        .expect("write baseline");
+        std::fs::write(&baseline, r#"{ "baseline_version": 1, "entries": [] }"#)
+            .expect("write baseline");
         let (rc, stdout, _) = run(
             &[
                 "matrix",
@@ -2702,7 +2693,10 @@ A test package.
             ],
             None,
         );
-        assert_eq!(rc, 1, "empty baseline + --fail-on=new must gate on any deny");
+        assert_eq!(
+            rc, 1,
+            "empty baseline + --fail-on=new must gate on any deny"
+        );
         assert!(
             !stdout.contains("[baseline]"),
             "no entry should be marked as [baseline]-known; got stdout={stdout}"
@@ -2718,12 +2712,7 @@ A test package.
         let spec = dir.path().join("foo.spec");
         std::fs::write(&spec, PROFILE_DIFF_SPEC).expect("write spec");
         let (lint_code, _, _) = run(
-            &[
-                "lint",
-                "--profile",
-                "rhel-9-x86_64",
-                spec.to_str().unwrap(),
-            ],
+            &["lint", "--profile", "rhel-9-x86_64", spec.to_str().unwrap()],
             None,
         );
         let (matrix_code, _, _) = run(
@@ -2886,7 +2875,10 @@ Body.
             ],
             None,
         );
-        assert_eq!(rc_partial, 1, "--fail-on partial must catch partial-only spec");
+        assert_eq!(
+            rc_partial, 1,
+            "--fail-on partial must catch partial-only spec"
+        );
 
         // Same spec with --fail-on missing should pass: there are
         // no `missing` entries.
@@ -2936,10 +2928,7 @@ Body.
         let dir = tempfile::tempdir().expect("tempdir");
         let spec = dir.path().join("foo.spec");
         std::fs::write(&spec, PORTABILITY_SPEC).expect("write spec");
-        let (rc, _, stderr) = run(
-            &["matrix", "portability", spec.to_str().unwrap()],
-            None,
-        );
+        let (rc, _, stderr) = run(&["matrix", "portability", spec.to_str().unwrap()], None);
         assert_ne!(rc, 0, "expected clap rejection; stderr={stderr}");
         assert!(
             stderr.contains("--target-set") || stderr.contains("--profiles"),
@@ -3194,7 +3183,10 @@ B
             ],
             None,
         );
-        assert_eq!(rc, 1, "indeterminate-only spec must fail with --fail-on indeterminate");
+        assert_eq!(
+            rc, 1,
+            "indeterminate-only spec must fail with --fail-on indeterminate"
+        );
     }
 
     #[test]
@@ -3202,14 +3194,113 @@ B
         let dir = tempfile::tempdir().expect("tempdir");
         let spec = dir.path().join("foo.spec");
         std::fs::write(&spec, COVERAGE_SPEC).expect("write spec");
-        let (rc, _, stderr) = run(
-            &["matrix", "coverage", spec.to_str().unwrap()],
-            None,
-        );
+        let (rc, _, stderr) = run(&["matrix", "coverage", spec.to_str().unwrap()], None);
         assert_ne!(rc, 0);
         assert!(
             stderr.contains("--target-set") || stderr.contains("--profiles"),
             "expected clap to mention required flags; got {stderr}"
+        );
+    }
+
+    #[test]
+    fn coverage_define_expands_macros_inside_string_literals() {
+        // Regression for the centos-spec false-positive: a CLI define
+        // like `-D edition ent` reaches `Profile.macros` (visible via
+        // `matrix explain --macro edition`) but the conditional
+        // evaluator's string-literal path used to skip the macro
+        // expansion step. `%if "%{edition}" == "ent"` therefore
+        // compared the literal byte string `%{edition}` to `ent` and
+        // mis-classified the branch as DEAD on every profile. Both
+        // braced and unbraced forms exercise the same evaluator path,
+        // so cover them in one test.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(
+            &spec,
+            "Name: foo\nVersion: 1\nRelease: 1\nSummary: t\nLicense: MIT\n\
+             \n\
+             %if \"%{edition}\" == \"ent\"\n%global a 1\n%endif\n\
+             %if \"%edition\" == \"ent\"\n%global b 1\n%endif\n\
+             %if \"%{edition}\" == \"ent\" || \"%{edition}\" == \"ent1c\"\n%global c 1\n%endif\n\
+             \n\
+             %description\nB\n\
+             \n\
+             %changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+        )
+        .expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "coverage",
+                "-D",
+                "edition ent",
+                "--profiles",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        // None of the three branches may surface as DEAD now.
+        assert!(
+            !stdout.contains("[DEAD]"),
+            "expected no [DEAD] tags with edition=ent; got:\n{stdout}"
+        );
+        // All three should be ALWAYS active on the single profile.
+        let always_count = stdout.matches("[ALWAYS]").count();
+        assert_eq!(
+            always_count, 3,
+            "expected all 3 branches active; got [ALWAYS] count = {always_count} in:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn coverage_human_groups_indeterminate_by_reason() {
+        // Readability regression: the human renderer used to print
+        // the same indeterminate-reason once per profile, producing
+        // walls of duplicated text on a 23-profile target set. After
+        // the regroup change, a branch with the same reason across
+        // every profile renders as one line with a `(all N profiles)`
+        // summary. Pin both the grouping shape and the all-profiles
+        // collapse so a renderer refactor doesn't regress either.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(
+            &spec,
+            "Name: foo\nVersion: 1\nRelease: 1\nSummary: t\nLicense: MIT\n\
+             \n\
+             %if %{undefined_macro_xyz} == 10\n%global a 1\n%endif\n\
+             \n\
+             %description\nB\n\
+             \n\
+             %changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
+        )
+        .expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64,rhel-9-aarch64,altlinux-10-x86_64,altlinux-10-aarch64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        // One indeterminate line, with the reason printed exactly once.
+        let reason = "macro `undefined_macro_xyz` is not defined in the profile";
+        let occurrences = stdout.matches(reason).count();
+        assert_eq!(
+            occurrences, 1,
+            "expected reason to appear exactly once; got {occurrences} in:\n{stdout}"
+        );
+        // Four profiles in the set, all sharing the reason, must
+        // collapse to the "(all 4 profiles)" summary form. The threshold
+        // (4) is large enough to skip noise for small fixtures but kicks
+        // in cleanly for production target-sets of 20+ profiles.
+        assert!(
+            stdout.contains("(all 4 profiles)"),
+            "expected collapsed profile-count summary; got:\n{stdout}"
         );
     }
 }
@@ -3376,8 +3467,8 @@ B
             None,
         );
         assert_eq!(rc, 0);
-        let v: serde_json::Value = serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
         assert_eq!(v["query"], "line");
         assert_eq!(v["line"], 12);
         let branches = v["branches"].as_array().expect("branches");
@@ -3411,8 +3502,8 @@ B
             None,
         );
         assert_eq!(rc, 0);
-        let v: serde_json::Value = serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
         assert_eq!(v["query"], "macro");
         assert_eq!(v["name"], "_bindir");
         let entries = v["entries"].as_array().expect("entries");
@@ -3848,8 +3939,8 @@ B
             None,
         );
         assert_eq!(rc, 0);
-        let v: serde_json::Value = serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
         let br = &v["groups"][0];
         let common: Vec<&str> = br["common"]
             .as_array()
@@ -3988,15 +4079,17 @@ B
                         .as_str()
                         .expect("reason present");
                     assert!(
-                        reason.contains("bcond default expression")
-                            && reason.contains("--with"),
+                        reason.contains("bcond default expression") && reason.contains("--with"),
                         "expected actionable bcond message; got {reason:?}"
                     );
                     found_indeterminate = true;
                 }
             }
         }
-        assert!(found_indeterminate, "did not find pcre2 branch in coverage report");
+        assert!(
+            found_indeterminate,
+            "did not find pcre2 branch in coverage report"
+        );
     }
 
     #[test]
@@ -4073,8 +4166,7 @@ B
         );
         assert_eq!(rc, 0);
         assert!(
-            stderr.contains("--with and --without both specified")
-                && stderr.contains("bootstrap"),
+            stderr.contains("--with and --without both specified") && stderr.contains("bootstrap"),
             "expected conflict warning naming `bootstrap`; got stderr:\n{stderr}"
         );
     }
@@ -4281,8 +4373,8 @@ B
             None,
         );
         assert_eq!(rc, 0);
-        let v: serde_json::Value = serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
         // Envelope shape.
         assert_eq!(v["target_set"], "<ad-hoc>");
         assert_eq!(v["class_count"], 2);
@@ -4328,10 +4420,7 @@ B
         let dir = tempfile::tempdir().expect("tempdir");
         let spec = dir.path().join("foo.spec");
         std::fs::write(&spec, CLASSES_SPEC).expect("write spec");
-        let (rc, _, stderr) = run(
-            &["matrix", "classes", spec.to_str().unwrap()],
-            None,
-        );
+        let (rc, _, stderr) = run(&["matrix", "classes", spec.to_str().unwrap()], None);
         assert_ne!(rc, 0);
         assert!(
             stderr.contains("--target-set") || stderr.contains("--profiles"),
@@ -4781,7 +4870,9 @@ B
         let branch = &v["per_profile"][0]["branches"][0];
         assert_eq!(branch["status"], "indeterminate");
         assert!(
-            branch["indeterminate_reason"].as_str().is_some_and(|s| !s.is_empty()),
+            branch["indeterminate_reason"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()),
             "expected non-empty indeterminate_reason; got {branch}"
         );
     }
@@ -4816,10 +4907,7 @@ B
         let dir = tempfile::tempdir().expect("tempdir");
         let spec = dir.path().join("foo.spec");
         std::fs::write(&spec, EXPAND_SPEC).expect("write spec");
-        let (rc, _, stderr) = run(
-            &["matrix", "expand", spec.to_str().unwrap()],
-            None,
-        );
+        let (rc, _, stderr) = run(&["matrix", "expand", spec.to_str().unwrap()], None);
         assert_ne!(rc, 0);
         assert!(
             stderr.contains("--target-set") || stderr.contains("--profiles"),
@@ -4943,7 +5031,9 @@ B
             "path must end with spec filename; got {}",
             v["path"]
         );
-        let branches = v["per_profile"][0]["branches"].as_array().expect("branches");
+        let branches = v["per_profile"][0]["branches"]
+            .as_array()
+            .expect("branches");
         // First branch is %if 0%{?rhel} on line 8 of EXPAND_SPEC.
         assert_eq!(branches[0]["directive"], "%if 0%{?rhel}");
         assert_eq!(branches[0]["line"], 8);
@@ -4975,8 +5065,7 @@ BuildRequires: gcc
             None,
         );
         assert!(
-            stderr.contains("parser diagnostic")
-                || stderr.contains("recovered AST"),
+            stderr.contains("parser diagnostic") || stderr.contains("recovered AST"),
             "expected parser-diagnostic banner; got stderr={stderr:?}"
         );
     }
@@ -5149,9 +5238,24 @@ B
             serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
         let req = &v["groups"][1];
         assert_eq!(req["tag"], "Requires");
-        assert!(req["common"].as_array().expect("common is array").is_empty());
-        assert!(req["only_a"].as_array().expect("only_a is array").is_empty());
-        assert!(req["only_b"].as_array().expect("only_b is array").is_empty());
+        assert!(
+            req["common"]
+                .as_array()
+                .expect("common is array")
+                .is_empty()
+        );
+        assert!(
+            req["only_a"]
+                .as_array()
+                .expect("only_a is array")
+                .is_empty()
+        );
+        assert!(
+            req["only_b"]
+                .as_array()
+                .expect("only_b is array")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -5365,7 +5469,9 @@ B
 - init
 ";
 
-    fn write_contract_and_spec(content: &str) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    fn write_contract_and_spec(
+        content: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
         let spec = dir.path().join("foo.spec");
         let contract = dir.path().join("contract.toml");
@@ -5583,8 +5689,8 @@ must_have_buildrequires = ["gcc", "missing-pkg"]
             None,
         );
         assert_eq!(rc, 1);
-        let v: serde_json::Value = serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
         assert_eq!(v["target_set"], "<ad-hoc>");
         let files = v["files"].as_array().expect("files");
         let pp = files[0]["per_profile"].as_array().expect("per_profile");
@@ -5592,9 +5698,11 @@ must_have_buildrequires = ["gcc", "missing-pkg"]
         assert_eq!(row["profile_id"], "rhel-9-x86_64");
         assert_eq!(row["status"]["kind"], "violations");
         let violations = row["status"]["violations"].as_array().expect("violations");
-        assert!(violations.iter().any(|v| {
-            v["kind"] == "missing_required" && v["package"] == "missing-pkg"
-        }));
+        assert!(
+            violations
+                .iter()
+                .any(|v| { v["kind"] == "missing_required" && v["package"] == "missing-pkg" })
+        );
     }
 
     #[test]
@@ -5675,9 +5783,11 @@ must_have_buildrequires = ["foo-devel"]
         // Non-zero because altlinux profile's literal entry should
         // fail to match the macro-bearing dep.
         assert_eq!(rc, 1);
-        let v: serde_json::Value = serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
-        let pp = v["files"][0]["per_profile"].as_array().expect("per_profile");
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let pp = v["files"][0]["per_profile"]
+            .as_array()
+            .expect("per_profile");
         let rhel = pp
             .iter()
             .find(|r| r["profile_id"] == "rhel-9-x86_64")
@@ -5766,8 +5876,8 @@ must_have_buildrequires = ["gcc"]
             None,
         );
         assert_eq!(rc, 0);
-        let v: serde_json::Value = serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
         let row = &v["files"][0]["per_profile"][0];
         assert_eq!(row["profile_id"], "altlinux-10-x86_64");
         assert_eq!(row["status"]["kind"], "no_contract");
@@ -5814,8 +5924,7 @@ must_have_buildrequires = ["gcc"]
             None,
         );
         assert!(
-            stderr.contains("parser diagnostic")
-                || stderr.contains("recovered AST"),
+            stderr.contains("parser diagnostic") || stderr.contains("recovered AST"),
             "expected parser-diagnostic banner; got stderr={stderr:?}"
         );
     }
@@ -5908,7 +6017,10 @@ mod matrix_impact {
             .output()
             .expect("rev-parse");
         assert!(out.status.success(), "rev-parse failed");
-        String::from_utf8(out.stdout).expect("utf8 sha").trim().to_string()
+        String::from_utf8(out.stdout)
+            .expect("utf8 sha")
+            .trim()
+            .to_string()
     }
 
     /// Set up a repo with two commits of `foo.spec`. Returns
@@ -6313,7 +6425,10 @@ B
                 out.status.success(),
                 "could not locate `git` for the stub to exec"
             );
-            String::from_utf8(out.stdout).expect("utf8").trim().to_string()
+            String::from_utf8(out.stdout)
+                .expect("utf8")
+                .trim()
+                .to_string()
         };
 
         let trace = dir.path().join("git-stub-trace.log");
@@ -6349,15 +6464,17 @@ B
             ],
             None,
         );
-        assert_eq!(rc, 0, "impact must succeed via stub; stderr={stderr}\nstdout={stdout}");
+        assert_eq!(
+            rc, 0,
+            "impact must succeed via stub; stderr={stderr}\nstdout={stdout}"
+        );
         // Sanity: the run did the actual work end-to-end.
         assert!(
             stdout.contains("cmake"),
             "expected added dep to surface through the stubbed git; got {stdout}"
         );
 
-        let recorded =
-            std::fs::read_to_string(&trace).expect("stub never wrote its trace file");
+        let recorded = std::fs::read_to_string(&trace).expect("stub never wrote its trace file");
         assert!(
             recorded.contains("rev-parse"),
             "stub trace missing `rev-parse`; got:\n{recorded}"
