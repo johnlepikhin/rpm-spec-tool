@@ -550,6 +550,14 @@ fn augment_with_variants(
     }
 
     let mut conditional: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
+    // Per-profile outcome accumulators across all combos. Used to
+    // demote variant-exhausted indeterminate profiles to inactive:
+    // when every cartesian combo evaluated to Ok(false) and no
+    // combo errored, the branch is provably inactive under the
+    // declared variant matrix even though the base evaluation
+    // couldn't decide (macro was undefined in the registry).
+    let mut had_false: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut had_err: std::collections::HashSet<String> = std::collections::HashSet::new();
     let indices_total: usize = applicable.len();
     for combo_idx in 0..total {
         // Lay the cartesian product out flat — each index picks one
@@ -568,7 +576,10 @@ fn augment_with_variants(
                 // Already active under current build (skipped via the
                 // global short-circuit above) or already promoted by
                 // an earlier combo — recording the same profile twice
-                // adds no information.
+                // adds no information. Note: we don't add to
+                // had_false/had_err in this case so the demotion
+                // step below correctly leaves already-conditional
+                // profiles alone.
                 continue;
             }
             // Indeterminate profiles (typically "macro X not defined")
@@ -588,39 +599,86 @@ fn augment_with_variants(
                     ),
                 );
             }
-            if let Ok(true) = evaluate_branch(b.branch.kind, &b.branch.expr, &profile, bcond) {
-                let per_macro = conditional.entry(rt.profile_id.clone()).or_default();
-                for (mname, mvalue) in &combo {
-                    per_macro
-                        .entry((*mname).clone())
-                        .or_default()
-                        .insert((*mvalue).clone());
+            match evaluate_branch(b.branch.kind, &b.branch.expr, &profile, bcond) {
+                Ok(true) => {
+                    let per_macro = conditional.entry(rt.profile_id.clone()).or_default();
+                    for (mname, mvalue) in &combo {
+                        per_macro
+                            .entry((*mname).clone())
+                            .or_default()
+                            .insert((*mvalue).clone());
+                    }
+                }
+                Ok(false) => {
+                    had_false.insert(rt.profile_id.clone());
+                }
+                Err(_) => {
+                    had_err.insert(rt.profile_id.clone());
                 }
             }
         }
     }
 
+    // Collapse per-profile conditional records into the branch-level
+    // shape: sorted profile id list + union over which (macro, value)
+    // pairs contributed. `inactive_on` and `conditional_on` can
+    // overlap (branch inactive under current build AND reachable
+    // under a variant), so we don't remove from `inactive_on` here.
+    if !conditional.is_empty() {
+        let mut profiles: Vec<String> = conditional.keys().cloned().collect();
+        profiles.sort();
+        let mut union: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for per_macro in conditional.values() {
+            for (mname, values) in per_macro {
+                union
+                    .entry(mname.clone())
+                    .or_default()
+                    .extend(values.iter().cloned());
+            }
+        }
+        b.conditional_on = profiles;
+        b.reachable_under = union;
+    }
+
+    // Variant exhaustion → demote indeterminate to inactive. A
+    // profile that was base-indeterminate, NOT promoted to
+    // conditional, had at least one Ok(false) under some variant
+    // combo, and NEVER errored — the declared variant matrix proved
+    // the branch is inactive on that profile. Without this step the
+    // operator sees `[INDET] undefined macro: pgsql_major` on a
+    // branch like `%if %{pgsql_major} < 13` even though the
+    // declared variant set {13..18} demonstrates no value can ever
+    // satisfy `< 13`. The correct verdict is `inactive` (and,
+    // when this strip makes the branch active+indeterminate both
+    // empty, `[DEAD]`).
+    let demote: Vec<String> = b
+        .indeterminate_on
+        .iter()
+        .filter(|pid| {
+            !b.conditional_on.contains(pid)
+                && had_false.contains(pid.as_str())
+                && !had_err.contains(pid.as_str())
+        })
+        .cloned()
+        .collect();
+    if !demote.is_empty() {
+        let demote_set: std::collections::HashSet<&str> =
+            demote.iter().map(String::as_str).collect();
+        b.indeterminate_on
+            .retain(|pid| !demote_set.contains(pid.as_str()));
+        for pid in &demote {
+            b.indeterminate_reasons.remove(pid);
+            if !b.inactive_on.contains(pid) {
+                b.inactive_on.push(pid.clone());
+            }
+        }
+        b.inactive_on.sort();
+        b.inactive_on.dedup();
+    }
+
     if conditional.is_empty() {
         return;
     }
-
-    // Collapse per-profile records into the branch-level shape: the
-    // sorted profile id list, plus a union over which (macro, value)
-    // pairs ever contributed. Both `inactive_on` and `conditional_on`
-    // can list the same profile id (the branch is inactive under the
-    // current build AND reachable under a variant), so we don't
-    // remove anything from `inactive_on` here — the two fields are
-    // additive views on the same profile rather than partitions.
-    let mut profiles: Vec<String> = conditional.keys().cloned().collect();
-    profiles.sort();
-    let mut union: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for per_macro in conditional.values() {
-        for (mname, values) in per_macro {
-            union.entry(mname.clone()).or_default().extend(values.iter().cloned());
-        }
-    }
-    b.conditional_on = profiles;
-    b.reachable_under = union;
 
     // Strip indeterminate verdicts that are now subsumed by the
     // CONDITIONAL classification. Only profiles actually rescued
@@ -2014,6 +2072,91 @@ B\n\
             b.indeterminate_reasons.is_empty(),
             "indeterminate reasons must be stripped for declared-variant macros; got {:?}",
             b.indeterminate_reasons
+        );
+    }
+
+    #[test]
+    fn variant_exhaustion_demotes_indeterminate_to_inactive_or_dead() {
+        // `%if %{pgsql_major} < 13` with `pgsql_major ∈ {13,...,18}`
+        // declared: NO declared value makes the comparison true. The
+        // base evaluator says `undefined macro: pgsql_major` →
+        // indeterminate; the variant pass exhausts all 6 values and
+        // finds Ok(false) for every one. The branch is provably
+        // dead under the declared variant matrix and must be tagged
+        // [DEAD], not [INDET] (which would tell the operator
+        // "declare a variant" — they already did).
+        //
+        // This is the user-reported fix: `undefined-macro` reason
+        // was scary on a macro that's actually declared in
+        // `[macros.pgsql_major]`.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional("%if %{pgsql_major} < 13");
+        let vmap = variants(&[("pgsql_major", &["13", "14", "15", "16", "17", "18"])]);
+        let report = CoverageReport::compute_with_variants(
+            &spec,
+            &set,
+            &crate::bcond::BcondOverrides::default(),
+            &vmap,
+        );
+        let b = &report.conditionals[0].branches[0];
+        assert!(
+            b.is_dead(),
+            "branch must be DEAD: every declared variant value gives false; got active={:?} \
+             inactive={:?} indeterminate={:?} conditional={:?}",
+            b.active_on,
+            b.inactive_on,
+            b.indeterminate_on,
+            b.conditional_on
+        );
+        assert_eq!(b.inactive_on, vec!["rhel-9-x86_64"], "profile must be inactive");
+        assert!(
+            b.indeterminate_on.is_empty(),
+            "indeterminate must be empty after variant exhaustion"
+        );
+        assert!(
+            b.indeterminate_reasons.is_empty(),
+            "indeterminate_reasons must be cleared for demoted profiles"
+        );
+    }
+
+    #[test]
+    fn variant_exhaustion_does_not_demote_when_some_combo_errors() {
+        // `%if %{declared} < 13 && %{undeclared}`: variant pass
+        // tries declared values 13..18 — each gives Ok(false) for
+        // `< 13`, but the `&& %{undeclared}` half makes the overall
+        // eval error out (UndefinedMacro on `undeclared`). At least
+        // one Err blocks the demotion: profile stays indeterminate
+        // because the truth value of the branch under any variant
+        // remains unknowable (we know `< 13` is false on each combo,
+        // but the && wins false short-circuit on the left, so
+        // evaluator never reaches the right side and returns false?
+        // No — actually `&&` short-circuits, so `false && undefined`
+        // is Ok(false). So in this case had_err stays empty and
+        // demotion fires. To genuinely block demotion we need an
+        // OR: `(declared >= 13) || undeclared` where left is true
+        // hits short-circuit, but the alt path uses `pgsql > 13`
+        // and `||` requires reaching the right side. Use that form.
+        let set = resolved(&["rhel-9-x86_64"]);
+        let spec = spec_with_conditional("%if %{declared} > 13 || %{undeclared}");
+        let vmap = variants(&[("declared", &["13"])]);
+        let report = CoverageReport::compute_with_variants(
+            &spec,
+            &set,
+            &crate::bcond::BcondOverrides::default(),
+            &vmap,
+        );
+        let b = &report.conditionals[0].branches[0];
+        // `declared=13` → `13 > 13` = false → `||` reaches
+        // `%{undeclared}` → Err(UndefinedMacro). Had_err set, no
+        // demotion. Profile stays indeterminate.
+        assert!(
+            !b.is_dead(),
+            "branch must not be DEAD when at least one variant combo errors"
+        );
+        assert_eq!(
+            b.indeterminate_on,
+            vec!["rhel-9-x86_64"],
+            "profile must stay indeterminate"
         );
     }
 
