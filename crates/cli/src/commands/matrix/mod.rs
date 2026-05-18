@@ -15,6 +15,7 @@ use rpm_spec_analyzer::config::Config;
 use rpm_spec_analyzer::profile::{
     ProfileSection, ResolveOptions, ResolvedTargetSet, TargetEntry, resolve_target_set,
 };
+use rpm_spec_analyzer::{ParseOutcome, ParserSeverity};
 
 pub mod baseline;
 pub mod check;
@@ -168,6 +169,104 @@ pub(crate) fn resolve_matrix_source(
         resolve_target_set(&section, AD_HOC_TARGET_SET_ID, &target, base_dir, resolve_opts)
             .with_context(|| "failed to resolve ad-hoc target set from --profiles")
     }
+}
+
+/// Per-call-site context for [`surface_parser_diagnostics`]. Each
+/// variant carries the bit of variant text its `matrix` subcommand
+/// needs (the subject of the warning prefix) and selects the trailing
+/// clause through [`Self::trailing_clause`].
+///
+/// The per-command trailing wording is preserved exactly — operators
+/// have come to associate phrases like "the diff below" or "contract
+/// verdict below" with the originating subcommand, so we do **not**
+/// unify them.
+#[derive(Debug)]
+pub(crate) enum ParseDiagnosticContext<'a> {
+    /// `matrix impact` — one side of the rev-vs-rev compare. Renders
+    /// the subject as `{label}-side spec ({rev})` (e.g.
+    /// `from-side spec (HEAD~1)`).
+    ImpactSide { label: &'a str, rev: &'a str },
+    /// `matrix diff`.
+    Diff { display_name: &'a str },
+    /// `matrix expand`.
+    Expand { display_name: &'a str },
+    /// `matrix classes`.
+    Classes { display_name: &'a str },
+    /// `matrix verify-contract`.
+    VerifyContract { display_name: &'a str },
+    /// `matrix explain` — single-spec, no display name in the banner.
+    Explain,
+}
+
+impl ParseDiagnosticContext<'_> {
+    /// Subject of the warning sentence — the bit that goes between
+    /// `warning: ` and ` produced N parser diagnostic(s)…`.
+    fn subject(&self) -> String {
+        match self {
+            Self::ImpactSide { label, rev } => format!("{label}-side spec ({rev})"),
+            Self::Diff { display_name }
+            | Self::Expand { display_name }
+            | Self::Classes { display_name }
+            | Self::VerifyContract { display_name } => (*display_name).to_string(),
+            Self::Explain => "spec".to_string(),
+        }
+    }
+
+    /// Per-command trailing clause. Wording differs intentionally
+    /// between subcommands; keep the strings byte-for-byte identical
+    /// to the pre-extraction inline copies.
+    fn trailing_clause(&self) -> &'static str {
+        match self {
+            Self::ImpactSide { .. } => {
+                "the impact report is computed against the recovered AST and may be incomplete"
+            }
+            Self::Diff { .. } => {
+                "the diff below is computed against the recovered AST and may be incomplete"
+            }
+            Self::Expand { .. } => {
+                "the per-profile annotation below is computed against the recovered AST and may be incomplete"
+            }
+            Self::Classes { .. } => {
+                "equivalence classes below are computed against the recovered AST and may be incomplete"
+            }
+            Self::VerifyContract { .. } => {
+                "contract verdict below is computed against the recovered AST and may be unreliable"
+            }
+            Self::Explain => {
+                "the report below is computed against the recovered AST and may be incomplete"
+            }
+        }
+    }
+}
+
+/// Shared parser-diagnostic banner for every `matrix` subcommand that
+/// computes a report against a (possibly recovered) AST. Emits one
+/// `warning: …` line to stderr when `parsed` carries any parser
+/// diagnostics, naming the subject (per `context`) and the
+/// per-command trailing clause. No-op when the parse was clean.
+///
+/// The integration test suite asserts `stderr.contains("parser
+/// diagnostic") || stderr.contains("recovered AST")` — keep both
+/// phrases in the format string when changing wording.
+pub(crate) fn surface_parser_diagnostics(
+    context: ParseDiagnosticContext<'_>,
+    parsed: &ParseOutcome,
+) {
+    if parsed.parser_diagnostics.is_empty() {
+        return;
+    }
+    let total = parsed.parser_diagnostics.len();
+    let errors = parsed
+        .parser_diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ParserSeverity::Error))
+        .count();
+    let subject = context.subject();
+    let trailing = context.trailing_clause();
+    eprintln!(
+        "warning: {subject} produced {total} parser diagnostic(s) \
+         ({errors} error-level) — {trailing}"
+    );
 }
 
 #[derive(Debug, Args)]

@@ -98,21 +98,13 @@ pub(super) fn run(opts: VerifyContractOpts, config_override: Option<&Path>) -> R
         // — and worse, a "must_not_have" violation might silently
         // slip past). Mirror explain's banner so the operator sees
         // the degraded state before reading the report.
-        if !parsed.parser_diagnostics.is_empty() {
-            let total = parsed.parser_diagnostics.len();
-            let errors = parsed
-                .parser_diagnostics
-                .iter()
-                .filter(|d| {
-                    matches!(d.severity, rpm_spec_analyzer::ParserSeverity::Error)
-                })
-                .count();
-            eprintln!(
-                "warning: {} produced {total} parser diagnostic(s) ({errors} error-level) — \
-                 contract verdict below is computed against the recovered AST and may be unreliable",
-                source.display_name()
-            );
-        }
+        let display_name = source.display_name();
+        super::surface_parser_diagnostics(
+            super::ParseDiagnosticContext::VerifyContract {
+                display_name: &display_name,
+            },
+            &parsed,
+        );
         let report = ContractReport::compute(
             &parsed.spec,
             &contract,

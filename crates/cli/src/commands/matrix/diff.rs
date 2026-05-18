@@ -109,19 +109,13 @@ pub(super) fn run(opts: DiffOpts, config_override: Option<&Path>) -> Result<Exit
         .expect("io::read_sources guarantees >= 1 source");
 
     let parsed = parse(&source.contents);
-    if !parsed.parser_diagnostics.is_empty() {
-        let total = parsed.parser_diagnostics.len();
-        let errors = parsed
-            .parser_diagnostics
-            .iter()
-            .filter(|d| matches!(d.severity, rpm_spec_analyzer::ParserSeverity::Error))
-            .count();
-        eprintln!(
-            "warning: {} produced {total} parser diagnostic(s) ({errors} error-level) — \
-             the diff below is computed against the recovered AST and may be incomplete",
-            source.display_name()
-        );
-    }
+    let display_name = source.display_name();
+    super::surface_parser_diagnostics(
+        super::ParseDiagnosticContext::Diff {
+            display_name: &display_name,
+        },
+        &parsed,
+    );
 
     let coverage = CoverageReport::compute(
         &parsed.spec,

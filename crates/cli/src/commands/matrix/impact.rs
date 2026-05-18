@@ -196,8 +196,20 @@ pub(super) fn run(opts: ImpactOpts, config_override: Option<&Path>) -> Result<Ex
 
     let from_parsed = parse(&from_bytes);
     let to_parsed = parse(&to_bytes);
-    surface_parser_diagnostics("from", &opts.from, &from_parsed);
-    surface_parser_diagnostics("to", &opts.to, &to_parsed);
+    super::surface_parser_diagnostics(
+        super::ParseDiagnosticContext::ImpactSide {
+            label: "from",
+            rev: &opts.from,
+        },
+        &from_parsed,
+    );
+    super::surface_parser_diagnostics(
+        super::ParseDiagnosticContext::ImpactSide {
+            label: "to",
+            rev: &opts.to,
+        },
+        &to_parsed,
+    );
 
     let report = ImpactReport::compute(
         &from_parsed.spec,
@@ -211,27 +223,6 @@ pub(super) fn run(opts: ImpactOpts, config_override: Option<&Path>) -> Result<Ex
         OutputFormat::Json => render_json(&source, &report, &resolved, &opts.from, &opts.to)?,
     }
     Ok(ExitCode::SUCCESS)
-}
-
-fn surface_parser_diagnostics(
-    side: &str,
-    rev: &str,
-    parsed: &rpm_spec_analyzer::ParseOutcome,
-) {
-    if parsed.parser_diagnostics.is_empty() {
-        return;
-    }
-    let total = parsed.parser_diagnostics.len();
-    let errors = parsed
-        .parser_diagnostics
-        .iter()
-        .filter(|d| matches!(d.severity, rpm_spec_analyzer::ParserSeverity::Error))
-        .count();
-    eprintln!(
-        "warning: {side}-side spec ({rev}) produced {total} parser \
-         diagnostic(s) ({errors} error-level) — the impact report is \
-         computed against the recovered AST and may be incomplete"
-    );
 }
 
 // ---------------------------------------------------------------------------

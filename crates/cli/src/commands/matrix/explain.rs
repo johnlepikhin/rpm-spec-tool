@@ -182,20 +182,7 @@ fn explain_line(
     // and has no clue the spec failed to parse. We don't abort:
     // explain is itself a diagnostic tool, and a partial AST often
     // still answers the question.
-    if !parsed.parser_diagnostics.is_empty() {
-        let total = parsed.parser_diagnostics.len();
-        let errors = parsed
-            .parser_diagnostics
-            .iter()
-            .filter(|d| {
-                matches!(d.severity, rpm_spec_analyzer::ParserSeverity::Error)
-            })
-            .count();
-        eprintln!(
-            "warning: spec produced {total} parser diagnostic(s) ({errors} error-level) — \
-             the report below is computed against the recovered AST and may be incomplete"
-        );
-    }
+    super::surface_parser_diagnostics(super::ParseDiagnosticContext::Explain, &parsed);
     let coverage = CoverageReport::compute(&parsed.spec, target_set, bcond_overrides);
     // A branch "covers" the requested line if the line falls inside
     // the conditional's span. We don't try to identify the exact

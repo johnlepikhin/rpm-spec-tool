@@ -95,21 +95,13 @@ pub(super) fn run(opts: ExpandOpts, config_override: Option<&Path>) -> Result<Ex
     // computed against the recovered AST, so a partial parse can
     // make a branch invisible (no tag) which would otherwise look
     // like a renderer bug.
-    if !parsed.parser_diagnostics.is_empty() {
-        let total = parsed.parser_diagnostics.len();
-        let errors = parsed
-            .parser_diagnostics
-            .iter()
-            .filter(|d| {
-                matches!(d.severity, rpm_spec_analyzer::ParserSeverity::Error)
-            })
-            .count();
-        eprintln!(
-            "warning: {} produced {total} parser diagnostic(s) ({errors} error-level) — \
-             the per-profile annotation below is computed against the recovered AST and may be incomplete",
-            source.display_name()
-        );
-    }
+    let display_name = source.display_name();
+    super::surface_parser_diagnostics(
+        super::ParseDiagnosticContext::Expand {
+            display_name: &display_name,
+        },
+        &parsed,
+    );
     let coverage = CoverageReport::compute(
         &parsed.spec,
         &resolved,

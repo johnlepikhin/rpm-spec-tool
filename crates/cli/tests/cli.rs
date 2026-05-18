@@ -6169,4 +6169,202 @@ B
             "expected single-spec error; got {stderr}"
         );
     }
+
+    #[test]
+    fn impact_file_missing_at_to_rev_treats_as_empty() {
+        // Mirror of `impact_file_missing_at_from_rev_treats_as_empty`:
+        // the spec exists at `from` but has been deleted at `to`
+        // (a PR that removes a package). The CLI must treat the
+        // missing `to` side as empty so deps surface as `removed`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_init(dir.path());
+        // Seed an unrelated file so a "remove-only" commit still has
+        // tree content to diff against.
+        std::fs::write(dir.path().join("README"), "placeholder").expect("write readme");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BASE_SPEC).expect("write spec");
+        git_commit_all(dir.path(), "add foo.spec");
+        let from_sha = head_sha(dir.path());
+        // `git rm` then commit — spec is absent at HEAD.
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["rm", "--quiet", "foo.spec"])
+            .status()
+            .expect("git rm");
+        assert!(status.success(), "git rm failed");
+        git_commit_all(dir.path(), "drop foo.spec");
+        let to_sha = head_sha(dir.path());
+        // The CLI canonicalises the spec path to locate the repo
+        // root, so the file must exist on disk even though it's
+        // absent from HEAD. Re-create an untracked copy — git show
+        // reads from the rev, not the worktree.
+        std::fs::write(&spec, BASE_SPEC).expect("rewrite untracked spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                &from_sha,
+                "--to",
+                &to_sha,
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        assert!(
+            stdout.contains("removed"),
+            "expected `removed` marker for deps gone at `to` side; got {stdout}"
+        );
+        assert!(
+            stdout.contains("gcc") && stdout.contains("make"),
+            "expected gcc/make in removed deps; got {stdout}"
+        );
+        assert!(
+            !stdout.contains("added ("),
+            "expected no `added (N)` lines (deps only disappear); got {stdout}"
+        );
+    }
+
+    #[test]
+    fn impact_surfaces_parser_diagnostics_for_broken_spec() {
+        // Mismatched %if/%endif at `from` rev, fixed at `to`. The CLI
+        // must surface the from-side parser diagnostic on stderr but
+        // still produce a useful (recovered-AST) impact report.
+        //
+        // Robust to wording changes: match on stable substrings
+        // (`parser diagnostic` + the side label `from`) rather than
+        // pinning the full sentence.
+        const BROKEN: &str = "\
+Name:           foo
+Version:        1.0
+Release:        1
+Summary:        Test
+License:        MIT
+
+%if 0%{?rhel}
+BuildRequires:  gcc
+
+%description
+B
+
+%files
+
+%changelog
+* Mon May 18 2026 t <t@e.invalid> - 1.0-1
+- init
+";
+        let (_dir, spec, from, to) = two_commit_repo(BROKEN, BASE_SPEC);
+        let (rc, _stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                &from,
+                "--to",
+                &to,
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        // rc=0: the CLI surfaces diagnostics as warnings, not hard
+        // failures (matches sibling matrix commands).
+        assert_eq!(rc, 0, "stderr={stderr}");
+        assert!(
+            stderr.contains("parser diagnostic"),
+            "expected `parser diagnostic` substring in stderr; got {stderr:?}"
+        );
+        assert!(
+            stderr.contains("from"),
+            "expected `from`-side label in stderr; got {stderr:?}"
+        );
+    }
+
+    #[test]
+    fn impact_honours_git_cmd_override() {
+        // The `--git-cmd` flag must reach every git invocation
+        // (rev-parse, rev-parse --verify, show). We point it at a
+        // tiny shell stub that records its argv to a sentinel file
+        // then exec's the real `git`, so the impact run still
+        // succeeds end-to-end and we can grep the recording to
+        // confirm the stub was actually used.
+        use std::os::unix::fs::PermissionsExt;
+
+        let to_spec = BASE_SPEC.replace(
+            "BuildRequires:  make\n",
+            "BuildRequires:  make\nBuildRequires:  cmake\n",
+        );
+        let (dir, spec, from, to) = two_commit_repo(BASE_SPEC, &to_spec);
+
+        // Resolve the real git up-front so the stub can exec it
+        // without relying on $PATH inside the child (the CLI scrubs
+        // very little, but being explicit makes the test robust).
+        let real_git = {
+            let out = Command::new("sh")
+                .args(["-c", "command -v git"])
+                .output()
+                .expect("locate git");
+            assert!(
+                out.status.success(),
+                "could not locate `git` for the stub to exec"
+            );
+            String::from_utf8(out.stdout).expect("utf8").trim().to_string()
+        };
+
+        let trace = dir.path().join("git-stub-trace.log");
+        let stub = dir.path().join("git-stub.sh");
+        let script = format!(
+            "#!/bin/sh\n\
+             # Record argv (one arg per line) so the test can verify\n\
+             # which git subcommands the CLI invoked.\n\
+             for a in \"$@\"; do printf '%s\\n' \"$a\" >> \"{trace}\"; done\n\
+             printf -- '---\\n' >> \"{trace}\"\n\
+             exec \"{git}\" \"$@\"\n",
+            trace = trace.display(),
+            git = real_git,
+        );
+        std::fs::write(&stub, script).expect("write stub");
+        let mut perms = std::fs::metadata(&stub).expect("stat stub").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&stub, perms).expect("chmod stub");
+
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                &from,
+                "--to",
+                &to,
+                "--git-cmd",
+                stub.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "impact must succeed via stub; stderr={stderr}\nstdout={stdout}");
+        // Sanity: the run did the actual work end-to-end.
+        assert!(
+            stdout.contains("cmake"),
+            "expected added dep to surface through the stubbed git; got {stdout}"
+        );
+
+        let recorded =
+            std::fs::read_to_string(&trace).expect("stub never wrote its trace file");
+        assert!(
+            recorded.contains("rev-parse"),
+            "stub trace missing `rev-parse`; got:\n{recorded}"
+        );
+        assert!(
+            recorded.contains("show"),
+            "stub trace missing `show`; got:\n{recorded}"
+        );
+    }
 }
