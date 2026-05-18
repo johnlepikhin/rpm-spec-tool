@@ -76,6 +76,9 @@ pub struct ExplainOpts {
 
     #[command(flatten)]
     pub defines: crate::app::MacroDefinesArg,
+
+    #[command(flatten)]
+    pub bcond: crate::app::BcondOverridesArg,
 }
 
 pub(super) fn run(opts: ExplainOpts, config_override: Option<&Path>) -> Result<ExitCode> {
@@ -108,9 +111,10 @@ pub(super) fn run(opts: ExplainOpts, config_override: Option<&Path>) -> Result<E
         .next()
         .expect("io::read_sources guarantees >= 1 source");
 
+    let bcond_overrides = opts.bcond.to_overrides();
     match (opts.line, opts.macro_name.as_deref()) {
         (Some(line), None) => {
-            let report = explain_line(&source, line, &resolved);
+            let report = explain_line(&source, line, &resolved, &bcond_overrides);
             emit(opts.format, &source, &resolved, ExplainPayload::Line(report))
         }
         (None, Some(name)) => {
@@ -164,7 +168,12 @@ struct MatchedBranch {
     indeterminate_reasons: std::collections::BTreeMap<String, EvalError>,
 }
 
-fn explain_line(source: &io::Source, line: u32, target_set: &ResolvedTargetSet) -> LineReport {
+fn explain_line(
+    source: &io::Source,
+    line: u32,
+    target_set: &ResolvedTargetSet,
+    bcond_overrides: &rpm_spec_analyzer::BcondOverrides,
+) -> LineReport {
     let parsed = parse(&source.contents);
     // Surface parser-level issues up-front. Without this banner an
     // empty `matched` list is indistinguishable from "spec is broken
@@ -187,7 +196,7 @@ fn explain_line(source: &io::Source, line: u32, target_set: &ResolvedTargetSet) 
              the report below is computed against the recovered AST and may be incomplete"
         );
     }
-    let coverage = CoverageReport::compute(&parsed.spec, target_set);
+    let coverage = CoverageReport::compute(&parsed.spec, target_set, bcond_overrides);
     // A branch "covers" the requested line if the line falls inside
     // the conditional's span. We don't try to identify the exact
     // branch body — for nested chains the user reads the report and

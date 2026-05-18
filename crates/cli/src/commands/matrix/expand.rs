@@ -59,6 +59,9 @@ pub struct ExpandOpts {
 
     #[command(flatten)]
     pub defines: crate::app::MacroDefinesArg,
+
+    #[command(flatten)]
+    pub bcond: crate::app::BcondOverridesArg,
 }
 
 pub(super) fn run(opts: ExpandOpts, config_override: Option<&Path>) -> Result<ExitCode> {
@@ -107,7 +110,11 @@ pub(super) fn run(opts: ExpandOpts, config_override: Option<&Path>) -> Result<Ex
             source.display_name()
         );
     }
-    let coverage = CoverageReport::compute(&parsed.spec, &resolved);
+    let coverage = CoverageReport::compute(
+        &parsed.spec,
+        &resolved,
+        &opts.bcond.to_overrides(),
+    );
 
     match opts.format {
         OutputFormat::Human => render_human(&source, &coverage, &resolved)?,

@@ -17,6 +17,7 @@
 )]
 
 pub mod baseline;
+pub mod bcond;
 pub mod branch_aware;
 pub mod branch_coverage;
 pub mod config;
@@ -38,6 +39,7 @@ pub(crate) mod shell;
 pub mod visit;
 
 pub use baseline::{Baseline, BaselineEntry, BaselineError};
+pub use bcond::{BcondEntry, BcondMap, BcondOverrides};
 pub use branch_aware::{IndeterminatePolicy, ProfileBranchSelection, SelectedBody};
 pub use dep_walk::{for_each_dep_atom, render_text_with_macros};
 pub use branch_coverage::{

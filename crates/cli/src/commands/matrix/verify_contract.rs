@@ -61,6 +61,9 @@ pub struct VerifyContractOpts {
 
     #[command(flatten)]
     pub defines: crate::app::MacroDefinesArg,
+
+    #[command(flatten)]
+    pub bcond: crate::app::BcondOverridesArg,
 }
 
 pub(super) fn run(opts: VerifyContractOpts, config_override: Option<&Path>) -> Result<ExitCode> {
@@ -110,7 +113,12 @@ pub(super) fn run(opts: VerifyContractOpts, config_override: Option<&Path>) -> R
                 source.display_name()
             );
         }
-        let report = ContractReport::compute(&parsed.spec, &contract, &resolved);
+        let report = ContractReport::compute(
+            &parsed.spec,
+            &contract,
+            &resolved,
+            &opts.bcond.to_overrides(),
+        );
         if report.has_violations() {
             any_violations = true;
         }

@@ -99,6 +99,56 @@ impl MacroDefinesArg {
     }
 }
 
+/// CLI flatten for `--with FEATURE` / `--without FEATURE` flags.
+///
+/// Mirrors `rpmbuild --with` / `--without`: the spec declares bconds
+/// via `%bcond_with` / `%bcond_without`, and these flags flip the
+/// declared default for evaluator purposes. Both arguments are
+/// repeatable so a single invocation can flip multiple bconds.
+///
+/// The values are bare feature names (no whitespace), matching what
+/// `%{with NAME}` / `%{without NAME}` would resolve at build time.
+#[derive(Debug, Args, Default, Clone)]
+pub struct BcondOverridesArg {
+    /// Enable a build-time feature gated by `%bcond_with NAME` /
+    /// `%bcond_without NAME`. Equivalent to `rpmbuild --with NAME`.
+    /// Repeatable.
+    #[arg(long = "with", value_name = "FEATURE")]
+    pub with: Vec<String>,
+    /// Disable a build-time feature. Equivalent to `rpmbuild --without
+    /// NAME`. Repeatable. If both `--with FOO` and `--without FOO`
+    /// are passed, `--with` wins (matches the resolver's documented
+    /// rule in `BcondMap::from_spec`).
+    #[arg(long = "without", value_name = "FEATURE")]
+    pub without: Vec<String>,
+}
+
+impl BcondOverridesArg {
+    /// Convert into [`rpm_spec_analyzer::BcondOverrides`] for the
+    /// analyzer pipeline. Trim-and-skip-empty rules live there.
+    ///
+    /// Conflicting overrides (`--with FOO --without FOO`) surface as
+    /// a one-time stderr warning so the operator sees that
+    /// `--without` is silently a no-op under the resolver's
+    /// "with-wins" rule. This keeps the contract visible without
+    /// promoting the conflict to a hard error (RPM itself accepts
+    /// both and picks one, so we match that behaviour).
+    #[must_use]
+    pub fn to_overrides(&self) -> rpm_spec_analyzer::BcondOverrides {
+        let ovr = rpm_spec_analyzer::BcondOverrides::from_cli(&self.with, &self.without);
+        let conflicts = ovr.conflicts();
+        if !conflicts.is_empty() {
+            let names: Vec<&str> = conflicts.iter().copied().collect();
+            eprintln!(
+                "warning: --with and --without both specified for: {} \
+                 (--with takes precedence)",
+                names.join(", ")
+            );
+        }
+        ovr
+    }
+}
+
 impl Application {
     pub fn run(self) -> anyhow::Result<ExitCode> {
         let color = self.color;

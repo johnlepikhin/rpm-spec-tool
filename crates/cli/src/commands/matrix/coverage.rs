@@ -51,6 +51,9 @@ pub struct CoverageOpts {
 
     #[command(flatten)]
     pub defines: crate::app::MacroDefinesArg,
+
+    #[command(flatten)]
+    pub bcond: crate::app::BcondOverridesArg,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
@@ -85,7 +88,11 @@ pub(super) fn run(opts: CoverageOpts, config_override: Option<&Path>) -> Result<
 
     for source in sources {
         let parsed = parse(&source.contents);
-        let report = CoverageReport::compute(&parsed.spec, &resolved);
+        let report = CoverageReport::compute(
+            &parsed.spec,
+            &resolved,
+            &opts.bcond.to_overrides(),
+        );
         if report.dead_branches() > 0 {
             any_dead = true;
         }

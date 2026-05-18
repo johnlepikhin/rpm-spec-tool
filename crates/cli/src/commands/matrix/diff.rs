@@ -58,6 +58,9 @@ pub struct DiffOpts {
 
     #[command(flatten)]
     pub defines: crate::app::MacroDefinesArg,
+
+    #[command(flatten)]
+    pub bcond: crate::app::BcondOverridesArg,
 }
 
 pub(super) fn run(opts: DiffOpts, config_override: Option<&Path>) -> Result<ExitCode> {
@@ -120,7 +123,11 @@ pub(super) fn run(opts: DiffOpts, config_override: Option<&Path>) -> Result<Exit
         );
     }
 
-    let coverage = CoverageReport::compute(&parsed.spec, &resolved);
+    let coverage = CoverageReport::compute(
+        &parsed.spec,
+        &resolved,
+        &opts.bcond.to_overrides(),
+    );
     let report = DiffReport::compute(&parsed.spec, &coverage, &resolved);
 
     match opts.format {

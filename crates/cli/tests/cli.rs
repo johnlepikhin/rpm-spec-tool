@@ -3685,6 +3685,452 @@ BuildRequires: rhel-only
 }
 
 // ---------------------------------------------------------------------------
+// matrix bcond (--with / --without flags)
+// ---------------------------------------------------------------------------
+
+mod matrix_bcond {
+    use super::*;
+
+    /// Spec gating BR on `%{with bootstrap}` (default off) and
+    /// `%{without docs}` (default on). End-to-end tests verify the
+    /// CLI flags flip these states correctly and the resulting
+    /// branch activity matches expectation.
+    const BCOND_SPEC: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+%bcond_with bootstrap
+%bcond_without docs
+
+%if %{with bootstrap}
+BuildRequires: bootstrap-pkg
+%endif
+
+%if %{with docs}
+BuildRequires: doc-pkg
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+
+    #[test]
+    fn coverage_bcond_with_defaults_to_inactive() {
+        // `%bcond_with bootstrap` — default off. Without `--with`,
+        // `%{with bootstrap}` resolves to 0, so the branch is
+        // Inactive on every profile (NOT Indeterminate as it was
+        // before Phase 10).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BCOND_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        // The %if %{with bootstrap} line should be Inactive on rhel.
+        // Find the "%if %{with bootstrap}" entry and confirm it
+        // resolves to Inactive (not Indeterminate).
+        assert!(
+            stdout.contains("%if %{with bootstrap}"),
+            "expected the bcond %if line; got:\n{stdout}"
+        );
+        // Pre-Phase-10 this would show "indeterminate: rhel-9-x86_64".
+        // Now it must show "inactive: rhel-9-x86_64" instead.
+        let bootstrap_idx = stdout
+            .find("%if %{with bootstrap}")
+            .expect("bootstrap line");
+        // Look at the next ~150 chars after the directive — that's
+        // the activity block.
+        let tail = &stdout[bootstrap_idx..(bootstrap_idx + 200).min(stdout.len())];
+        assert!(
+            tail.contains("inactive: rhel-9-x86_64"),
+            "%bcond_with default-off must resolve to Inactive; got tail:\n{tail}"
+        );
+    }
+
+    #[test]
+    fn coverage_with_flag_flips_bcond_to_active() {
+        // `--with bootstrap` flips the default-off bcond to
+        // active → `%{with bootstrap}` resolves to 1 → branch
+        // becomes Active on every profile.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BCOND_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--with",
+                "bootstrap",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let bootstrap_idx = stdout
+            .find("%if %{with bootstrap}")
+            .expect("bootstrap line");
+        let tail = &stdout[bootstrap_idx..(bootstrap_idx + 200).min(stdout.len())];
+        assert!(
+            tail.contains("active: rhel-9-x86_64"),
+            "--with FOO must flip the bcond to Active; got tail:\n{tail}"
+        );
+    }
+
+    #[test]
+    fn coverage_without_flag_flips_bcond_without_to_inactive() {
+        // `%bcond_without docs` — default ON. `--without docs` flips
+        // it OFF.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BCOND_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--without",
+                "docs",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        // `%if %{with docs}` in the spec should now resolve to
+        // Inactive (since --without docs turns off the bcond).
+        let docs_idx = stdout.find("%if %{with docs}").expect("docs line");
+        let tail = &stdout[docs_idx..(docs_idx + 200).min(stdout.len())];
+        assert!(
+            tail.contains("inactive: rhel-9-x86_64"),
+            "--without DOCS must flip the default-ON bcond Inactive; got tail:\n{tail}"
+        );
+    }
+
+    #[test]
+    fn diff_bcond_affects_only_a_only_b() {
+        // Two profiles A and B; --with bootstrap (which would make
+        // the bcond Active on BOTH) ⇒ bootstrap-pkg appears in
+        // `common` for both. Without the flag it appears nowhere.
+        // This locks the CLI integration end-to-end.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BCOND_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                "--with",
+                "bootstrap",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        let br = &v["groups"][0];
+        let common: Vec<&str> = br["common"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap())
+            .collect();
+        assert!(
+            common.contains(&"bootstrap-pkg"),
+            "--with bootstrap must surface bootstrap-pkg in common; got common={common:?}"
+        );
+    }
+
+    #[test]
+    fn explain_line_inside_bcond_branch_reports_inactive_without_with_flag() {
+        // `%if %{with bootstrap}` defaults off (`%bcond_with`).
+        // `matrix explain --line N` where N is inside the body
+        // must show the enclosing branch as Inactive on every
+        // profile — confirming the bcond pipeline reaches the
+        // explain command, not just coverage.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BCOND_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "explain",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--line",
+                "10",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        assert!(
+            stdout.contains("%if %{with bootstrap}"),
+            "expected the bootstrap-gated branch in output; got:\n{stdout}"
+        );
+        // The branch must NOT be indeterminate (which is what
+        // pre-Phase-10 would have shown). It must be inactive on
+        // rhel-9-x86_64.
+        assert!(
+            stdout.contains("inactive:"),
+            "branch must resolve to inactive without --with; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn expand_bcond_branch_tagged_inactive_by_default() {
+        // `matrix expand` must mark the bootstrap-gated %if as
+        // [INACTIVE] when no --with flag is supplied (default off
+        // per %bcond_with).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BCOND_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        assert!(
+            stdout.contains("%if %{with bootstrap}  [INACTIVE]"),
+            "bootstrap %if must be [INACTIVE] by default; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn coverage_marks_bcond_expr_default_as_indeterminate() {
+        // `%bcond pcre2 %[...]` (rpm ≥ 4.17.1) — non-literal default
+        // cannot be statically evaluated. Without `--with pcre2`,
+        // `%if %{with pcre2}` MUST surface as Indeterminate (not
+        // silently false). Coverage output exposes the actionable
+        // error message from the evaluator.
+        const SPEC: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+%bcond pcre2 %[0%{?fedora} > 35]
+
+%if %{with pcre2}
+BuildRequires: pcre2-devel
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("bad JSON: {e}\n{stdout}"));
+        // Walk the conditional/branch tree to find the %{with pcre2}
+        // branch and confirm it is Indeterminate on rhel-9-x86_64.
+        let files = v["files"].as_array().expect("files");
+        let conditionals = files[0]["conditionals"].as_array().expect("conditionals");
+        let mut found_indeterminate = false;
+        for c in conditionals {
+            for b in c["branches"].as_array().unwrap() {
+                let display = b["display"].as_str().unwrap_or("");
+                if display.contains("%{with pcre2}") {
+                    let inds = b["indeterminate_on"].as_array().unwrap();
+                    assert!(
+                        inds.iter().any(|p| p == "rhel-9-x86_64"),
+                        "pcre2 branch must be indeterminate on rhel-9; got {inds:?}"
+                    );
+                    let reason = b["indeterminate_reasons"]["rhel-9-x86_64"]
+                        .as_str()
+                        .expect("reason present");
+                    assert!(
+                        reason.contains("bcond default expression")
+                            && reason.contains("--with"),
+                        "expected actionable bcond message; got {reason:?}"
+                    );
+                    found_indeterminate = true;
+                }
+            }
+        }
+        assert!(found_indeterminate, "did not find pcre2 branch in coverage report");
+    }
+
+    #[test]
+    fn coverage_bcond_expr_default_with_flag_resolves_to_active() {
+        // Same spec as above, but `--with pcre2` provides a concrete
+        // state — branch must become Active, NOT Indeterminate.
+        const SPEC: &str = "\
+Name: foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+%bcond pcre2 %[0%{?fedora} > 35]
+
+%if %{with pcre2}
+BuildRequires: pcre2-devel
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--with",
+                "pcre2",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        // Find the line and ensure it's active.
+        let idx = stdout.find("%{with pcre2}").expect("branch present");
+        let tail = &stdout[idx..(idx + 200).min(stdout.len())];
+        assert!(
+            tail.contains("active: rhel-9-x86_64"),
+            "--with pcre2 must collapse Unevaluated → Active; got tail:\n{tail}"
+        );
+    }
+
+    #[test]
+    fn conflicting_with_without_emits_stderr_warning() {
+        // --with FOO --without FOO is a usage error in spirit but
+        // RPM accepts and picks one. We warn loudly on stderr so the
+        // operator sees the silent precedence rule (--with wins).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BCOND_SPEC).expect("write spec");
+        let (rc, _, stderr) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--with",
+                "bootstrap",
+                "--without",
+                "bootstrap",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        assert!(
+            stderr.contains("--with and --without both specified")
+                && stderr.contains("bootstrap"),
+            "expected conflict warning naming `bootstrap`; got stderr:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn verify_contract_honours_with_flag() {
+        // Contract demands `bootstrap-pkg` on rhel. Without --with,
+        // bootstrap bcond is off → bootstrap-pkg not collected →
+        // contract fails. With --with bootstrap → bootstrap-pkg
+        // collected → contract passes.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BCOND_SPEC).expect("write spec");
+        let contract = dir.path().join("contract.toml");
+        std::fs::write(
+            &contract,
+            r#"
+[profiles."rhel-9-x86_64"]
+must_have_buildrequires = ["bootstrap-pkg"]
+"#,
+        )
+        .expect("write contract");
+        // Without --with: fails.
+        let (rc1, _, _) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc1, 1, "default bcond off must fail must_have");
+        // With --with bootstrap: passes.
+        let (rc2, _, _) = run(
+            &[
+                "matrix",
+                "verify-contract",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--contract",
+                contract.to_str().unwrap(),
+                "--with",
+                "bootstrap",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc2, 0, "--with bootstrap must satisfy must_have");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // matrix expand
 // ---------------------------------------------------------------------------
 

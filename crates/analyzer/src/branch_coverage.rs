@@ -217,14 +217,24 @@ pub struct CoverageEntry {
 impl CoverageReport {
     /// Compute coverage for `spec` against `target_set`. One pass to
     /// collect conditionals, then per-branch × per-profile evaluation.
-    pub fn compute(spec: &SpecFile<Span>, target_set: &ResolvedTargetSet) -> Self {
+    /// Compute the coverage report for `spec` evaluated against
+    /// every profile in `target_set`. `overrides` flips bcond states
+    /// from their `%bcond_with` / `%bcond_without` defaults — pass
+    /// [`crate::bcond::BcondOverrides::default()`] when the CLI did
+    /// not supply any `--with` / `--without` arguments.
+    pub fn compute(
+        spec: &SpecFile<Span>,
+        target_set: &ResolvedTargetSet,
+        overrides: &crate::bcond::BcondOverrides,
+    ) -> Self {
+        let bcond = crate::bcond::BcondMap::from_spec(spec, overrides);
         let mut collector = ConditionalCollector::default();
         collector.visit_spec(spec);
 
         let conditionals = collector
             .collected
             .into_iter()
-            .map(|c| evaluate_conditional(c, target_set))
+            .map(|c| evaluate_conditional(c, target_set, &bcond))
             .collect();
 
         Self { conditionals }
@@ -259,6 +269,7 @@ impl CoverageReport {
 fn evaluate_conditional(
     c: CollectedConditional,
     target_set: &ResolvedTargetSet,
+    bcond: &crate::bcond::BcondMap,
 ) -> CoverageEntry {
     let branches = c
         .branches
@@ -269,7 +280,7 @@ fn evaluate_conditional(
             let mut indeterminate = Vec::new();
             let mut reasons: BTreeMap<String, EvalError> = BTreeMap::new();
             for rt in &target_set.targets {
-                match evaluate_branch(b.kind, &b.expr, &rt.profile) {
+                match evaluate_branch(b.kind, &b.expr, &rt.profile, bcond) {
                     Ok(true) => active.push(rt.profile_id.clone()),
                     Ok(false) => inactive.push(rt.profile_id.clone()),
                     Err(e) => {
@@ -436,6 +447,7 @@ fn evaluate_branch(
     kind: CondKind,
     expr: &CondExpr<Span>,
     profile: &Profile,
+    bcond: &crate::bcond::BcondMap,
 ) -> Result<bool, EvalError> {
     let raw = matches!(kind, CondKind::If | CondKind::Elif);
     let arch_check = matches!(
@@ -521,8 +533,8 @@ fn evaluate_branch(
 
     if raw {
         let value = match expr {
-            CondExpr::Raw(text) => evaluate_raw(text, &profile.macros)?,
-            CondExpr::Parsed(boxed) => evaluate_expr_ast(boxed, &profile.macros)?,
+            CondExpr::Raw(text) => evaluate_raw(text, &profile.macros, bcond)?,
+            CondExpr::Parsed(boxed) => evaluate_expr_ast(boxed, &profile.macros, bcond)?,
             _ => return Err(EvalError::Unsupported("non-expression CondExpr in %if")),
         };
         return Ok(match value {
@@ -544,11 +556,97 @@ enum EvalValue {
     Str(String),
 }
 
-fn evaluate_expr_ast(expr: &ExprAst<Span>, macros: &MacroRegistry) -> Result<EvalValue, EvalError> {
+/// Surface form of a `%{with NAME}` / `%{without NAME}` macro
+/// reference. The parser stores these as opaque `ExprAst::Macro`
+/// verbatim text (no structural distinction from a generic
+/// parametric macro), so the evaluator does a syntactic peek.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BcondMacroForm {
+    With,
+    Without,
+}
+
+/// Resolve a `%{with NAME}` / `%{without NAME}` reference against
+/// the per-spec bcond map. The two-stage return shape carries one
+/// extra bit of information beyond `Option<i64>`:
+///
+/// * `None` — `verbatim` isn't a bcond form; caller falls through to
+///   the generic macro lookup path.
+/// * `Some(Ok(0|1))` — bcond resolved to a concrete state.
+/// * `Some(Err(_))` — bcond was declared with a non-literal default
+///   AND not overridden via CLI; surface as Indeterminate.
+///
+/// Both `evaluate_expr_ast` (`%if` expressions) and `expand_raw_string`
+/// (Raw `%if` body) call this so the resolution policy lives in one
+/// place. A future change (e.g. add the feature name to the error
+/// message) updates a single function.
+fn resolve_bcond(
+    verbatim: &str,
+    bcond: &crate::bcond::BcondMap,
+) -> Option<Result<i64, EvalError>> {
+    let (form, name) = parse_bcond_macro_form(verbatim)?;
+    let state = match form {
+        BcondMacroForm::With => bcond.with_state(name),
+        BcondMacroForm::Without => bcond.without_state(name),
+    };
+    let result = match state {
+        Some(b) => Ok(i64::from(b)),
+        None => Err(EvalError::Unsupported(
+            "bcond default expression cannot be statically evaluated; \
+             pass --with/--without to force a state",
+        )),
+    };
+    tracing::trace!(
+        target: "bcond::resolved",
+        form = ?form,
+        name = %name,
+        ok = result.is_ok(),
+        "bcond resolved"
+    );
+    Some(result)
+}
+
+/// Parse `%{with NAME}` / `%{without NAME}` out of a `MacroRef`
+/// verbatim text. Returns the kind and the trimmed feature name on
+/// match, `None` otherwise. Feature names containing whitespace
+/// (i.e. parametric calls like `%{with foo bar}` which RPM would
+/// treat as a 2-arg form) reject — the bcond model has exactly one
+/// arg per use site.
+fn parse_bcond_macro_form(verbatim: &str) -> Option<(BcondMacroForm, &str)> {
+    let inner = verbatim.strip_prefix("%{").and_then(|s| s.strip_suffix('}'))?;
+    let inner = inner.trim();
+    // Split into keyword + remainder on the first whitespace run.
+    let mut parts = inner.splitn(2, char::is_whitespace);
+    let keyword = parts.next()?;
+    let name = parts.next()?.trim();
+    if name.is_empty() || name.contains(char::is_whitespace) {
+        return None;
+    }
+    let kind = match keyword {
+        "with" => BcondMacroForm::With,
+        "without" => BcondMacroForm::Without,
+        _ => return None,
+    };
+    Some((kind, name))
+}
+
+fn evaluate_expr_ast(
+    expr: &ExprAst<Span>,
+    macros: &MacroRegistry,
+    bcond: &crate::bcond::BcondMap,
+) -> Result<EvalValue, EvalError> {
     match expr {
         ExprAst::Integer { value, .. } => Ok(EvalValue::Int(*value)),
         ExprAst::String { value, .. } => Ok(EvalValue::Str(value.clone())),
         ExprAst::Macro { text, .. } => {
+            // Try the bcond syntactic forms first. `%{with FOO}` /
+            // `%{without FOO}` are RPM-builtin reads from the per-spec
+            // bcond map, not generic registry lookups — the
+            // `resolve_bcond` helper keeps the policy in one place
+            // (also used in `expand_raw_string`).
+            if let Some(result) = resolve_bcond(text, bcond) {
+                return result.map(EvalValue::Int);
+            }
             let name = crate::macro_usage::macro_name_from_verbatim(text)
                 .ok_or(EvalError::Unsupported("macro ref text didn't parse"))?;
             let defined = macros.get(&name).is_some();
@@ -598,9 +696,9 @@ fn evaluate_expr_ast(expr: &ExprAst<Span>, macros: &MacroRegistry) -> Result<Eva
         ExprAst::Identifier { name, .. } => {
             Err(EvalError::IdentifierUnsupported(name.clone()))
         }
-        ExprAst::Paren { inner, .. } => evaluate_expr_ast(inner, macros),
+        ExprAst::Paren { inner, .. } => evaluate_expr_ast(inner, macros, bcond),
         ExprAst::Not { inner, .. } => {
-            let v = evaluate_expr_ast(inner, macros)?;
+            let v = evaluate_expr_ast(inner, macros, bcond)?;
             let n = match v {
                 EvalValue::Int(n) => i64::from(n == 0),
                 EvalValue::Str(s) => i64::from(s.is_empty()),
@@ -608,8 +706,8 @@ fn evaluate_expr_ast(expr: &ExprAst<Span>, macros: &MacroRegistry) -> Result<Eva
             Ok(EvalValue::Int(n))
         }
         ExprAst::Binary { kind, lhs, rhs, .. } => {
-            let l = evaluate_expr_ast(lhs, macros)?;
-            let r = evaluate_expr_ast(rhs, macros)?;
+            let l = evaluate_expr_ast(lhs, macros, bcond)?;
+            let r = evaluate_expr_ast(rhs, macros, bcond)?;
             apply_binop(*kind, l, r)
         }
         _ => Err(EvalError::Unsupported("unknown ExprAst variant")),
@@ -647,14 +745,18 @@ fn apply_binop(
     }
 }
 
-fn evaluate_raw(text: &Text, macros: &MacroRegistry) -> Result<EvalValue, EvalError> {
+fn evaluate_raw(
+    text: &Text,
+    macros: &MacroRegistry,
+    bcond: &crate::bcond::BcondMap,
+) -> Result<EvalValue, EvalError> {
     // The parser sometimes stores the body as a single Literal
     // ("0%{?rhel}") and sometimes splits it into Literal + Macro
     // segments — depends on whether the surrounding grammar
     // tokenised the macros. Reconstruct the original source string
     // either way, then expand once via the macro lexer.
     let raw = render_text_to_source(text)?;
-    let expanded = expand_raw_string(&raw, macros)?;
+    let expanded = expand_raw_string(&raw, macros, bcond)?;
     let trimmed = expanded.trim();
     if let Ok(n) = trimmed.parse::<i64>() {
         return Ok(EvalValue::Int(n));
@@ -725,7 +827,11 @@ fn macro_ref_to_source(mr: &MacroRef) -> String {
 /// Scan-and-substitute macro references in a raw `%if` body. Uses
 /// the profile crate's macro lexer so the rules (`%{name}` vs
 /// `%{?name}` vs `%name`, default-value form) match what rpm does.
-fn expand_raw_string(text: &str, macros: &MacroRegistry) -> Result<String, EvalError> {
+fn expand_raw_string(
+    text: &str,
+    macros: &MacroRegistry,
+    bcond: &crate::bcond::BcondMap,
+) -> Result<String, EvalError> {
     use rpm_spec_profile::macro_lexer::{Conditional, MacroKind as LexKind, scan_macro_ref};
     if !text.is_ascii() {
         return Err(EvalError::NonAscii);
@@ -741,6 +847,18 @@ fn expand_raw_string(text: &str, macros: &MacroRegistry) -> Result<String, EvalE
         }
         let r = scan_macro_ref(bytes, i)
             .ok_or(EvalError::Unsupported("malformed macro reference"))?;
+        // Bcond fast-path: `%{with NAME}` / `%{without NAME}` are
+        // RPM built-ins resolving to 0/1 from the spec's BcondMap,
+        // NOT regular profile-macro lookups. Detect from the full
+        // source range so we see the arg the macro lexer dropped.
+        // `resolve_bcond` shares the policy with the Parsed-AST path.
+        let full = &text[r.full_range.clone()];
+        if let Some(result) = resolve_bcond(full, bcond) {
+            let val = result?;
+            out.push_str(&val.to_string());
+            i = r.full_range.end;
+            continue;
+        }
         match r.kind {
             LexKind::LiteralPercent => out.push('%'),
             LexKind::Plain => {
@@ -898,7 +1016,7 @@ B\n\
     fn ifarch_matches_target_build_arch() {
         let set = resolved(&["rhel-9-x86_64", "rhel-9-aarch64"]);
         let spec = spec_with_conditional("%ifarch x86_64");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         assert_eq!(report.conditionals.len(), 1, "got {report:#?}");
         let b = &report.conditionals[0].branches[0];
         assert_eq!(b.active_on, vec!["rhel-9-x86_64"]);
@@ -910,7 +1028,7 @@ B\n\
     fn ifnarch_negates_match() {
         let set = resolved(&["rhel-9-x86_64", "rhel-9-aarch64"]);
         let spec = spec_with_conditional("%ifnarch x86_64");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         assert_eq!(b.active_on, vec!["rhel-9-aarch64"]);
         assert_eq!(b.inactive_on, vec!["rhel-9-x86_64"]);
@@ -923,7 +1041,7 @@ B\n\
         // generic profile (no showrc) does not.
         let set = resolved(&["generic", "rhel-9-x86_64"]);
         let spec = spec_with_conditional("%if 0%{?rhel}");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         assert!(
             b.active_on.contains(&"rhel-9-x86_64".to_string()),
@@ -942,7 +1060,7 @@ B\n\
         // indeterminate, not silently false.
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%if %{this_macro_is_undefined_xyz}");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         assert!(
             b.indeterminate_on.contains(&"generic".to_string()),
@@ -954,7 +1072,7 @@ B\n\
     fn dead_branch_marked() {
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%if 0");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         assert!(report.conditionals[0].branches[0].is_dead());
         assert_eq!(report.dead_branches(), 1);
     }
@@ -988,7 +1106,7 @@ B\n\
 * Mon Jan 01 2024 a <a@b> - 1-1\n\
 - init\n";
         let spec = parse(src);
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         assert_eq!(report.conditionals.len(), 1);
         // Two branches: `%if 0` (dead) and `%elif 1` (active).
         assert_eq!(report.conditionals[0].branches.len(), 2);
@@ -1009,7 +1127,7 @@ B\n\
         // populate `build_os` and the test would otherwise be brittle.
         let set = resolved(&["rhel-9-x86_64"]);
         let spec = spec_with_conditional("%ifos linux");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         let total = b.active_on.len() + b.inactive_on.len() + b.indeterminate_on.len();
         assert_eq!(total, 1, "every profile must be classified exactly once: {b:?}");
@@ -1059,7 +1177,7 @@ B\n\
 * Mon Jan 01 2024 a <a@b> - 1-1\n\
 - init\n";
         let spec = parse(src);
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         assert_eq!(report.conditionals.len(), 8, "got {report:#?}");
         for c in &report.conditionals {
             assert_eq!(
@@ -1080,7 +1198,7 @@ B\n\
         // definedness — so the condition is `"0"` → Inactive.
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%if 0%{!?surely_undefined_xyz}");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         assert_eq!(
             b.inactive_on,
@@ -1112,7 +1230,7 @@ B\n\
 * Mon Jan 01 2024 a <a@b> - 1-1\n\
 - init\n";
         let spec = parse(src);
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         assert!(report.conditionals[0].has_else);
     }
 
@@ -1124,7 +1242,7 @@ B\n\
         // After the fix, %{?rhel} expands to its value when defined.
         let set = resolved(&["rhel-9-x86_64"]);
         let spec = spec_with_conditional("%if %{?rhel} >= 9");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         assert_eq!(
             report.conditionals[0].branches[0].active_on,
             vec!["rhel-9-x86_64"],
@@ -1140,8 +1258,8 @@ B\n\
         let set = resolved(&["rhel-9-x86_64"]);
         let spec_before = spec_with_conditional("%ifarch %{undefined_arch_xyz} x86_64");
         let spec_after = spec_with_conditional("%ifarch x86_64 %{undefined_arch_xyz}");
-        let r1 = CoverageReport::compute(&spec_before, &set);
-        let r2 = CoverageReport::compute(&spec_after, &set);
+        let r1 = CoverageReport::compute(&spec_before, &set, &crate::bcond::BcondOverrides::default());
+        let r2 = CoverageReport::compute(&spec_after, &set, &crate::bcond::BcondOverrides::default());
         assert_eq!(
             r1.conditionals[0].branches[0].active_on,
             r2.conditionals[0].branches[0].active_on,
@@ -1163,7 +1281,7 @@ B\n\
         // e2k matches because the host can also build subarch e2k.
         let set = resolved(&["altlinux-10-e2k"]);
         let spec = spec_with_conditional("%ifarch e2k");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         assert_eq!(
             b.active_on,
@@ -1177,7 +1295,7 @@ B\n\
         // `noarch` is in every distro profile's compatible_archs.
         let set = resolved(&["rhel-9-x86_64", "rhel-9-aarch64"]);
         let spec = spec_with_conditional("%ifarch noarch");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         assert_eq!(b.active_on.len(), 2, "noarch must match both profiles: {b:?}");
     }
@@ -1190,7 +1308,7 @@ B\n\
         // diagnostic reason.
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%ifarch x86_64");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         assert_eq!(b.indeterminate_on, vec!["generic"]);
         let reason = b
@@ -1218,7 +1336,7 @@ B\n\
         // indeterminate_reasons.
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%if %{this_macro_is_not_defined}");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         assert_eq!(b.indeterminate_on, vec!["generic"]);
         let reason = b.indeterminate_reasons.get("generic").unwrap();
@@ -1240,7 +1358,7 @@ B\n\
         // `UnmodelledDefault` rather than guessing.
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%if 0%{!?undefined:fallback}");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         let reason = b
             .indeterminate_reasons
@@ -1264,7 +1382,7 @@ B\n\
         // check derivable from the BranchCoverage alone.
         let set = resolved(&["rhel-9-x86_64", "rhel-9-aarch64"]);
         let spec = spec_with_conditional("%if 1");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         assert!(report.conditionals[0].branches[0].is_universally_active());
     }
 
@@ -1296,7 +1414,7 @@ B\n\
 * Mon Jan 01 2024 a <a@b> - 1-1\n\
 - init\n";
         let spec = parse(src);
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         assert_eq!(report.total_branches(), 3);
         // `%if 0` is dead on every profile.
         assert_eq!(report.dead_branches(), 1);
@@ -1316,7 +1434,7 @@ B\n\
     fn evalerror_nonascii_recorded() {
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%if 0%{?\u{0442}\u{0435}\u{0441}\u{0442}}");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         let reason = b
             .indeterminate_reasons
@@ -1334,7 +1452,7 @@ B\n\
     fn evalerror_shell_expansion() {
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%if %(echo 1)");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         let reason = b
             .indeterminate_reasons
@@ -1352,7 +1470,7 @@ B\n\
     fn evalerror_arithmetic_expr() {
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%if %[1+1]");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         let reason = b
             .indeterminate_reasons
@@ -1373,7 +1491,7 @@ B\n\
     fn evalerror_unmodelled_default_if_defined() {
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%if 0%{?undefined_xyz:fallback}");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         // The macro reference might be evaluated via either the
         // Raw expand_raw_string path or the Parsed evaluate_expr_ast
@@ -1400,7 +1518,7 @@ B\n\
     fn evalerror_raw_arithmetic_not_silent_active() {
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%if 0%{?undefined_xyz} >= 9");
-        let report = CoverageReport::compute(&spec, &set);
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         assert!(
             !b.active_on.contains(&"generic".to_string()),

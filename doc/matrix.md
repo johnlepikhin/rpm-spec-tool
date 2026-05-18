@@ -839,6 +839,76 @@ conditional semantics there are too policy-laden to interpret at
 lint time. `matrix diff` uses the same walker so both commands
 report the same atom set for the same source.
 
+## Build conditions (`%bcond_with` / `%bcond_without`)
+
+Modern RPM specs gate optional features via the `%bcond_*` family:
+
+```rpm
+%bcond_with bootstrap     # default OFF — enable with `rpmbuild --with bootstrap`
+%bcond_without docs       # default ON  — disable with `rpmbuild --without docs`
+
+%if %{with bootstrap}
+BuildRequires: bootstrap-pkg
+%endif
+```
+
+Real-world survey: in `systemd.spec` 27 of 45 conditionals use this
+pattern. Before Phase 10 every `%{with X}` was treated as an
+undefined macro `with` and the evaluator returned `Indeterminate`
+for the entire chain. Phase 10 makes the analyzer bcond-aware:
+
+* The collector walks every `BuildCondition` AST node and records
+  the declared default (`%bcond_with` → off, `%bcond_without` → on).
+* CLI flags `--with FEATURE` / `--without FEATURE` (mirroring
+  `rpmbuild`) flip the declared defaults. Both are repeatable.
+* The evaluator recognises `%{with NAME}` / `%{without NAME}`
+  inside `%if` conditions and resolves them via the bcond map
+  rather than the profile's macro registry.
+
+### Scope
+
+* Available on every matrix subcommand that walks conditionals:
+  `matrix check`, `matrix coverage`, `matrix expand`, `matrix
+  explain`, `matrix diff`, `matrix verify-contract`.
+* Bcond declarations are spec-level, not profile-level. Per-profile
+  bcond overrides (e.g. `[targets.X.with]` in `.rpmspec.toml`) are
+  a future extension — additive on the on-disk schema.
+* `%bcond NAME DEFAULT` (rpm ≥ 4.17.1, the 2-arg form):
+  * Literal default `0` or `1` is honoured directly (`%bcond foo 1`
+    behaves like `%bcond_without foo`; `%bcond foo 0` like
+    `%bcond_with foo`).
+  * Any non-literal default expression (`%bcond pcre2 %[expr]`,
+    `%bcond foo %{?something}`, etc.) is reported as
+    `Indeterminate` on every `%{with NAME}` use site — the evaluator
+    surfaces `EvalError::Unsupported` with the actionable hint
+    "pass `--with`/`--without` to force a state". CLI overrides
+    collapse the indeterminate state to a concrete value.
+
+### Example
+
+```bash
+# Default behaviour: bootstrap off, docs on.
+rpm-spec-tool matrix coverage --profiles rhel-9-x86_64 product.spec
+
+# Simulate "rpmbuild --with bootstrap --without docs".
+rpm-spec-tool matrix coverage --profiles rhel-9-x86_64 \
+  --with bootstrap --without docs product.spec
+```
+
+If both `--with FOO` and `--without FOO` are passed in the same
+invocation, `--with` wins (matches what the analyzer's
+`BcondMap::from_spec` enforces and what RPM does in practice when
+parsing the CLI in declaration order).
+
+A `--with FOO` for a bcond the spec doesn't declare is honoured
+silently — operators sometimes ship a `--with` for a feature that
+comes from an included `.spec` file or a corporate macro package.
+The undeclared name is recorded in `BcondMap::unmatched_overrides()`
+for downstream diagnostics; the CLI does not yet surface it as a
+warning. Conflicting `--with FOO --without FOO` invocations DO
+produce a stderr warning naming the conflicting bconds (the
+resolver picks `--with`).
+
 ## Limitations of Phase 1
 
 * No `matrix diff` / `impact` yet — those land in a future phase

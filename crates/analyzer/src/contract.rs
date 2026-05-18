@@ -188,11 +188,14 @@ impl ContractReport {
         spec: &SpecFile<Span>,
         contract: &Contract,
         target_set: &ResolvedTargetSet,
+        bcond_overrides: &crate::bcond::BcondOverrides,
     ) -> Self {
         // CoverageReport is profile-agnostic per spec — one pass over
         // the AST per call site. Sharing it across the per-profile
-        // loop is the whole point of the report's existence.
-        let coverage = CoverageReport::compute(spec, target_set);
+        // loop is the whole point of the report's existence. The
+        // bcond overrides are forwarded so contract verdicts honour
+        // `--with FOO` / `--without FOO` on the CLI.
+        let coverage = CoverageReport::compute(spec, target_set, bcond_overrides);
 
         let per_profile = target_set
             .targets
@@ -399,7 +402,7 @@ mod tests {
         let parsed = parse(spec_src);
         let contract = Contract::from_toml_str(contract_toml).expect("parse contract");
         let ts = target_set_with(profile_ids);
-        ContractReport::compute(&parsed.spec, &contract, &ts)
+        ContractReport::compute(&parsed.spec, &contract, &ts, &crate::bcond::BcondOverrides::default())
     }
 
     const SPEC_WITH_GCC: &str = "\

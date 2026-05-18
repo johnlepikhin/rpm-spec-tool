@@ -356,7 +356,11 @@ mod tests {
     ) {
         let parsed = parse(spec_src);
         let target_set = target_set_with(&[profile_id]);
-        let cov = CoverageReport::compute(&parsed.spec, &target_set);
+        let cov = CoverageReport::compute(
+            &parsed.spec,
+            &target_set,
+            &crate::bcond::BcondOverrides::default(),
+        );
         let sel = ProfileBranchSelection::compute(&cov, profile_id, policy);
         (parsed.spec, sel)
     }
