@@ -360,23 +360,35 @@ what the rest of the tool sees.
 rpm-spec-tool matrix coverage --target-set product-2026q2 product.spec
 ```
 
-Output (human):
+Output (human, interactive TTY):
 
 ```text
 Matrix coverage: target set `product-2026q2` (5 profiles)
+  tags:  [ALWAYS] every profile activates  ·  [DEAD] no profile activates under any variant
+         [CONDITIONAL: M=V] inactive under current build but reachable under declared [macros.M]
+         [INDET] evaluator couldn't decide (see indeterminate-reason rollup below)
+         (no tag) verdicts differ across profiles — see `under current build:` block
 
 ==> product.spec
     4 branches: 0 always · 0 conditional · 1 dead · 1 indeterminate · 2 mixed
     [config] undefined-macro        (1 branches)  undefined macro: suse_version
 
   line 9: %if 0%{?rhel}
-    active:   rhel-8-x86_64, rhel-9-x86_64
-    inactive: altlinux-10-x86_64, sles-15-x86_64
+    under current build:
+      active:   rhel-8-x86_64, rhel-9-x86_64
+      inactive: altlinux-10-x86_64, sles-15-x86_64
+
   line 13: %if 0 [DEAD]
   line 17: %ifarch e2k
-    active:   altlinux-10-e2k
-    inactive: altlinux-10-x86_64, rhel-8-x86_64, rhel-9-x86_64, sles-15-x86_64
+    under current build:
+      active:   altlinux-10-e2k
+      inactive: altlinux-10-x86_64, rhel-8-x86_64, rhel-9-x86_64, sles-15-x86_64
+
 ```
+
+The first line block — `tags: …` — is the one-shot legend printed
+only when stdout is an interactive terminal. Pipes / redirects
+suppress it so `grep`/`awk` consumers parse a stable line set.
 
 A per-spec summary header reports every verdict class so operators
 don't have to scan the body to know what's there. The
@@ -396,12 +408,16 @@ Tags:
   category (`[config]`/`[tool]`).
 * `[CONDITIONAL: macro=value]` — reachable under at least one
   declared variant. See § "Macro variants" below.
+* No tag — verdicts differ across profiles (some active, some
+  inactive). The renderer expands the branch into an `under
+  current build:` block listing the per-bucket profile sets.
 
-`[DEAD]`, `[ALWAYS]`, and pure-`[INDET]` branches render as a single
-line (plus one reason line for INDET) — the tag carries the verdict,
-so the active/inactive/indeterminate skeleton is suppressed. Only
-mixed-verdict branches (some profiles active, others not) expand
-into the full breakdown.
+Branch density: `[DEAD]`, `[ALWAYS]`, and `[CONDITIONAL]` that
+covers all profiles render as a single line. `[INDET]` branches
+render as two lines (header + reason). Verbose branches — mixed
+verdicts and conditionals not fully covering the target set —
+get an `under current build:` sub-block plus a trailing blank
+line as a visual separator between adjacent verbose entries.
 
 ### Filter flags
 

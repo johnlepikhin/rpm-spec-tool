@@ -282,8 +282,14 @@ fn render_human(
     only: Option<OnlyFilter>,
     summary_only: bool,
 ) -> Result<()> {
+    use std::io::IsTerminal;
     use std::io::Write;
     let stdout = std::io::stdout();
+    // Detect TTY once: pipes / redirects skip the explanatory
+    // legend so `grep`/`awk` consumers see a stable line set, while
+    // interactive operators get the one-shot reminder of what each
+    // tag means without having to read `doc/matrix.md`.
+    let interactive = stdout.is_terminal();
     let mut out = stdout.lock();
     writeln!(
         out,
@@ -291,6 +297,24 @@ fn render_human(
         target_set.id,
         target_set.targets.len()
     )?;
+    if interactive {
+        writeln!(
+            out,
+            "  tags:  [ALWAYS] every profile activates  ·  [DEAD] no profile activates under any variant"
+        )?;
+        writeln!(
+            out,
+            "         [CONDITIONAL: M=V] inactive under current build but reachable under declared [macros.M]"
+        )?;
+        writeln!(
+            out,
+            "         [INDET] evaluator couldn't decide (see indeterminate-reason rollup below)"
+        )?;
+        writeln!(
+            out,
+            "         (no tag) verdicts differ across profiles — see `under current build:` block"
+        )?;
+    }
     writeln!(out)?;
 
     if reports.is_empty() {
@@ -408,7 +432,7 @@ fn write_branch<W: std::io::Write>(
         b.branch.span.start_line, b.branch.display
     )?;
     // Compact form for monochrome verdicts (one bucket non-empty):
-    // ALWAYS, DEAD, and pure-INDET branches don't need the
+    // ALWAYS, DEAD branches don't need the
     // active/inactive/indeterminate skeleton — the tag already says
     // it. This trims ~3 lines per branch on the dominant cases.
     if matches!(cls, BranchClass::Always | BranchClass::Dead) {
@@ -426,49 +450,96 @@ fn write_branch<W: std::io::Write>(
     }
     // Pure-indeterminate with one reason for every profile: emit a
     // single follow-up line instead of three (active/inactive/indet).
+    // No `under current build:` header here — the tag `[INDET]`
+    // + the reason line already say everything.
     if matches!(cls, BranchClass::Indeterminate)
         && b.active_on.is_empty()
         && b.inactive_on.is_empty()
         && !b.indeterminate_on.is_empty()
     {
-        write_indeterminate_reasons(out, b, total_profiles)?;
+        write_indeterminate_reasons(out, b, total_profiles, IndetIndent::Compact)?;
+        writeln!(out)?;
         return Ok(());
     }
 
     // Verbose form: at least two verdict buckets carry information
     // (e.g. `%ifarch` split between arches, or a branch active on
     // some profiles and indeterminate on others).
-    writeln!(
-        out,
-        "    active:   {}",
-        format_profile_list(&b.active_on, total_profiles)
-    )?;
-    writeln!(
-        out,
-        "    inactive: {}",
-        format_profile_list(&b.inactive_on, total_profiles)
-    )?;
+    //
+    // Operators read this block bottom-up: "what's the current build
+    // doing here, and how does that compare to what the variants
+    // could reach?". Two named sub-blocks make the question explicit
+    // instead of leaving the reader to infer that `active:` /
+    // `inactive:` mean "under current build only" and `reachable
+    // when` means "under declared variants".
+    let has_under_current_build =
+        !b.active_on.is_empty() || !b.inactive_on.is_empty() || !b.indeterminate_on.is_empty();
+    if has_under_current_build {
+        writeln!(out, "    under current build:")?;
+        if !b.active_on.is_empty() {
+            writeln!(
+                out,
+                "      active:   {}",
+                format_profile_list(&b.active_on, total_profiles)
+            )?;
+        }
+        if !b.inactive_on.is_empty() {
+            writeln!(
+                out,
+                "      inactive: {}",
+                format_profile_list(&b.inactive_on, total_profiles)
+            )?;
+        }
+        if !b.indeterminate_on.is_empty() {
+            write_indeterminate_reasons(out, b, total_profiles, IndetIndent::Nested)?;
+        }
+    }
     if !b.conditional_on.is_empty() && !conditional_covers_everyone {
+        writeln!(out, "    under variants:")?;
         writeln!(
             out,
-            "    reachable when: {}",
-            format_profile_list(&b.conditional_on, total_profiles)
+            "      reachable on: {} when {}",
+            format_profile_list(&b.conditional_on, total_profiles),
+            format_reachable_under(&b.reachable_under)
         )?;
     }
-    if !b.indeterminate_on.is_empty() {
-        write_indeterminate_reasons(out, b, total_profiles)?;
-    }
+    // Blank line separator: verbose branches form a logical block;
+    // the trailing newline gives the eye a hard break before the
+    // next branch's `line N:` header. Single-line branches (DEAD /
+    // ALWAYS / fully-covered CONDITIONAL) returned earlier and
+    // stay densely packed.
+    writeln!(out)?;
     Ok(())
+}
+
+/// Where in the renderer the indeterminate sub-block is being emitted.
+/// Drives the indent depth so `write_indeterminate_reasons` can be
+/// shared between the compact pure-INDET path (4-space indent, no
+/// header) and the verbose path (nested under `under current build:`,
+/// 6-space indent).
+#[derive(Debug, Clone, Copy)]
+enum IndetIndent {
+    Compact,
+    Nested,
 }
 
 /// Render indeterminate reasons grouped by `(category, code)` with
 /// human reason text. Used by both the verbose and the compact
-/// branch renderers — shared so the wording stays consistent.
+/// branch renderers — shared so the wording stays consistent. The
+/// `indent` parameter controls leading whitespace: `Compact` emits
+/// at the same 4-space level as the active/inactive/indeterminate
+/// sub-block in flat form, `Nested` emits one level deeper so the
+/// sub-block reads as a child of `under current build:`.
 fn write_indeterminate_reasons<W: std::io::Write>(
     out: &mut W,
     b: &BranchCoverage,
     total_profiles: usize,
+    indent: IndetIndent,
 ) -> Result<()> {
+    let (header_prefix, body_prefix) = match indent {
+        IndetIndent::Compact => ("    ", "      "),
+        IndetIndent::Nested => ("      ", "        "),
+    };
     // Group by reason Display text (already normalised at the
     // `EvalError` level — same text means same root cause) so each
     // reason gets one line with the profile list.
@@ -487,7 +558,7 @@ fn write_indeterminate_reasons<W: std::io::Write>(
         let ((cat, code, reason), profiles) = by_reason.iter().next().expect("len==1");
         writeln!(
             out,
-            "    indeterminate: {} [{tag}] {reason} → {profiles}",
+            "{header_prefix}indeterminate: {} [{tag}] {reason} → {profiles}",
             category_short(*cat),
             tag = code,
             reason = reason,
@@ -495,11 +566,11 @@ fn write_indeterminate_reasons<W: std::io::Write>(
         )?;
         return Ok(());
     }
-    writeln!(out, "    indeterminate:")?;
+    writeln!(out, "{header_prefix}indeterminate:")?;
     for ((cat, code, reason), profiles) in &by_reason {
         writeln!(
             out,
-            "      {cat} [{code}] {reason} → {profiles}",
+            "{body_prefix}{cat} [{code}] {reason} → {profiles}",
             cat = category_short(*cat),
             code = code,
             reason = reason,
@@ -509,7 +580,7 @@ fn write_indeterminate_reasons<W: std::io::Write>(
     if !no_reason.is_empty() {
         writeln!(
             out,
-            "      [tool]   [missing-reason] internal: reason not recorded — please file a bug → {}",
+            "{body_prefix}[tool]   [missing-reason] internal: reason not recorded — please file a bug → {}",
             format_profile_list(&no_reason, total_profiles)
         )?;
     }

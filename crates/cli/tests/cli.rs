@@ -3655,6 +3655,80 @@ values = ["ent", "1c"]
             "summary header should retain full counts; got:\n{stdout}"
         );
     }
+
+    #[test]
+    fn coverage_verbose_branches_get_under_current_build_header() {
+        // The renderer used to print three loose lines
+        // `active:` / `inactive:` / `indeterminate:` under a branch
+        // with mixed verdicts, leaving the reader to infer that the
+        // labels referred to "the current build's evaluation".
+        // After the rewrite the verbose-form branch wraps those
+        // three lines under an explicit `under current build:`
+        // header — and adds a trailing blank line so adjacent
+        // branches don't bleed together visually.
+        //
+        // A `%ifarch x86_64` against a multi-arch target set is the
+        // simplest reproducer: it produces a verbose-form branch
+        // (some profiles active, others inactive).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, COVERAGE_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64,rhel-9-aarch64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        // The `%ifarch x86_64` line in COVERAGE_SPEC produces a
+        // verbose branch: active on x86_64, inactive on aarch64.
+        // The renderer wraps it under `under current build:`.
+        assert!(
+            stdout.contains("under current build:"),
+            "expected `under current build:` header for verbose branch; got:\n{stdout}"
+        );
+        // Indented `active:` / `inactive:` sub-rows under the
+        // header — two extra spaces (6 total) compared to flat form
+        // (4 spaces). Match the deeper indent specifically to pin
+        // the nesting.
+        assert!(
+            stdout.contains("      active:") || stdout.contains("      inactive:"),
+            "expected nested active/inactive rows (6-space indent); got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn coverage_pipe_output_has_no_tag_legend() {
+        // Pipe / redirected stdout must NOT include the
+        // interactive `tags: ...` legend block — it would inflate
+        // grep/awk output and break consumers that parse line
+        // positions. The renderer detects TTY via `is_terminal()`
+        // and only emits the legend interactively. Tests run with
+        // `Stdio::piped()` so `is_terminal()` is false here,
+        // matching the consumer-script scenario.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, COVERAGE_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "coverage",
+                "--profiles",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}");
+        assert!(
+            !stdout.contains("tags:") && !stdout.contains("(no tag) verdicts differ"),
+            "tag legend must be suppressed on non-TTY stdout; got:\n{stdout}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
