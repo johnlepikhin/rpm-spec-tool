@@ -13,12 +13,11 @@
 //! name as a deterministic tiebreaker.
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use rpm_spec_repo_core::{Dependency, EVR, NEVRA, ProviderRef, RepoError, RepoUniverse};
 
-use crate::predicates::{REPO_PRIORITY_FALLBACK, provides_satisfies};
+use crate::predicates::{REPO_PRIORITY_FALLBACK, gather_candidates};
 
 /// Outcome of [`lookup`]. The three variants map 1:1 to the
 /// RPM-REPO-001 / -002 / -003 lints in the analyzer.
@@ -61,13 +60,19 @@ pub enum LookupOutcome {
 ///
 /// # Errors
 ///
-/// Returns the underlying [`RepoError::Database`] when the per-repo
-/// SQLite query fails. Lint code is expected to surface the error
-/// via the diagnostic sink rather than retry — a transient DB
-/// failure means the snapshot is unusable, and the offline-cache
-/// fallback already converts "no cache" into a silent skip upstream.
+/// Propagates the underlying [`RepoError`] when the per-repo SQLite
+/// query fails — typically [`RepoError::Sqlite`] (driver-level failure)
+/// or [`RepoError::Database`] (schema mismatch / corrupt manifest).
+/// Lint code surfaces the error via the diagnostic sink rather than
+/// retry: a snapshot that can't be queried is unusable, and the
+/// offline-cache fallback already converts "no cache" into a silent
+/// skip upstream.
 pub fn lookup(universe: &RepoUniverse, dep: &Dependency) -> Result<LookupOutcome, RepoError> {
-    let candidates = gather_candidates(universe, &dep.name)?;
+    // Combined one-shot candidate query: pulls every (pkg_id, NEVRA)
+    // matching the dep name in one SQL round trip per repo, plus the
+    // file-owner fallback for path deps. Shared with the solver via
+    // `gather_candidates` so the candidate set can't diverge.
+    let (candidates, file_path_dep) = gather_candidates(universe, dep)?;
     if candidates.is_empty() {
         return Ok(LookupOutcome::NoProvider);
     }
@@ -75,18 +80,15 @@ pub fn lookup(universe: &RepoUniverse, dep: &Dependency) -> Result<LookupOutcome
     let mut best_sat: Option<Candidate> = None;
     let mut best_any: Option<Candidate> = None;
 
-    for cand_ref in &candidates {
-        let Some(pkg) = cand_ref.resolve(universe)? else {
-            continue;
-        };
+    for (cand_ref, nevra) in &candidates {
         let priority = universe
             .priority_of(&cand_ref.repo_id)
             .unwrap_or(REPO_PRIORITY_FALLBACK);
         let cand = Candidate {
             priority,
-            evr: pkg.nevra.evr(),
-            name: pkg.nevra.name.clone(),
-            nevra: pkg.nevra.clone(),
+            evr: nevra.evr(),
+            name: nevra.name.clone(),
+            nevra: nevra.clone(),
             provider_ref: cand_ref.clone(),
         };
         if best_any
@@ -95,7 +97,18 @@ pub fn lookup(universe: &RepoUniverse, dep: &Dependency) -> Result<LookupOutcome
         {
             best_any = Some(cand.clone());
         }
-        if provides_satisfies(&pkg, dep)
+        // For file-path deps, `candidates_with_nevra` + `file_owner`
+        // already established ownership; skip the expensive
+        // satisfies check. For everything else, route through the
+        // hot-path `universe.satisfies` which avoids loading the
+        // full Package's caps + files (the JOIN that motivated
+        // splitting `load_package` / `load_package_with_files`).
+        let satisfies = if file_path_dep {
+            true
+        } else {
+            universe.satisfies(cand_ref, dep)?
+        };
+        if satisfies
             && best_sat
                 .as_ref()
                 .is_none_or(|b| is_strictly_better(&cand, b))
@@ -117,41 +130,6 @@ pub fn lookup(universe: &RepoUniverse, dep: &Dependency) -> Result<LookupOutcome
         });
     }
     Ok(LookupOutcome::NoProvider)
-}
-
-/// Every package that COULD plausibly satisfy `name` — direct
-/// package-name match, `Provides:` capability match, or file-path
-/// ownership (rpm-md models `Requires: /usr/bin/foo` and friends
-/// as file dependencies; dnf resolves them against the per-package
-/// filelist, and so do we). Returned as a deduped `Vec` with
-/// insertion order preserved (by-name → by-provides → by-file) so
-/// downstream tiebreaking remains deterministic.
-fn gather_candidates(universe: &RepoUniverse, name: &str) -> Result<Vec<ProviderRef>, RepoError> {
-    let mut seen_set: HashSet<ProviderRef> = HashSet::new();
-    let mut order: Vec<ProviderRef> = Vec::new();
-    for r in universe.by_name(name)? {
-        if seen_set.insert(r.clone()) {
-            order.push(r);
-        }
-    }
-    for r in universe.provides_by_name(name)? {
-        if seen_set.insert(r.clone()) {
-            order.push(r);
-        }
-    }
-    // File-path dependency (`Requires: /usr/bin/xsltproc`,
-    // `BuildRequires: /sbin/ldconfig`, etc.) — rpm-md publishes the
-    // owner via the per-package filelist, NOT as a synthetic Provides.
-    // Without this branch the resolver wrongly reports "no provider"
-    // for every file requirement, generating noisy false positives
-    // on real specs.
-    if name.starts_with('/')
-        && let Some(owner) = universe.file_owner(name)?
-        && seen_set.insert(owner.clone())
-    {
-        order.push(owner);
-    }
-    Ok(order)
 }
 
 #[derive(Debug, Clone)]
@@ -182,8 +160,8 @@ mod tests {
     //! Direct unit coverage for the lookup primitives. Builds tiny
     //! [`RepoUniverse`] fixtures inline via
     //! [`RepoUniverse::from_indexes_for_tests`] (in-memory SQLite,
-    //! no disk I/O) to exercise `lookup`, `gather_candidates`, and
-    //! the `is_strictly_better` tiebreak ordering.
+    //! no disk I/O) to exercise `lookup` and the `is_strictly_better`
+    //! tiebreak ordering.
     use rpm_spec_repo_core::{CapFlags, Capability, Package, PkgChecksum, RepoIndex, RepoUniverse};
     use time::OffsetDateTime;
 
@@ -295,19 +273,6 @@ mod tests {
             }
             other => panic!("expected VersionUnsatisfied, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn gather_candidates_dedupes_when_indexed_under_name_and_provides() {
-        let uni = one_repo_universe(vec![pkg(
-            "test-repo",
-            "bash",
-            "5.1.8",
-            "9",
-            vec![cap_unversioned("bash")],
-        )]);
-        let cands = gather_candidates(&uni, "bash").expect("query");
-        assert_eq!(cands.len(), 1, "expected dedupe, got {cands:?}");
     }
 
     #[test]

@@ -13,10 +13,8 @@
 //! one-time INFO note and skip silently — same UX `matrix check`
 //! uses for any profile-aware rule.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -24,11 +22,10 @@ use clap::Args;
 use rpm_spec_analyzer::diagnostic::{Diagnostic, Severity};
 use rpm_spec_analyzer::profile::Profile;
 use rpm_spec_analyzer::{LintSession, parse};
-use rpm_spec_repo_core::RepoUniverse;
-use rpm_spec_repo_core::db::RepoDb;
 use rpm_spec_repo_metadata::cache::CacheDirs;
 
 use super::coverage_style::Style;
+use super::universe::cache_universes;
 use super::{MatrixPrepareError, prepare_matrix};
 use crate::app::{ColorChoice, MacroDefinesArg};
 use crate::commands::repo::RepoArgs;
@@ -118,19 +115,11 @@ pub fn run(
         .context("preparing the repo cache directory layout")?;
 
     // Build the per-profile universe ONCE up-front. The (spec × profile)
-    // grid touches the same profile repeatedly; re-reading `manifest.json`
-    // and re-deserialising `index.bincode` per spec wastes seconds on
-    // large runs. `Arc<RepoUniverse>` makes the per-iteration clone cheap.
-    let mut universe_cache: HashMap<String, Option<Arc<RepoUniverse>>> = HashMap::new();
-    for resolved in &ctx.resolved.targets {
-        let profile_name = resolved.profile.identity.name.clone();
-        if let std::collections::hash_map::Entry::Vacant(slot) =
-            universe_cache.entry(profile_name)
-        {
-            let universe = build_universe_from_cache(&resolved.profile, &dirs)?;
-            slot.insert(universe);
-        }
-    }
+    // grid touches the same profile repeatedly; per-spec DB opens would
+    // cost a fresh connection setup each time. `Arc<RepoUniverse>` makes
+    // the per-iteration clone cheap (refcount bump).
+    let profiles: Vec<&_> = ctx.resolved.targets.iter().map(|t| &t.profile).collect();
+    let universe_cache = cache_universes(&profiles, &dirs)?;
 
     let mut report = DepsReport::default();
     for spec_path in &opts.paths {
@@ -161,99 +150,6 @@ pub fn run(
 
     render(&report, opts.format, &style)?;
     Ok(report.exit_code(opts.fail_on))
-}
-
-/// Build a `RepoUniverse` from cached snapshots for every enabled
-/// repo in the profile. Returns `None` if NO repos have a cached
-/// `current` snapshot — the caller surfaces an INFO note and the
-/// repo-aware rules skip.
-///
-/// # Errors
-///
-/// Returns `Err` when:
-/// - `$basearch` / `$arch` / `$releasever` interpolation fails for a
-///   repo's `baseurl` (typically a placeholder injection attempt
-///   rejected by the SSRF guard) — treated as a configuration error,
-///   not a runtime glitch
-/// - the `manifest.json` for an enabled repo with a cached `current`
-///   snapshot is unreadable or malformed JSON
-/// - loading the bincode snapshot via `cache::try_load_snapshot`
-///   propagates an I/O error (note: bincode *corruption* is not an
-///   error — `try_load_snapshot` logs `warn!` and returns `None`, and
-///   the repo is skipped silently)
-fn build_universe_from_cache(
-    profile: &Profile,
-    dirs: &CacheDirs,
-) -> Result<Option<Arc<RepoUniverse>>> {
-    let Some(repo_set) = &profile.repos else {
-        return Ok(None);
-    };
-    if repo_set.repos.is_empty() {
-        return Ok(None);
-    }
-    let mut dbs = Vec::new();
-    for (repo_id, cfg) in &repo_set.repos {
-        if !cfg.enabled {
-            tracing::debug!(
-                repo = ?repo_id,
-                profile = ?profile.identity.name,
-                "repo disabled in profile config; skipping"
-            );
-            continue;
-        }
-        let Some(baseurl) = &cfg.baseurl else {
-            tracing::debug!(
-                repo = ?repo_id,
-                profile = ?profile.identity.name,
-                "no baseurl configured; skipping"
-            );
-            continue;
-        };
-        // Fail loud on interpolation errors: a rejected placeholder
-        // (e.g. SSRF-guard tripping on a malicious `$basearch`) is a
-        // configuration error, not a runtime glitch.
-        let interpolated = crate::commands::repo::url::interpolate_url(baseurl, profile)
-            .map_err(|e| anyhow::anyhow!(e))
-            .with_context(|| {
-                format!(
-                    "interpolating baseurl for repo `{repo_id}` in profile `{}`",
-                    profile.identity.name
-                )
-            })?;
-        let repo_dir = dirs.repo_dir(&interpolated);
-        let current = repo_dir.join("current");
-        if !current.exists() {
-            tracing::debug!(repo = ?repo_id, "no cached snapshot; skipping repo");
-            continue;
-        }
-        let db_path = current.join(RepoDb::file_name());
-        if !db_path.exists() {
-            tracing::debug!(
-                repo = ?repo_id,
-                path = %db_path.display(),
-                "cached snapshot present but repo.db missing; run `repo sync` to upgrade",
-            );
-            continue;
-        }
-        match RepoDb::open(&db_path) {
-            Ok(db) => dbs.push(db),
-            Err(e) => {
-                tracing::warn!(
-                    repo = ?repo_id,
-                    error = %e,
-                    path = %db_path.display(),
-                    "failed to open repo.db; skipping",
-                );
-                continue;
-            }
-        }
-    }
-    if dbs.is_empty() {
-        return Ok(None);
-    }
-    let universe = RepoUniverse::from_dbs(profile.identity.name.clone(), dbs)
-        .context("building per-profile RepoUniverse")?;
-    Ok(Some(Arc::new(universe)))
 }
 
 fn run_one(

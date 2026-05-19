@@ -10,7 +10,9 @@
 
 use std::cmp::Ordering;
 
-use rpm_spec_repo_core::{CapFlags, Capability, EVR, Package};
+use rpm_spec_repo_core::{
+    CapFlags, Capability, Dependency, EVR, NEVRA, Package, ProviderRef, RepoError, RepoUniverse,
+};
 
 /// Priority assigned to repos not present in the priority map (e.g. when
 /// the universe was rebuilt after the map was constructed). Sorted to the
@@ -33,7 +35,7 @@ pub fn provides_satisfies(provider: &Package, requirement: &Capability) -> bool 
     if provider.nevra.name.as_ref() == requirement.name.as_ref() {
         return evr_matches(&provider.nevra.evr(), requirement);
     }
-    if requirement.name.as_ref().starts_with('/') {
+    if requirement.is_file_path() {
         for path in &provider.files {
             if path.as_ref() == requirement.name.as_ref() {
                 return true;
@@ -78,15 +80,46 @@ pub fn evr_matches(provider_evr: &EVR, req: &Capability) -> bool {
 }
 
 /// Map a three-way comparison result onto an RPM `CapFlags` predicate.
+///
+/// Thin alias for [`CapFlags::matches`] kept on this side for the
+/// resolver's existing `matches_flag(cmp, flag)` call shape (the
+/// canonical impl lives in `repo-core` so the DB-side `satisfies`
+/// path can't drift from this one).
 pub fn matches_flag(cmp: Ordering, flag: CapFlags) -> bool {
-    match flag {
-        CapFlags::None => true,
-        CapFlags::EQ => cmp == Ordering::Equal,
-        CapFlags::LT => cmp == Ordering::Less,
-        CapFlags::LE => cmp != Ordering::Greater,
-        CapFlags::GT => cmp == Ordering::Greater,
-        CapFlags::GE => cmp != Ordering::Less,
+    flag.matches(cmp)
+}
+
+/// Gather every candidate that might satisfy `dep` across the
+/// universe, plus a flag for "this is a file-path dep". Shared by
+/// [`crate::lookup`] (single-shot) and [`crate::solver::pick_provider`]
+/// (closure walk) so the candidate-set definition can't diverge — a
+/// real bug class on previous iterations, e.g. when one consumer
+/// remembered the file-owner fallback and the other didn't.
+///
+/// The order is: every package whose `name` or `Provides:` matches
+/// `dep.name` (one indexed SQL roundtrip per repo via
+/// `candidates_with_nevra`), with the optional file-owner appended
+/// for file-path deps. Duplicates are filtered against
+/// [`ProviderRef`] equality.
+///
+/// # Errors
+///
+/// Returns the per-repo DB error verbatim; both callers funnel it
+/// straight up so lint code can surface it once and skip the rule.
+pub(crate) fn gather_candidates(
+    universe: &RepoUniverse,
+    dep: &Dependency,
+) -> Result<(Vec<(ProviderRef, NEVRA)>, bool), RepoError> {
+    let file_path_dep = dep.is_file_path();
+    let mut candidates = universe.candidates_with_nevra(&dep.name)?;
+    if file_path_dep
+        && let Some(owner) = universe.file_owner(&dep.name)?
+        && !candidates.iter().any(|(p, _)| p == &owner)
+        && let Some(nevra) = universe.resolve_nevra(&owner)?
+    {
+        candidates.push((owner, nevra));
     }
+    Ok((candidates, file_path_dep))
 }
 
 #[cfg(test)]

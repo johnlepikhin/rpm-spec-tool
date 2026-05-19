@@ -29,7 +29,7 @@
 /// Current schema version. Bumped when the DDL below changes in any
 /// non-additive way; older databases are evicted by the cache layer
 /// and re-built from XML.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Full DDL applied to a freshly created database.
 pub const CREATE_SQL: &str = r"
@@ -64,7 +64,11 @@ CREATE TABLE caps (
     release TEXT
 );
 CREATE INDEX idx_caps_kind_name ON caps(kind, name);
+-- (pkg_id, kind) composite supports `load_caps_by_kind(pkg_id, 'provides')`
+-- in the resolver hot path; the older `(pkg_id)`-only index is kept
+-- because `load_package` still scans by pkg_id across all kinds.
 CREATE INDEX idx_caps_pkg       ON caps(pkg_id);
+CREATE INDEX idx_caps_pkg_kind  ON caps(pkg_id, kind);
 
 CREATE TABLE files (
     pkg_id INTEGER NOT NULL REFERENCES packages(pkg_id),

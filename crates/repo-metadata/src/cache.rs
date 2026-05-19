@@ -7,7 +7,7 @@
 //!   snapshots/<rev>/
 //!     repomd.xml | release
 //!     primary.xml, filelists.xml, updateinfo.xml (decompressed)
-//!     index.bincode             # fast-reload parsed RepoIndex
+//!     repo.db                   # SQLite per-repo index
 //!     manifest.json             # backend kind, fetched_at, sha, bytes
 //!   revisions.log
 //! ```
@@ -28,17 +28,10 @@ use rpm_spec_repo_core::{RepoError, RepoIndex, RepoKind};
 
 use crate::util::{atomic_write, sha256_hex};
 
-/// Bumped when [`SnapshotManifest`] / serialised RepoIndex layout
+/// Bumped when the snapshot manifest layout or the SQLite schema
 /// changes. Cache hits with a different version are evicted and
 /// re-fetched.
 pub const CACHE_SCHEMA_VERSION: u32 = 1;
-
-/// Per-snapshot upper bound on bincode deserialisation. 4 GiB
-/// covers any realistic Fedora-scale `RepoIndex` (~60k packages × a
-/// few KB of metadata each) but caps allocation when a corrupt
-/// `index.bincode` claims absurd lengths. Matches the
-/// `compression::MAX_DECOMPRESSED_BYTES` ceiling.
-pub const BINCODE_DESERIALIZE_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Per-snapshot manifest committed next to the parsed index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,7 +145,7 @@ fn write_version_marker(root: &Path) -> std::io::Result<()> {
 }
 
 /// Persist a parsed [`RepoIndex`] under the snapshot directory,
-/// emitting both `index.bincode` and `manifest.json` atomically.
+/// emitting `manifest.json` + `repo.db` atomically.
 ///
 /// Raw metadata files (`repomd.xml`, `primary.xml.gz`, …) are NOT
 /// currently staged alongside; they live in the HTTP cache keyed
@@ -181,15 +174,9 @@ pub fn write_snapshot(
         .map_err(|e| RepoError::Serialize(e.to_string()))?;
     atomic_write(&snap_dir.join("manifest.json"), manifest_json.as_bytes())?;
 
-    let bin = bincode::serialize(index).map_err(|e| RepoError::Serialize(e.to_string()))?;
-    atomic_write(&snap_dir.join("index.bincode"), &bin)?;
-
-    // Write the SQLite mirror next to the bincode snapshot. The DB
-    // becomes the load-time source of truth once Phase 3 wires the
-    // reader path, but we emit both in Phase 2 so an in-place
-    // upgrade doesn't force a re-sync. Tmp-rename keeps the file
-    // atomic from a reader's perspective; SQLite's own WAL handles
-    // crash-during-write.
+    // SQLite snapshot is the load-time source of truth. Tmp-rename
+    // keeps the file atomic from a reader's perspective; SQLite's
+    // own WAL handles crash-during-write.
     write_repo_db(
         &snap_dir,
         baseurl,
@@ -213,11 +200,9 @@ pub fn write_snapshot(
 
 /// Build the per-snapshot `repo.db` from a parsed [`RepoIndex`].
 ///
-/// The DB is the load-time backend that replaces `index.bincode`
-/// (the old format is still written for downgrade safety in Phase 2;
-/// readers swap over in Phase 3 / 4). Writing happens to a `.tmp`
+/// The DB is the load-time backend. Writing happens to a `.tmp`
 /// path so a partial DB never appears under the snapshot name —
-/// if the process dies mid-ingest the next run sees no `repo.db`
+/// if the process dies mid-ingest the next run cleans the `.tmp`
 /// and re-parses XML.
 fn write_repo_db(
     snap_dir: &Path,
@@ -250,37 +235,6 @@ fn write_repo_db(
     Ok(())
 }
 
-/// Try loading a cached parsed index. Returns `Ok(None)` when no
-/// matching snapshot is present; `Ok(Some(_))` on hit; `Err` on
-/// corruption (caller may choose to re-parse from raw XML).
-pub fn try_load_snapshot(
-    dirs: &CacheDirs,
-    baseurl: &str,
-    revision: &str,
-) -> Result<Option<RepoIndex>, RepoError> {
-    let snap = dirs.snapshot_dir(baseurl, revision);
-    let bin = snap.join("index.bincode");
-    if !bin.exists() {
-        return Ok(None);
-    }
-    let bytes = fs::read(&bin)?;
-    use bincode::Options;
-    let options = bincode::DefaultOptions::new()
-        .with_limit(BINCODE_DESERIALIZE_LIMIT)
-        .with_fixint_encoding()
-        .allow_trailing_bytes();
-    match options.deserialize::<RepoIndex>(&bytes) {
-        Ok(idx) => Ok(Some(idx)),
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                path = %bin.display(),
-                "bincode snapshot rejected (corrupt or oversized); re-parse from XML"
-            );
-            Ok(None)
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

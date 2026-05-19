@@ -6,7 +6,6 @@
 //! `MacroRegistry::expand_to_literal` lives here too — used by every
 //! rule that needs to handle `BuildRequires: %{python3_pkgversion}-foo`.
 
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use rpm_spec::ast::{
@@ -116,10 +115,25 @@ impl RepoRule {
 /// `display` form is the human-readable original (e.g.
 /// `"cmake >= 3.26"`) — kept for diagnostic messages so the user
 /// sees what they wrote, not the resolver's normalised form.
-pub(super) struct ProjectedDep {
+#[derive(Debug)]
+pub struct ProjectedDep {
     pub capability: Capability,
     pub display: String,
     pub span: Span,
+}
+
+/// `project_deps` shortcut for callers that just want the active
+/// `BuildRequires:` set, already projected to resolver shape with
+/// `%if` / `%else` branches gated against `profile` + bcond.
+/// Returns `Vec<Capability>` because that's the only field
+/// downstream consumers (`matrix buildroot solve`, future
+/// `matrix upgrade-sim`) actually look at.
+pub fn active_buildrequires(spec: &SpecFile<Span>, profile: &Profile) -> Vec<Capability> {
+    let bcond = BcondMap::from_spec(spec, &BcondOverrides::default());
+    project_deps(spec, profile, &bcond, |t| matches!(t, Tag::BuildRequires))
+        .into_iter()
+        .map(|d| d.capability)
+        .collect()
 }
 
 /// Walk every top-level preamble item whose tag matches
@@ -142,7 +156,7 @@ pub(super) struct ProjectedDep {
 /// unmodelled expression) are skipped along with their `%else`
 /// counterpart — being conservative on false positives is the
 /// design goal of the RPM-REPO-* family.
-pub(super) fn project_deps<F>(
+pub fn project_deps<F>(
     spec: &SpecFile<Span>,
     profile: &Profile,
     bcond: &BcondMap,
@@ -391,42 +405,43 @@ fn project_atom(atom: &DepAtom, macros: &MacroRegistry, span: Span) -> Option<Pr
 /// not part of the resolver's capability name — the rpm-md primary.xml
 /// stores it via the package's `arch` field, not as part of the
 /// capability string. Kept here only for diagnostics.
+///
+/// Delegates the name + EVR rendering to [`Capability::display`] (the
+/// shared canonical form used by `matrix buildroot solve` too), then
+/// inserts the optional `(arch)` suffix between name and EVR — a
+/// detail unique to spec-side display text.
 fn format_capability_display(
     name: &str,
     arch: Option<&str>,
     op: CapFlags,
     evr: Option<&EVR>,
 ) -> String {
-    let mut display = String::from(name);
-    if let Some(arch) = arch {
-        display.push('(');
-        display.push_str(arch);
-        display.push(')');
+    let cap = Capability {
+        name: Arc::from(name),
+        flags: op,
+        evr: evr.cloned(),
+    };
+    let base = cap.display();
+    let Some(arch) = arch else {
+        return base;
+    };
+    // Splice `(arch)` after the name, before any ` op E:V-R` suffix.
+    // The name has no spaces (rpm capability names forbid them), so
+    // the first space — if present — marks the start of the operator.
+    let mut out = String::with_capacity(base.len() + arch.len() + 2);
+    if let Some(idx) = base.find(' ') {
+        out.push_str(&base[..idx]);
+        out.push('(');
+        out.push_str(arch);
+        out.push(')');
+        out.push_str(&base[idx..]);
+    } else {
+        out.push_str(&base);
+        out.push('(');
+        out.push_str(arch);
+        out.push(')');
     }
-    if let Some(evr) = evr {
-        display.push(' ');
-        display.push_str(match op {
-            CapFlags::LT => "<",
-            CapFlags::LE => "<=",
-            CapFlags::EQ => "=",
-            CapFlags::GE => ">=",
-            CapFlags::GT => ">",
-            _ => "?",
-        });
-        display.push(' ');
-        if evr.epoch > 0 {
-            // `write!` into the existing String avoids the
-            // intermediate allocation `push_str(&format!(...))`
-            // would create. Infallible on a String sink.
-            let _ = write!(&mut display, "{}:", evr.epoch);
-        }
-        display.push_str(&evr.version);
-        if !evr.release.is_empty() {
-            display.push('-');
-            display.push_str(&evr.release);
-        }
-    }
-    display
+    out
 }
 
 /// Expand any `%{name}` / `%name` references via the profile's
@@ -446,3 +461,45 @@ fn resolve_text(text: &str, macros: &MacroRegistry) -> Option<String> {
     )
 }
 
+#[cfg(all(test, feature = "test-fixtures"))]
+mod tests {
+    use super::*;
+    use crate::rules::repo::test_fixtures;
+
+    #[test]
+    fn active_buildrequires_skips_inactive_vendor_branch() {
+        // Motivating bug: spec uses
+        //   %if "%_vendor" == "rosa"
+        //   BuildRequires: lib64foo
+        //   %else
+        //   BuildRequires: foo
+        //   %endif
+        // On a profile with `%_vendor = "redhat"`, only `foo` should
+        // be returned by `active_buildrequires` — the rosa-guarded
+        // `lib64foo` arm is dead.
+        let src = "Name: x\nVersion: 1\nRelease: 1\nSummary: s\n\
+                   License: MIT\n\
+                   %if \"%_vendor\" == \"rosa\"\n\
+                   BuildRequires: lib64foo\n\
+                   %else\n\
+                   BuildRequires: foo\n\
+                   %endif\n\
+                   %description\nx\n";
+        let mut profile = test_fixtures::redos_profile();
+        profile.macros.insert(
+            "_vendor".to_string(),
+            rpm_spec_profile::MacroEntry::literal(
+                "redhat",
+                rpm_spec_profile::Provenance::Override,
+            ),
+        );
+        let outcome = crate::session::parse(src);
+        let brs = active_buildrequires(&outcome.spec, &profile);
+        let names: Vec<&str> = brs.iter().map(|c| c.name.as_ref()).collect();
+        assert!(names.contains(&"foo"), "got {names:?}");
+        assert!(
+            !names.contains(&"lib64foo"),
+            "rosa branch should be inactive, got {names:?}",
+        );
+    }
+}

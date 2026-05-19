@@ -41,4 +41,3 @@ sha2        = "0.10"
 directories = "5"
 tempfile    = "3"
 rustix      = { version = "0.38", features = ["fs"] }
-bincode     = { version = "1", optional = false }

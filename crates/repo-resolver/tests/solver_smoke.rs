@@ -151,9 +151,89 @@ fn unsatisfiable_when_provider_absent() {
     match sol {
         Solution::Unsatisfiable(core) => {
             assert_eq!(core.unsatisfied.len(), 1);
-            assert_eq!(core.unsatisfied[0].name.as_ref(), "nonexistent");
+            assert_eq!(core.unsatisfied[0].dep.name.as_ref(), "nonexistent");
+            // Top-level BR — no transitive ancestry.
+            assert!(core.unsatisfied[0].provenance.is_from_spec());
         }
         Solution::Ok(c) => panic!("expected Unsatisfiable, got Ok({c:?})"),
+    }
+}
+
+#[test]
+fn file_path_alternative_provider_short_circuits() {
+    // Regression for the `pkgconfig` vs `pkgconf-pkg-config` case.
+    //
+    // Two packages both own `/usr/bin/pkg-config` AND declare mutual
+    // `Conflicts:`. One is pre-pinned via `base_packages`. The other
+    // satisfies a file-path requirement that another package's
+    // `Requires:` brings in.
+    //
+    // Bug before the `any_pinned_owns` fix: the solver picked the
+    // second package for the file-path round, then `would_conflict`
+    // tripped on the mutual `Conflicts:` and the solve came back
+    // Unsatisfiable.
+    //
+    // Fix: `any_pinned_owns` short-circuits — the file is already
+    // owned by something in the closure, so no second pin needed.
+    let pkgconfig = pkg(
+        "test-repo",
+        "pkgconfig",
+        "1.8.0",
+        "1",
+        Vec::new(),
+        vec![cap("pkgconfig")],
+        vec![cap("pkgconf-pkg-config")],
+    );
+    let mut pkgconfig = pkgconfig;
+    pkgconfig.files = vec![Arc::from("/usr/bin/pkg-config")];
+
+    let pkgconf = pkg(
+        "test-repo",
+        "pkgconf-pkg-config",
+        "1.8.0",
+        "1",
+        Vec::new(),
+        vec![cap("pkgconfig")],
+        vec![cap("pkgconfig")],
+    );
+    let mut pkgconf = pkgconf;
+    pkgconf.files = vec![Arc::from("/usr/bin/pkg-config")];
+
+    let consumer = pkg(
+        "test-repo",
+        "consumer",
+        "1.0",
+        "1",
+        vec![cap("/usr/bin/pkg-config")],
+        vec![cap("consumer")],
+        Vec::new(),
+    );
+    let uni = universe(vec![pkgconfig, pkgconf, consumer]);
+
+    let base = vec![cap("pkgconfig")];
+    let req = vec![cap("consumer")];
+    let sol = solve(SolveRequest {
+        universe: &uni,
+        requirements: &req,
+        base_packages: &base,
+        implicit_brs: &[],
+    })
+    .expect("solver db query");
+    match sol {
+        Solution::Ok(closure) => {
+            let names: Vec<&str> = closure.packages.iter().map(|n| n.name.as_ref()).collect();
+            assert!(names.contains(&"pkgconfig"), "pkgconfig missing: {names:?}");
+            assert!(names.contains(&"consumer"), "consumer missing: {names:?}");
+            assert!(
+                !names.contains(&"pkgconf-pkg-config"),
+                "alternative provider must not be pinned: {names:?}",
+            );
+        }
+        Solution::Unsatisfiable(core) => {
+            panic!(
+                "expected Ok (file path already owned by pinned pkgconfig), got Unsatisfiable: {core:?}"
+            );
+        }
     }
 }
 

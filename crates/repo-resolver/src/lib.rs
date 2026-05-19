@@ -31,4 +31,4 @@ pub mod unsat;
 pub use lookup::{LookupOutcome, lookup};
 pub use predicates::{evr_matches, matches_flag, provides_satisfies};
 pub use solver::{BuildrootClosure, SolveRequest, Solution, solve};
-pub use unsat::{ConflictChain, UnsatCore};
+pub use unsat::{ConflictChain, DepProvenance, UnsatCore, UnsatItem};

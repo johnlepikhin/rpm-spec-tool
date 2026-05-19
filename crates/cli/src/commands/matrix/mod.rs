@@ -18,6 +18,7 @@ use rpm_spec_analyzer::profile::{
 use rpm_spec_analyzer::{ParseOutcome, ParserSeverity};
 
 pub mod baseline;
+pub mod buildroot;
 pub mod check;
 pub mod classes;
 pub mod coverage;
@@ -28,6 +29,7 @@ pub mod expand;
 pub mod explain;
 pub mod impact;
 pub mod portability;
+pub(crate) mod universe;
 pub mod verify_contract;
 
 pub use check::{AD_HOC_TARGET_SET_ID, CheckOpts};
@@ -326,6 +328,50 @@ pub enum Action {
     /// RPM-REPO-001 (no provider), RPM-REPO-002 (no runtime
     /// provider), RPM-REPO-003 (version constraint unmet).
     Deps(DepsCmd),
+    /// Buildroot resolution helpers — compute the full chroot
+    /// closure a spec would install into for each member of a
+    /// target set.
+    Buildroot(BuildrootCmd),
+}
+
+#[derive(Debug, Args)]
+pub struct BuildrootCmd {
+    #[command(subcommand)]
+    pub action: BuildrootAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BuildrootAction {
+    /// Resolve the full buildroot closure for one or more specs.
+    ///
+    /// For each (spec × profile) in the target set, runs the
+    /// dependency resolver against the profile's cached repository
+    /// metadata. The closure is the transitive set of packages that
+    /// would actually be installed into the build chroot:
+    ///
+    /// * Every package listed in `[profiles.X.buildroot.base_packages]`
+    ///   (mock/koji/hasher chroot baseline).
+    /// * Every implicit BR from
+    ///   `[profiles.X.buildroot.implicit_buildrequires]` (e.g.
+    ///   `rpm-build`, `gcc`, `make` — what the platform's build
+    ///   system pre-installs without an explicit BR).
+    /// * Every `BuildRequires:` line declared in the spec, plus
+    ///   their transitive Requires, recursively.
+    ///
+    /// On success: pinned NEVRAs (capped in human output, full in
+    /// JSON) and the total `installed-size` (sum of every pinned
+    /// package's `<size install>` from primary.xml — your "how
+    /// fat is the chroot?" metric).
+    ///
+    /// On failure: the unsat core lists every unmet capability AND
+    /// every two-way conflict chain so the operator can pinpoint
+    /// which BR or transitive Requires has no provider in the
+    /// configured repos.
+    ///
+    /// Runs entirely against the on-disk SQLite cache populated by
+    /// `repo sync` — no network. Profiles without a cached snapshot
+    /// produce a "NO_UNIVERSE" verdict (skipped, not failed).
+    Solve(buildroot::SolveOpts),
 }
 
 #[derive(Debug, Args)]
@@ -357,6 +403,11 @@ impl Cmd {
             Action::Impact(opts) => impact::run(opts, self.config.as_deref(), color),
             Action::Deps(cmd) => match cmd.action {
                 DepsAction::Check(opts) => deps::run(opts, self.config.as_deref(), color),
+            },
+            Action::Buildroot(cmd) => match cmd.action {
+                BuildrootAction::Solve(opts) => {
+                    buildroot::run(opts, self.config.as_deref(), color)
+                }
             },
         }
     }

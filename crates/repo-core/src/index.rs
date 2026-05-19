@@ -238,6 +238,65 @@ impl RepoUniverse {
         Ok(None)
     }
 
+    /// `by_name` plus `provides_by_name` in a single sweep, with
+    /// each candidate paired with its NEVRA. Saves the resolver
+    /// from issuing one `resolve_nevra` per candidate just to feed
+    /// the tie-break ordering. Insertion order is preserved
+    /// (by-name first, then by-provides), dedup is by
+    /// `ProviderRef`.
+    pub fn candidates_with_nevra(
+        &self,
+        name: &str,
+    ) -> Result<Vec<(ProviderRef, NEVRA)>, RepoError> {
+        use std::collections::HashSet;
+        let mut seen: HashSet<ProviderRef> = HashSet::new();
+        let mut out: Vec<(ProviderRef, NEVRA)> = Vec::new();
+        for db in &self.dbs {
+            let repo_id = db.repo_id()?;
+            for (pkg_id, nevra) in db.pkg_briefs_by_name(name)? {
+                let pref = ProviderRef {
+                    repo_id: repo_id.clone(),
+                    pkg_id,
+                };
+                if seen.insert(pref.clone()) {
+                    out.push((pref, nevra));
+                }
+            }
+        }
+        for db in &self.dbs {
+            let repo_id = db.repo_id()?;
+            for (pkg_id, nevra) in db.pkg_briefs_providing(name)? {
+                let pref = ProviderRef {
+                    repo_id: repo_id.clone(),
+                    pkg_id,
+                };
+                if seen.insert(pref.clone()) {
+                    out.push((pref, nevra));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Hot-path "does `pref` satisfy `req`?" check. Routes to
+    /// [`crate::db::RepoDb::package_satisfies`] without
+    /// materialising the full `Package`.
+    ///
+    /// **File-path deps:** for `req.name` starting with `/`, callers must
+    /// use [`Self::file_owner`] instead — `satisfies` doesn't query the
+    /// `files` table and will return `false` for file-path requirements
+    /// even when the package owns the path.
+    pub fn satisfies(
+        &self,
+        pref: &ProviderRef,
+        req: &crate::package::Capability,
+    ) -> Result<bool, RepoError> {
+        let Some(idx) = self.repo_by_id.get(&pref.repo_id).copied() else {
+            return Ok(false);
+        };
+        self.dbs[idx].package_satisfies(pref.pkg_id, req)
+    }
+
     /// Reverse-requires lookup: packages that require capability
     /// `name`. Used by P1 reverse-dep impact lints.
     pub fn reverse_requires(&self, name: &str) -> Result<Vec<ProviderRef>, RepoError> {
@@ -263,11 +322,12 @@ impl RepoUniverse {
         let Some(idx) = self.repo_by_id.get(&pref.repo_id).copied() else {
             return Ok(None);
         };
-        match self.dbs[idx].load_package(pref.pkg_id) {
-            Ok(p) => Ok(Some(p)),
-            Err(RepoError::Database(_)) => Ok(None),
-            Err(e) => Err(e),
-        }
+        // `load_package` now returns `Ok(None)` for a missing row
+        // (was previously mapped via `match Err(RepoError::Database)`
+        // — Cycle A's `From<rusqlite::Error>` rerouted those to
+        // `Sqlite`, silently breaking the matcher and turning a
+        // stale `ProviderRef` into a hard abort instead of a skip).
+        self.dbs[idx].load_package(pref.pkg_id)
     }
 
     /// Cheap NEVRA-only resolve. Suitable for hot loops where the
@@ -277,11 +337,7 @@ impl RepoUniverse {
         let Some(idx) = self.repo_by_id.get(&pref.repo_id).copied() else {
             return Ok(None);
         };
-        match self.dbs[idx].load_nevra(pref.pkg_id) {
-            Ok(n) => Ok(Some(n)),
-            Err(RepoError::Database(_)) => Ok(None),
-            Err(e) => Err(e),
-        }
+        self.dbs[idx].load_nevra(pref.pkg_id)
     }
 
     /// Locate the DB for `repo_id` (priority-index lookup). Used by

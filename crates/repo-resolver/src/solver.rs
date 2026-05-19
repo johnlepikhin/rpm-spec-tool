@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use rpm_spec_repo_core::{Dependency, EVR, NEVRA, Package, ProviderRef, RepoError, RepoUniverse};
 
-use crate::predicates::{REPO_PRIORITY_FALLBACK, provides_satisfies};
-use crate::unsat::{ConflictChain, UnsatCore};
+use crate::predicates::{REPO_PRIORITY_FALLBACK, gather_candidates, provides_satisfies};
+use crate::unsat::{ConflictChain, DepProvenance, UnsatCore, UnsatItem};
 
 /// Outcome of [`solve`].
 #[derive(Debug)]
@@ -79,16 +79,37 @@ pub fn solve(req: SolveRequest<'_>) -> Result<Solution, RepoError> {
     let _g = span.enter();
 
     let mut state = SolverState::default();
-    let mut work: Vec<Dependency> = Vec::new();
-    work.extend(base_packages.iter().cloned());
-    work.extend(implicit_brs.iter().cloned());
-    work.extend(requirements.iter().cloned());
+    // Worklist entries carry provenance — the chain of packages
+    // that pulled this dep in. Initial items (from base /
+    // implicit / spec slices) get an empty chain ("from spec").
+    // Transitive Requires inherit the parent's chain + parent
+    // NEVRA prepended, so an UnsatItem's first chain entry is
+    // the package whose Requires line failed.
+    let mut work: Vec<(Dependency, DepProvenance)> = Vec::new();
+    work.extend(
+        base_packages
+            .iter()
+            .cloned()
+            .map(|d| (d, DepProvenance::from_spec())),
+    );
+    work.extend(
+        implicit_brs
+            .iter()
+            .cloned()
+            .map(|d| (d, DepProvenance::from_spec())),
+    );
+    work.extend(
+        requirements
+            .iter()
+            .cloned()
+            .map(|d| (d, DepProvenance::from_spec())),
+    );
 
-    let mut unsatisfied: Vec<Dependency> = Vec::new();
+    let mut unsatisfied: Vec<UnsatItem> = Vec::new();
     let mut conflicts: Vec<ConflictChain> = Vec::new();
     let mut rich_deps_skipped = 0usize;
 
-    while let Some(dep) = work.pop() {
+    while let Some((dep, provenance)) = work.pop() {
         if is_rich_expression(&dep.name) {
             rich_deps_skipped += 1;
             tracing::debug!(expr = ?dep.name, "skipping rich dep");
@@ -97,26 +118,42 @@ pub fn solve(req: SolveRequest<'_>) -> Result<Solution, RepoError> {
         if state.is_met(&dep) {
             continue;
         }
-
-        let Some(provider) = pick_provider(universe, &dep)? else {
-            tracing::debug!(req = ?dep.name, "no provider");
-            unsatisfied.push(dep);
-            continue;
-        };
-
-        if let Some(chain) = state.would_conflict(universe, &provider)? {
-            conflicts.push(chain);
-            unsatisfied.push(dep);
+        // File-path deps need a per-pinned-package lookup against
+        // the `files` table — we deliberately don't fold file
+        // ownership into `met_caps` (millions of paths). Without
+        // this check, alternative providers of the same file
+        // (`pkgconfig` vs `pkgconf-pkg-config`, both owning
+        // `/usr/bin/pkg-config` while declaring mutual
+        // `Conflicts:`) trip a false unsat: the first one wins
+        // the virtual-cap satisfaction round, the second is
+        // picked for the file-path round and clashes.
+        if dep.is_file_path() && state.any_pinned_owns(universe, &dep.name)? {
             continue;
         }
 
-        let newly_pinned = state.pin(universe, provider.clone())?;
+        let Some(provider) = pick_provider(universe, &dep)? else {
+            tracing::debug!(req = ?dep.name, "no provider");
+            unsatisfied.push(UnsatItem { dep, provenance });
+            continue;
+        };
+
+        if let Some(chain) = state.would_conflict(universe, &provider, &provenance)? {
+            conflicts.push(chain);
+            unsatisfied.push(UnsatItem { dep, provenance });
+            continue;
+        }
+
+        let newly_pinned = state.pin(universe, provider.clone(), &provenance)?;
         if newly_pinned
             && let Some(pkg) = provider.resolve(universe)?
         {
+            // Each transitive Require inherits this provider's
+            // ancestry so its eventual unmet report can trace
+            // back to a top-level BR.
+            let child_prov = provenance.pushed_by(&pkg.nevra);
             for r in &pkg.requires {
                 if !state.is_met(r) {
-                    work.push(r.clone());
+                    work.push((r.clone(), child_prov.clone()));
                 }
             }
         }
@@ -141,6 +178,13 @@ struct SolverState {
     met_caps: HashSet<Arc<str>>,
     provider_for: BTreeMap<Arc<str>, NEVRA>,
     install_size_total: u64,
+    /// Provenance chain for each pinned package — pinned-name →
+    /// chain of parents that transitively pulled it in. Used by
+    /// `would_conflict` to attribute both sides of a clash to the
+    /// top-level BR that ultimately required them. Stored as
+    /// `Arc<[NEVRA]>` so the conflict path can hand it straight to
+    /// `DepProvenance::from_chain` without re-allocating.
+    provenance: std::collections::HashMap<Arc<str>, Arc<[NEVRA]>>,
 }
 
 impl SolverState {
@@ -148,7 +192,12 @@ impl SolverState {
         self.met_caps.contains(&dep.name)
     }
 
-    fn pin(&mut self, universe: &RepoUniverse, pref: ProviderRef) -> Result<bool, RepoError> {
+    fn pin(
+        &mut self,
+        universe: &RepoUniverse,
+        pref: ProviderRef,
+        provenance: &DepProvenance,
+    ) -> Result<bool, RepoError> {
         let Some(pkg) = pref.resolve(universe)? else {
             return Ok(false);
         };
@@ -164,6 +213,8 @@ impl SolverState {
         self.provider_for
             .entry(pkg.nevra.name.clone())
             .or_insert_with(|| pkg.nevra.clone());
+        self.provenance
+            .insert(pkg.nevra.name.clone(), provenance.chain.clone());
         self.pinned.push((pref, nevra));
         Ok(true)
     }
@@ -176,22 +227,57 @@ impl SolverState {
         }
     }
 
+    /// True iff any package already pinned owns `path` in its
+    /// filelist. Used to short-circuit alternative providers of
+    /// the same file path (`/usr/bin/pkg-config`, owned by both
+    /// `pkgconfig` and `pkgconf-pkg-config`) once one of them is
+    /// already in the closure.
+    fn any_pinned_owns(
+        &self,
+        universe: &RepoUniverse,
+        path: &str,
+    ) -> Result<bool, RepoError> {
+        for (pref, _) in &self.pinned {
+            let Some(db) = universe.db_for(&pref.repo_id) else {
+                continue;
+            };
+            if db.owns_file(pref.pkg_id, path)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn would_conflict(
         &self,
         universe: &RepoUniverse,
         candidate: &ProviderRef,
+        cand_provenance: &DepProvenance,
     ) -> Result<Option<ConflictChain>, RepoError> {
         let Some(cand_pkg) = candidate.resolve(universe)? else {
             return Ok(None);
         };
+        // Need full packages with `conflicts` data loaded (the
+        // resolver's hot-path `load_package` skips files but keeps
+        // caps, so `cause.conflicts` is populated).
         for (pref, _nevra) in &self.pinned {
             let Some(p) = pref.resolve(universe)? else {
                 continue;
             };
-            if let Some(chain) = conflict_between(&cand_pkg, &p) {
+            let pinned_prov = self
+                .provenance
+                .get(p.nevra.name.as_ref())
+                .cloned()
+                .map(DepProvenance::from_chain)
+                .unwrap_or_else(DepProvenance::from_spec);
+            if let Some(chain) =
+                conflict_between(&cand_pkg, &p, cand_provenance.clone(), pinned_prov.clone())
+            {
                 return Ok(Some(chain));
             }
-            if let Some(chain) = conflict_between(&p, &cand_pkg) {
+            if let Some(chain) =
+                conflict_between(&p, &cand_pkg, pinned_prov, cand_provenance.clone())
+            {
                 return Ok(Some(chain));
             }
         }
@@ -199,12 +285,19 @@ impl SolverState {
     }
 }
 
-fn conflict_between(cause: &Package, victim: &Package) -> Option<ConflictChain> {
+fn conflict_between(
+    cause: &Package,
+    victim: &Package,
+    cause_provenance: DepProvenance,
+    victim_provenance: DepProvenance,
+) -> Option<ConflictChain> {
     for c in &cause.conflicts {
         if provides_satisfies(victim, c) {
             return Some(ConflictChain {
                 cause: cause.nevra.clone(),
+                cause_provenance,
                 victim: victim.nevra.clone(),
+                victim_provenance,
                 via_capability: c.name.clone(),
             });
         }
@@ -216,27 +309,24 @@ fn pick_provider(
     universe: &RepoUniverse,
     dep: &Dependency,
 ) -> Result<Option<ProviderRef>, RepoError> {
-    // Gather by-name first, then by-provides (insertion order matters
-    // for the deterministic-name tiebreak below).
-    let mut seen: HashSet<ProviderRef> = HashSet::new();
-    let mut candidates: Vec<ProviderRef> = Vec::new();
-    for r in universe.by_name(&dep.name)? {
-        if seen.insert(r.clone()) {
-            candidates.push(r);
-        }
-    }
-    for r in universe.provides_by_name(&dep.name)? {
-        if seen.insert(r.clone()) {
-            candidates.push(r);
-        }
-    }
+    // Combined `(pref, NEVRA)` candidate query — one round-trip per
+    // repo (was three: by_name + by_provides + per-candidate
+    // resolve_nevra). For file-path deps tack on the file owner.
+    // Shared with `lookup` via `gather_candidates` so the set
+    // definition can't drift between the two consumers.
+    let (candidates, file_path_dep) = gather_candidates(universe, dep)?;
 
     let mut best: Option<(i32, std::cmp::Reverse<EVR>, Arc<str>, ProviderRef)> = None;
-    for cand_ref in candidates {
-        let Some(pkg) = cand_ref.resolve(universe)? else {
-            continue;
+    for (cand_ref, nevra) in candidates {
+        // File-path deps were already proven via `file_owner`;
+        // other deps go through the hot-path `universe.satisfies`
+        // (one or two indexed SELECTs, no full `load_package`).
+        let satisfies = if file_path_dep {
+            true
+        } else {
+            universe.satisfies(&cand_ref, dep)?
         };
-        if !provides_satisfies(&pkg, dep) {
+        if !satisfies {
             continue;
         }
         let priority = universe
@@ -244,8 +334,8 @@ fn pick_provider(
             .unwrap_or(REPO_PRIORITY_FALLBACK);
         let key = (
             priority,
-            std::cmp::Reverse(pkg.nevra.evr()),
-            pkg.nevra.name.clone(),
+            std::cmp::Reverse(nevra.evr()),
+            nevra.name.clone(),
             cand_ref,
         );
         match &best {

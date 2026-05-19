@@ -122,11 +122,14 @@ fn sync_fixture_through_http_cache() {
     )
     .expect("write_snapshot");
     assert!(snap.join("manifest.json").exists());
-    assert!(snap.join("index.bincode").exists());
+    assert!(
+        snap.join(rpm_spec_repo_core::db::RepoDb::file_name()).exists(),
+        "repo.db should be present after write_snapshot"
+    );
 
-    // Reload from disk and compare package count.
-    let reloaded =
-        cache::try_load_snapshot(&dirs, &baseurl, &index.revision).expect("reload");
-    let reloaded = reloaded.expect("snapshot exists");
-    assert_eq!(reloaded.packages.len(), 3);
+    // Reload from disk and verify the SQLite mirror carries the same
+    // package count as the in-memory index.
+    let db_path = snap.join(rpm_spec_repo_core::db::RepoDb::file_name());
+    let reloaded = rpm_spec_repo_core::db::RepoDb::open(&db_path).expect("reopen repo.db");
+    assert_eq!(reloaded.package_count().expect("count"), 3);
 }

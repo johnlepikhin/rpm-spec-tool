@@ -15,12 +15,14 @@
 //! | `RPM-REPO-001`     | deny    | `BuildRequires:` atom has no provider in any configured repo       |
 //! | `RPM-REPO-002`     | warn    | `Requires:` atom has no provider in any configured repo            |
 //! | `RPM-REPO-003`     | warn    | `BuildRequires:` provider exists but version constraint unmet      |
+//! | `RPM-REPO-011`     | warn    | build script uses absolute tool path with no matching `BuildRequires` |
 
 pub mod br_unresolvable;
 pub mod br_version_unsatisfied;
+pub mod missing_br_for_file;
 pub mod runtime_unresolvable;
 
-mod shared;
+pub mod shared;
 
 // Test fixtures (`redos_profile()` + `tiny_universe()`) are exposed
 // publicly under a feature gate so the `tests/repo_lints_smoke.rs`

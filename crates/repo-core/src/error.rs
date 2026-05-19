@@ -44,13 +44,24 @@ pub enum RepoError {
     #[error("unsupported repo kind: {0}")]
     UnsupportedKind(String),
 
+    /// Free-form semantic database error: schema-version mismatch,
+    /// missing required `meta` rows, malformed payloads — anything
+    /// that isn't a raw rusqlite failure. The new [`Self::Sqlite`]
+    /// variant carries the underlying rusqlite error directly so
+    /// `anyhow`'s `.source()` chain stays intact.
     #[error("repo database: {0}")]
     Database(String),
+
+    #[error("SQLite error: {source}")]
+    Sqlite {
+        #[source]
+        source: rusqlite::Error,
+    },
 }
 
 impl From<rusqlite::Error> for RepoError {
-    fn from(e: rusqlite::Error) -> Self {
-        Self::Database(e.to_string())
+    fn from(source: rusqlite::Error) -> Self {
+        Self::Sqlite { source }
     }
 }
 

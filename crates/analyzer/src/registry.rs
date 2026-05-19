@@ -85,6 +85,7 @@ fn phase26_repo_aware() -> Vec<Box<dyn Lint>> {
         Box::new(rules::repo::br_unresolvable::BuildRequiresUnresolvable::new()),
         Box::new(rules::repo::runtime_unresolvable::RuntimeRequiresUnresolvable::new()),
         Box::new(rules::repo::br_version_unsatisfied::BuildRequiresVersionUnsatisfied::new()),
+        Box::new(rules::repo::missing_br_for_file::MissingBuildRequiresForFile::new()),
     ]
 }
 
@@ -568,7 +569,7 @@ mod tests {
     /// this when adding/removing rules.
     #[test]
     fn builtin_lints_contains_expected_count() {
-        assert_eq!(builtin_lints().len(), 236);
+        assert_eq!(builtin_lints().len(), 237);
     }
 
     /// Per-phase helpers must round-trip into the same vector
