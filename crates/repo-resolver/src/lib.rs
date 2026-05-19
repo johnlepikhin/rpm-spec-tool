@@ -13,13 +13,22 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
+// Narrow blanket: only `solver::{Solution,BuildrootClosure,SolveRequest}` and
+// `unsat::{ConflictChain,UnsatCore}` still carry undocumented public fields
+// (mirrors of the wire-level resolver output). New gaps outside that set
+// should be flagged at review time — promote individual items to `///` and
+// shrink the silenced surface as the backlog is worked down.
 #![expect(
     missing_docs,
-    reason = "pre-1.0: data shapes mirror RPM metadata format; doc backlog tracked separately"
+    reason = "pre-1.0: walker-output fields in solver.rs / unsat.rs are doc-backlogged; lookup.rs + predicates.rs already documented"
 )]
 
+pub mod lookup;
+pub mod predicates;
 pub mod solver;
 pub mod unsat;
 
+pub use lookup::{LookupOutcome, lookup};
+pub use predicates::{evr_matches, matches_flag, provides_satisfies};
 pub use solver::{BuildrootClosure, SolveRequest, Solution, solve};
 pub use unsat::{ConflictChain, UnsatCore};

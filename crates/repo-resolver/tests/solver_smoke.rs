@@ -66,7 +66,8 @@ fn universe(packages: Vec<Package>) -> RepoUniverse {
         packages,
         advisories: Vec::new(),
     };
-    RepoUniverse::build("test-profile", vec![Arc::new(index)])
+    RepoUniverse::from_indexes_for_tests("test-profile", vec![Arc::new(index)])
+        .expect("build in-memory test universe")
 }
 
 #[test]
@@ -107,7 +108,8 @@ fn happy_path_three_package_universe() {
         requirements: &req,
         base_packages: &[],
         implicit_brs: &[],
-    });
+    })
+    .expect("solver db query");
     match sol {
         Solution::Ok(closure) => {
             let names: Vec<&str> = closure.packages.iter().map(|n| n.name.as_ref()).collect();
@@ -144,7 +146,8 @@ fn unsatisfiable_when_provider_absent() {
         requirements: &req,
         base_packages: &[],
         implicit_brs: &[],
-    });
+    })
+    .expect("solver db query");
     match sol {
         Solution::Unsatisfiable(core) => {
             assert_eq!(core.unsatisfied.len(), 1);
@@ -184,7 +187,8 @@ fn conflict_chain_surfaces_when_two_packages_conflict() {
         requirements: &req,
         base_packages: &[],
         implicit_brs: &[],
-    });
+    })
+    .expect("solver db query");
     match sol {
         Solution::Unsatisfiable(core) => {
             assert!(

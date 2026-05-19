@@ -72,7 +72,20 @@ pub fn builtin_lints() -> Vec<Box<dyn Lint>> {
         .chain(phase25_shell_body_cleanup())
         .chain(phase25_subpackage_style())
         .chain(phase25_rich_dependency_algebra())
+        .chain(phase26_repo_aware())
         .collect()
+}
+
+// Repository-aware lints (RPM-REPO-*). Skip silently when the
+// active profile has no repos / no cached metadata; the CLI's
+// `matrix deps check` command surfaces a single one-time INFO note
+// in that case.
+fn phase26_repo_aware() -> Vec<Box<dyn Lint>> {
+    vec![
+        Box::new(rules::repo::br_unresolvable::BuildRequiresUnresolvable::new()),
+        Box::new(rules::repo::runtime_unresolvable::RuntimeRequiresUnresolvable::new()),
+        Box::new(rules::repo::br_version_unsatisfied::BuildRequiresVersionUnsatisfied::new()),
+    ]
 }
 
 // Phase 0 — proof-of-concept rules.
@@ -555,7 +568,7 @@ mod tests {
     /// this when adding/removing rules.
     #[test]
     fn builtin_lints_contains_expected_count() {
-        assert_eq!(builtin_lints().len(), 233);
+        assert_eq!(builtin_lints().len(), 236);
     }
 
     /// Per-phase helpers must round-trip into the same vector
@@ -602,6 +615,7 @@ mod tests {
             .chain(phase25_shell_body_cleanup())
             .chain(phase25_subpackage_style())
             .chain(phase25_rich_dependency_algebra())
+            .chain(phase26_repo_aware())
             .collect();
         assert_eq!(all.len(), by_phase.len());
         let all_ids: Vec<&str> = all.iter().map(|l| l.metadata().id).collect();

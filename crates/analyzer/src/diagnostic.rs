@@ -109,6 +109,53 @@ pub struct Label {
     pub message: String,
 }
 
+/// Optional repository attribution attached to a [`Diagnostic`].
+///
+/// Set by `RPM-REPO-*` rules so consumers (JSON / SARIF output,
+/// `matrix deps explain`, future LSP hovers) can answer "which
+/// profile and which repo produced this finding, and against which
+/// package version was it resolved?". Spec-only rules leave it
+/// `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct RepoContext {
+    /// Profile name as resolved by `rpm-spec-profile` — e.g.
+    /// `"redos-7.3-x86_64"`. Distinguishes per-profile differences
+    /// in matrix runs.
+    pub profile: String,
+    /// Repo id as configured in `[profiles.X.repos.<id>]`. `None`
+    /// when the finding does not attribute to any specific repo
+    /// (e.g. "no provider in any configured repo").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_id: Option<String>,
+    /// The package that satisfied / would have satisfied the
+    /// requirement, when one was found. `None` for unsat findings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nevra: Option<String>,
+}
+
+impl RepoContext {
+    pub fn for_profile(profile: impl Into<String>) -> Self {
+        Self {
+            profile: profile.into(),
+            repo_id: None,
+            nevra: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_repo(mut self, repo_id: impl Into<String>) -> Self {
+        self.repo_id = Some(repo_id.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_nevra(mut self, nevra: impl Into<String>) -> Self {
+        self.nevra = Some(nevra.into());
+        self
+    }
+}
+
 /// A finding emitted by a lint rule.
 ///
 /// `lint_id` is the stable identifier (`"RPM001"`); `lint_name` is the
@@ -123,6 +170,9 @@ pub struct Diagnostic {
     pub primary_span: Span,
     pub labels: Vec<Label>,
     pub suggestions: Vec<Suggestion>,
+    /// Repository attribution for `RPM-REPO-*` findings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_context: Option<RepoContext>,
 }
 
 impl Diagnostic {
@@ -140,7 +190,14 @@ impl Diagnostic {
             primary_span,
             labels: Vec::new(),
             suggestions: Vec::new(),
+            repo_context: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_repo_context(mut self, context: RepoContext) -> Self {
+        self.repo_context = Some(context);
+        self
     }
 
     #[must_use]

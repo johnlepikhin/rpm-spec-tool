@@ -326,6 +326,41 @@ impl LintSession {
         Self::from_config_with_profile(config, Profile::default())
     }
 
+    /// Like [`Self::from_config_with_profile`] but also forwards a
+    /// pre-assembled [`rpm_spec_repo_core::RepoUniverse`] to every
+    /// repo-aware rule via [`Lint::set_repo_universe`].
+    ///
+    /// Callers that don't have repo metadata loaded (no
+    /// `[profiles.X.repos.*]` configured, or cache miss in offline
+    /// mode) MUST still use [`Self::from_config_with_profile`] —
+    /// repo-aware rules then short-circuit silently. The CLI's
+    /// `matrix deps check` command surfaces a single one-time INFO
+    /// note when the universe is missing so the user knows why
+    /// RPM-REPO-* findings aren't appearing.
+    pub fn from_config_with_profile_and_universe(
+        config: &Config,
+        profile: Profile,
+        universe: Option<std::sync::Arc<rpm_spec_repo_core::RepoUniverse>>,
+    ) -> Self {
+        let mut session = Self::from_config_with_profile(config, profile);
+        session.set_repo_universe(universe);
+        session
+    }
+
+    /// Forward the given (optional) repo universe to every active
+    /// repo-aware rule. Idempotent — callers can pass `None` to
+    /// unset, or call multiple times if the cache is invalidated
+    /// between passes (matrix runs against multiple profiles
+    /// instantiate one session per profile).
+    pub fn set_repo_universe(
+        &mut self,
+        universe: Option<std::sync::Arc<rpm_spec_repo_core::RepoUniverse>>,
+    ) {
+        for ActiveLint { lint, .. } in &mut self.lints {
+            lint.set_repo_universe(universe.clone());
+        }
+    }
+
     /// Build a session bound to an explicit, pre-resolved profile.
     ///
     /// CLI front-ends use this entry point so the profile reflects user

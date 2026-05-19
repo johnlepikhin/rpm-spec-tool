@@ -287,6 +287,7 @@ mod tests {
             },
             labels: Vec::new(),
             suggestions: Vec::new(),
+            repo_context: None,
         }
     }
 

@@ -1,9 +1,20 @@
 //! Per-repo indexes and the assembled per-profile universe.
 //!
-//! [`RepoIndex`] holds one snapshot of one repository. [`RepoUniverse`]
-//! is the assembled view a resolver operates against: ordered list of
-//! [`RepoIndex`]es plus auxiliary lookup tables (Provides → providers,
-//! file → owner, reverse Requires).
+//! [`RepoIndex`] is the transient parser output (a `Vec<Package>` plus
+//! metadata) — it lives only between XML parsing and DB ingestion.
+//! Production lookups go through [`RepoUniverse`], which is backed by
+//! one [`crate::db::RepoDb`] per repository.
+//!
+//! ## Why DB-backed instead of in-RAM
+//!
+//! A real distribution profile (BaseOS + AppStream + Updates + a
+//! vendor repo) carries ~50–80k packages with millions of file paths.
+//! The previous in-RAM model peaked at 5+ GB resident on a single
+//! `matrix deps check` invocation because bincode loaded every
+//! capability + every file path as an independent allocation (no
+//! `Arc<str>` dedup). The SQLite backend trades a fixed page-cache
+//! budget (~64 MiB) for query latency that is still microseconds on
+//! the hot path because the relevant indexes stay resident.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -11,6 +22,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::db::RepoDb;
+use crate::error::RepoError;
 use crate::package::{NEVRA, Package};
 
 /// Stable identifier carried through indexes and provider references
@@ -35,11 +48,16 @@ pub struct RepoRevision {
     pub raw_bytes: Vec<u8>,
 }
 
-/// One parsed snapshot of one repository.
+/// One parsed snapshot of one repository. **Transient.**
 ///
-/// Like [`Package`](crate::package::Package), this is a leaf data
-/// shape constructed by backends in `rpm-spec-repo-metadata` and is
-/// intentionally not `#[non_exhaustive]`.
+/// Backends in `rpm-spec-repo-metadata` populate this struct directly
+/// from XML / pkglist parsing. The cache layer then writes it into
+/// a `repo.db` via [`crate::db::RepoDb::ingest_packages`] and drops
+/// the in-memory copy. After Phase 5 of the SQLite migration the
+/// bincode round-trip (`serialize` / `deserialize`) goes away
+/// entirely; the serde derives stay only to keep test fixtures
+/// trivially constructible and to keep the cache writer's signature
+/// stable while both code paths coexist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoIndex {
     pub repo_id: RepoId,
@@ -66,153 +84,221 @@ impl RepoIndex {
     }
 }
 
-/// Cross-package reference into a [`RepoUniverse`]. 8 bytes
-/// (`RepoId` is a clone of an `Arc<str>`, `pkg_idx` is a `u32`)
-/// avoids cloning whole [`Package`] structs in the providers /
-/// reverse-requires indexes.
-///
-/// `RepoId` is cloned as an `Arc` so cloning a `ProviderRef` is one
-/// atomic refcount bump.
+/// Cross-repo reference to one specific package row inside the DB
+/// behind a [`RepoUniverse`]. The repo id locates the right database
+/// and `pkg_id` is the row's `INTEGER PRIMARY KEY`. Cheap to clone
+/// (one Arc bump + an i64 copy).
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ProviderRef {
     pub repo_id: RepoId,
-    pub pkg_idx: u32,
+    pub pkg_id: i64,
 }
 
 impl ProviderRef {
-    /// Look up the referenced package in the universe. Returns `None`
-    /// if the universe doesn't contain the named repo (caller bug)
-    /// or the index is out of bounds (data corruption).
+    /// Materialise the referenced package by querying the universe's
+    /// backing database. Returns `Ok(None)` if the universe doesn't
+    /// contain the named repo (caller bug) or the row is missing
+    /// (data corruption).
     ///
-    /// Delegates to [`RepoUniverse::resolve`] for the O(1) lookup —
-    /// this method exists for ergonomic call-site syntax on
-    /// `pref.resolve(&universe)`.
-    #[must_use]
-    pub fn resolve<'u>(&self, universe: &'u RepoUniverse) -> Option<&'u Package> {
+    /// Each call hits SQLite — avoid in tight resolver loops where
+    /// only the NEVRA is needed; use [`RepoUniverse::resolve_nevra`]
+    /// for the cheap path.
+    pub fn resolve(&self, universe: &RepoUniverse) -> Result<Option<Package>, RepoError> {
         universe.resolve(self)
     }
 }
 
-/// Assembled per-profile package universe. Lookup tables are built
-/// once during [`RepoUniverse::build`] and shared via `Arc`. The
-/// universe itself is constructed in `rpm-spec-analyzer`'s
-/// `RepoSession` from a list of resolved [`RepoIndex`]es.
+/// Assembled per-profile package universe.
+///
+/// Holds one open [`RepoDb`] per repository, in priority order (lowest
+/// index = highest priority). All lookup tables are fronted by query
+/// methods rather than precomputed HashMaps — SQLite indexes back the
+/// equivalent of the old `provides_by_name` / `by_name` etc. fields,
+/// at a fraction of the RAM cost.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct RepoUniverse {
     pub profile_name: String,
-    /// Repos in priority order (ascending — lowest wins ties).
-    pub repos: Vec<Arc<RepoIndex>>,
-
-    /// Capability name → all providers across repos, sorted by
-    /// (priority asc, EVR desc, name lex). Resolver picks the head.
-    pub provides_by_name: HashMap<Arc<str>, Vec<ProviderRef>>,
-
-    /// Package name → packages with that name, for direct `Requires:
-    /// foo` lookups.
-    pub by_name: HashMap<Arc<str>, Vec<ProviderRef>>,
-
-    /// File path → owning package. Populated from filelists.xml
-    /// (rpm-md) or contents_index (apt-rpm). Empty when filelists
-    /// haven't been loaded yet — `repo sync` populates eagerly per
-    /// M1 decision.
-    pub file_owner: HashMap<Arc<str>, ProviderRef>,
-
-    /// Reverse Requires index: capability name → packages that
-    /// require it. Used by reverse-dep impact lints in P1.
-    pub reverse_requires: HashMap<Arc<str>, Vec<ProviderRef>>,
-
+    /// DBs in priority order (ascending — lowest index = highest priority).
+    pub dbs: Vec<RepoDb>,
     /// Snapshot ids per repo — recorded into the lockfile when the
     /// universe is locked.
     pub snapshot_ids: BTreeMap<RepoId, String>,
-
-    /// Index from repo id to slice position in `repos`. Built once by
-    /// `build()` so `ProviderRef::resolve` is O(1).
-    pub repo_by_id: HashMap<RepoId, usize>,
+    /// Index from repo id to position in `dbs`. Built once by the
+    /// constructor so `ProviderRef::resolve` is O(1) on the repo
+    /// dispatch step.
+    repo_by_id: HashMap<RepoId, usize>,
 }
 
 impl RepoUniverse {
-    /// Build a universe from a list of indexes, computing all lookup
-    /// tables. The caller is responsible for ordering `indexes` by
-    /// priority (the assembler in `rpm-spec-analyzer` sorts before
-    /// calling).
-    #[must_use]
-    pub fn build(profile_name: impl Into<String>, indexes: Vec<Arc<RepoIndex>>) -> Self {
-        let mut provides_by_name: HashMap<Arc<str>, Vec<ProviderRef>> = HashMap::new();
-        let mut by_name: HashMap<Arc<str>, Vec<ProviderRef>> = HashMap::new();
-        let mut file_owner: HashMap<Arc<str>, ProviderRef> = HashMap::new();
-        let mut reverse_requires: HashMap<Arc<str>, Vec<ProviderRef>> = HashMap::new();
+    /// Build a universe from a list of opened DBs. Caller orders by
+    /// priority. Reads the `meta` rows of each DB once to populate
+    /// the snapshot id map.
+    pub fn from_dbs(
+        profile_name: impl Into<String>,
+        dbs: Vec<RepoDb>,
+    ) -> Result<Self, RepoError> {
         let mut snapshot_ids: BTreeMap<RepoId, String> = BTreeMap::new();
-
-        for idx in &indexes {
-            snapshot_ids.insert(idx.repo_id.clone(), idx.revision.clone());
-
-            for (i, pkg) in idx.packages.iter().enumerate() {
-                let pref = ProviderRef {
-                    repo_id: idx.repo_id.clone(),
-                    pkg_idx: u32::try_from(i).expect("repo index < 4 billion packages"),
-                };
-
-                by_name
-                    .entry(pkg.nevra.name.clone())
-                    .or_default()
-                    .push(pref.clone());
-
-                for prov in &pkg.provides {
-                    provides_by_name
-                        .entry(prov.name.clone())
-                        .or_default()
-                        .push(pref.clone());
-                }
-
-                for req in &pkg.requires {
-                    reverse_requires
-                        .entry(req.name.clone())
-                        .or_default()
-                        .push(pref.clone());
-                }
-
-                for f in &pkg.files {
-                    // First writer wins; conflict-detection lints
-                    // (RPM-REPO-020 / RPM-REPO-071) scan the raw
-                    // packages later. The owner map answers
-                    // "which package owns /usr/bin/X" — for the rare
-                    // multi-owner case higher-priority repo is
-                    // canonical, matching dnf.
-                    file_owner.entry(f.clone()).or_insert_with(|| pref.clone());
-                }
-            }
+        let mut repo_by_id: HashMap<RepoId, usize> = HashMap::new();
+        for (i, db) in dbs.iter().enumerate() {
+            let id = db.repo_id()?;
+            let rev = db.revision()?;
+            snapshot_ids.insert(id.clone(), rev);
+            repo_by_id.insert(id, i);
         }
-
-        let repo_by_id: HashMap<RepoId, usize> = indexes
-            .iter()
-            .enumerate()
-            .map(|(i, idx)| (idx.repo_id.clone(), i))
-            .collect();
-
-        Self {
+        Ok(Self {
             profile_name: profile_name.into(),
-            repos: indexes,
-            provides_by_name,
-            by_name,
-            file_owner,
-            reverse_requires,
+            dbs,
             snapshot_ids,
             repo_by_id,
+        })
+    }
+
+    /// Test-only helper: build a universe from in-memory
+    /// [`RepoIndex`] values by ingesting each into a fresh
+    /// `:memory:` SQLite database. Used by every test fixture in
+    /// the analyzer + resolver crates that wants to hand-craft a
+    /// tiny universe without touching the filesystem.
+    ///
+    /// Production code paths must use [`Self::from_dbs`] with
+    /// disk-backed [`RepoDb`]s (the cache layer does the open).
+    pub fn from_indexes_for_tests(
+        profile_name: impl Into<String>,
+        indexes: Vec<Arc<RepoIndex>>,
+    ) -> Result<Self, RepoError> {
+        let mut dbs = Vec::with_capacity(indexes.len());
+        for idx in indexes {
+            let mut db = RepoDb::create_in_memory(
+                &idx.repo_id,
+                &idx.revision,
+                idx.fetched_at,
+                "rpm-md",
+                "test-fixture",
+            )?;
+            db.ingest_packages(&idx.packages)?;
+            dbs.push(db);
+        }
+        Self::from_dbs(profile_name, dbs)
+    }
+
+    /// Total package count across all repos. Issues one COUNT per
+    /// repo (cheap thanks to the rowid index).
+    pub fn package_count(&self) -> Result<u64, RepoError> {
+        let mut n = 0;
+        for db in &self.dbs {
+            n += db.package_count()?;
+        }
+        Ok(n)
+    }
+
+    /// All packages whose own NAME matches `name`. Used by the
+    /// resolver when a `Requires: foo` names a package directly.
+    pub fn by_name(&self, name: &str) -> Result<Vec<ProviderRef>, RepoError> {
+        let mut out = Vec::new();
+        for db in &self.dbs {
+            let repo_id = db.repo_id()?;
+            for pkg_id in db.pkg_ids_by_name(name)? {
+                out.push(ProviderRef {
+                    repo_id: repo_id.clone(),
+                    pkg_id,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// All packages whose `Provides:` includes `name` (virtual
+    /// capabilities like `pkgconfig(foo)`).
+    pub fn provides_by_name(&self, name: &str) -> Result<Vec<ProviderRef>, RepoError> {
+        let mut out = Vec::new();
+        for db in &self.dbs {
+            let repo_id = db.repo_id()?;
+            for pkg_id in db.pkg_ids_providing(name)? {
+                out.push(ProviderRef {
+                    repo_id: repo_id.clone(),
+                    pkg_id,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Owner of a path. Returns `Ok(None)` if no repo claims the
+    /// file. Priority-aware: the first (lowest-priority-index) repo
+    /// to report ownership wins, matching dnf's resolution.
+    pub fn file_owner(&self, path: &str) -> Result<Option<ProviderRef>, RepoError> {
+        for db in &self.dbs {
+            if let Some(pkg_id) = db.file_owner(path)? {
+                return Ok(Some(ProviderRef {
+                    repo_id: db.repo_id()?,
+                    pkg_id,
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Reverse-requires lookup: packages that require capability
+    /// `name`. Used by P1 reverse-dep impact lints.
+    pub fn reverse_requires(&self, name: &str) -> Result<Vec<ProviderRef>, RepoError> {
+        let mut out = Vec::new();
+        for db in &self.dbs {
+            let repo_id = db.repo_id()?;
+            for pkg_id in db.pkg_ids_requiring(name)? {
+                out.push(ProviderRef {
+                    repo_id: repo_id.clone(),
+                    pkg_id,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Materialise the full [`Package`] referenced by `pref`. Issues
+    /// one SELECT per join (package header + caps + files). Returns
+    /// `Ok(None)` if the repo id isn't in this universe or the row
+    /// is missing — both are silent-skip conditions for callers that
+    /// merely want to iterate candidates.
+    pub fn resolve(&self, pref: &ProviderRef) -> Result<Option<Package>, RepoError> {
+        let Some(idx) = self.repo_by_id.get(&pref.repo_id).copied() else {
+            return Ok(None);
+        };
+        match self.dbs[idx].load_package(pref.pkg_id) {
+            Ok(p) => Ok(Some(p)),
+            Err(RepoError::Database(_)) => Ok(None),
+            Err(e) => Err(e),
         }
     }
 
-    /// Total package count across all indexed repos. Cheap.
-    #[must_use]
-    pub fn package_count(&self) -> usize {
-        self.repos.iter().map(|i| i.packages.len()).sum()
+    /// Cheap NEVRA-only resolve. Suitable for hot loops where the
+    /// resolver only needs the (name, version) tuple to construct a
+    /// `Candidate` (avoids loading caps + files for every candidate).
+    pub fn resolve_nevra(&self, pref: &ProviderRef) -> Result<Option<NEVRA>, RepoError> {
+        let Some(idx) = self.repo_by_id.get(&pref.repo_id).copied() else {
+            return Ok(None);
+        };
+        match self.dbs[idx].load_nevra(pref.pkg_id) {
+            Ok(n) => Ok(Some(n)),
+            Err(RepoError::Database(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
-    /// O(1) lookup of a package by its [`ProviderRef`].
-    #[must_use]
-    pub fn resolve(&self, pref: &ProviderRef) -> Option<&Package> {
-        let i = self.repo_by_id.get(&pref.repo_id).copied()?;
-        self.repos.get(i)?.packages.get(pref.pkg_idx as usize)
+    /// Locate the DB for `repo_id` (priority-index lookup). Used by
+    /// helpers that need direct DB access (e.g. to load `Provides:`
+    /// rows for the satisfies check).
+    pub fn db_for(&self, repo_id: &RepoId) -> Option<&RepoDb> {
+        let idx = self.repo_by_id.get(repo_id).copied()?;
+        self.dbs.get(idx)
+    }
+
+    /// Repo priority index — lower is better. Returns `None` for
+    /// repos not present in this universe (typically a stale
+    /// reference). Replaces the standalone `build_priority_map`
+    /// helper.
+    pub fn priority_of(&self, repo_id: &RepoId) -> Option<i32> {
+        let i = self.repo_by_id.get(repo_id).copied()?;
+        i32::try_from(i).ok()
     }
 }
 

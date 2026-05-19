@@ -14,8 +14,10 @@ keywords      = ["rpm", "spec", "linter", "static-analysis", "linux"]
 categories    = ["development-tools", "parser-implementations"]
 
 [dependencies]
-rpm-spec.workspace         = true
-rpm-spec-profile.workspace = true
+rpm-spec.workspace             = true
+rpm-spec-profile.workspace     = true
+rpm-spec-repo-core.workspace   = true
+rpm-spec-repo-resolver.workspace = true
 schemars.workspace   = true
 serde.workspace      = true
 serde_json.workspace = true
@@ -27,7 +29,21 @@ time.workspace       = true
 [dev-dependencies]
 tempfile = "3"
 
+[features]
+# Exposes `crate::rules::repo::test_fixtures` (tiny RepoUniverse +
+# `redos_profile()`) as a public module so analyzer integration tests
+# can share fixtures with unit tests. Enabled automatically for the
+# `repo_lints_smoke` integration test via `required-features`.
+test-fixtures = []
+
+[[test]]
+name = "repo_lints_smoke"
+required-features = ["test-fixtures"]
+
+# Explicit empty feature list — must NOT use `all-features = true` because
+# that would enable `test-fixtures`, exposing `rules::repo::test_fixtures`
+# (an internal test-only module) as public API on docs.rs.
 [package.metadata.docs.rs]
-all-features = true
+features = []
 rustdoc-args = ["--cfg", "docsrs"]
 

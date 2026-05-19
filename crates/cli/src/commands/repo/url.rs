@@ -41,7 +41,7 @@ fn validate_placeholder_value(name: &str, value: &str) -> Result<(), String> {
 ///
 /// Returned as `Result<String, String>` so unknown placeholders are
 /// surfaced as user-fixable errors rather than `io::Error`.
-pub(super) fn interpolate_url(url: &str, profile: &Profile) -> Result<String, String> {
+pub(crate) fn interpolate_url(url: &str, profile: &Profile) -> Result<String, String> {
     let basearch = profile.arch.build_arch.as_deref().unwrap_or("");
     // RPM convention: $arch == $basearch (no override exposed in M1).
     let arch = basearch;

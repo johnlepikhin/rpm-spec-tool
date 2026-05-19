@@ -119,4 +119,27 @@ pub trait Lint: for<'ast> Visit<'ast> + Send {
     fn applies_to_profile(&self, _profile: &Profile) -> bool {
         true
     }
+
+    /// Called once with the assembled repository universe for the
+    /// active profile, or `None` when no repos are configured /
+    /// cached / loadable. Rules in the `RPM-REPO-*` namespace store
+    /// the `Arc` here for use during their visit pass; rules that
+    /// don't care about repository data ignore the hook (default
+    /// no-op).
+    ///
+    /// `Some(universe)` — repos are configured for the active profile
+    /// and at least one snapshot loaded successfully. `None` — no
+    /// repos configured, all snapshots cache-missed in offline mode,
+    /// or the caller (CLI / tests) chose to skip universe loading.
+    /// Repo-aware rules must short-circuit silently on `None`; the
+    /// CLI surfaces a single one-time INFO note so the user knows
+    /// why `RPM-REPO-*` findings aren't appearing.
+    ///
+    /// The universe is shared via `Arc` so multiple rules in the
+    /// same session see the same indexes without rebuilding — see
+    /// [`crate::session::LintSession::from_config_with_profile_and_universe`]
+    /// for construction.
+    fn set_repo_universe(&mut self, universe: Option<std::sync::Arc<rpm_spec_repo_core::RepoUniverse>>) {
+        let _ = universe;
+    }
 }

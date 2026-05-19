@@ -22,6 +22,7 @@ pub mod check;
 pub mod classes;
 pub mod coverage;
 pub(crate) mod coverage_style;
+pub mod deps;
 pub mod diff;
 pub mod expand;
 pub mod explain;
@@ -319,6 +320,24 @@ pub enum Action {
     /// single spec. PR-review workflow: "this commit touches
     /// foo.spec — which platforms moved and how?".
     Impact(impact::ImpactOpts),
+    /// Repository-aware lint pass: for each spec × profile in the
+    /// target set, check that every `BuildRequires:` / `Requires:`
+    /// atom resolves against the cached repo metadata. Reports
+    /// RPM-REPO-001 (no provider), RPM-REPO-002 (no runtime
+    /// provider), RPM-REPO-003 (version constraint unmet).
+    Deps(DepsCmd),
+}
+
+#[derive(Debug, Args)]
+pub struct DepsCmd {
+    #[command(subcommand)]
+    pub action: DepsAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DepsAction {
+    /// Check BuildRequires/Requires resolvability against the cache.
+    Check(deps::DepsOpts),
 }
 
 impl Cmd {
@@ -336,6 +355,9 @@ impl Cmd {
             Action::Diff(opts) => diff::run(opts, self.config.as_deref(), color),
             Action::Classes(opts) => classes::run(opts, self.config.as_deref(), color),
             Action::Impact(opts) => impact::run(opts, self.config.as_deref(), color),
+            Action::Deps(cmd) => match cmd.action {
+                DepsAction::Check(opts) => deps::run(opts, self.config.as_deref(), color),
+            },
         }
     }
 }

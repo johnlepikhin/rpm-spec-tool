@@ -1,6 +1,12 @@
 //! Built-in lint rules. Add new ones here and register them in
 //! [`crate::registry::builtin_lints`].
 
+// NOTE: `EXPAND_DEPTH = 8` is the conventional macro-expansion cap used by
+// branch_coverage, files/classifier, macro_composition_to_specific. The
+// RPM-REPO-* rules use `MACRO_EXPAND_DEPTH` for self-documentation. Both
+// equal 8; consolidate into a single `rpm_spec_profile` const if a third
+// naming emerges.
+
 pub mod empty_description;
 pub mod missing_changelog;
 
@@ -246,6 +252,12 @@ pub mod richdep_idempotent;
 pub mod richdep_nested_flatten;
 pub mod richdep_same_then_else;
 pub mod richdep_singleton;
+
+// Repository-aware lints (RPM-REPO-*). Consume the `RepoUniverse`
+// provided by the CLI / analyzer session and emit findings only when
+// at least one configured repo's metadata is cached. See
+// `repo/mod.rs` for the rule reference table.
+pub mod repo;
 
 mod util;
 

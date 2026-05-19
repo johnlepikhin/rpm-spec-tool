@@ -49,7 +49,10 @@ where
 
 /// Variant of [`run_lint`] for config-aware rules — calls
 /// `set_config` between construction and the visit pass.
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "helper kept available for future config-aware rule tests; not all rules read Config"
+)]
 pub(crate) fn run_lint_with_config<L>(src: &str, config: &Config) -> Vec<Diagnostic>
 where
     L: Default + Lint,
@@ -58,6 +61,28 @@ where
     let mut lint = L::default();
     lint.set_source(Arc::from(src));
     lint.set_config(config);
+    lint.visit_spec(&outcome.spec);
+    lint.take_diagnostics()
+}
+
+/// Variant for repo-aware rules — calls `set_profile`,
+/// `set_repo_universe`, then visits. Used by RPM-REPO-001/002/003
+/// tests. `profile` is the active distribution profile;
+/// `universe` is the assembled repository universe (typically
+/// constructed inline from a `tiny-*` fixture).
+pub(crate) fn run_repo_lint<L>(
+    src: &str,
+    profile: &Profile,
+    universe: Arc<rpm_spec_repo_core::RepoUniverse>,
+) -> Vec<Diagnostic>
+where
+    L: Default + Lint,
+{
+    let outcome = parse(src);
+    let mut lint = L::default();
+    lint.set_source(Arc::from(src));
+    lint.set_profile(profile);
+    lint.set_repo_universe(Some(universe));
     lint.visit_spec(&outcome.spec);
     lint.take_diagnostics()
 }
