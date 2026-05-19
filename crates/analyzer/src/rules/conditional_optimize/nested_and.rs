@@ -211,7 +211,7 @@ fn inner_branch_safe<B>(inner: &Conditional<Span, B>) -> bool {
 /// `"%{foo}"` at evaluation time, so an unconditional reference inside
 /// quotes is just as dangerous as outside.
 fn expr_ast_safe_to_merge<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
-    use rpm_spec::ast::ExprAst;
+    use rpm_spec::ast::{ConcatPart, ExprAst};
     match ast {
         ExprAst::Integer { .. } | ExprAst::Identifier { .. } => true,
         ExprAst::String { value, .. } => inner_expr_safe_to_merge(value),
@@ -220,6 +220,16 @@ fn expr_ast_safe_to_merge<T>(ast: &rpm_spec::ast::ExprAst<T>) -> bool {
         ExprAst::Binary { lhs, rhs, .. } => {
             expr_ast_safe_to_merge(lhs) && expr_ast_safe_to_merge(rhs)
         }
+        // `0%{?foo}` and friends: every macro part must use a
+        // conditional reference (`%{?…}`/`%{!?…}`). Literal parts
+        // (the bare `0` prefix) are always safe. Reuses the same
+        // text-level scanner as the Raw/String paths so the policy
+        // stays in one place.
+        ExprAst::NumericConcat { parts, .. } => parts.iter().all(|p| match p {
+            ConcatPart::Literal { .. } => true,
+            ConcatPart::Macro { text, .. } => inner_expr_safe_to_merge(text),
+            _ => false,
+        }),
         _ => false,
     }
 }

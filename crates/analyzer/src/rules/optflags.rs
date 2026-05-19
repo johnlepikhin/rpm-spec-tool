@@ -140,7 +140,7 @@ impl<'ast> Visit<'ast> for OptflagsOverridden {
     }
 }
 
-fn first_override(body: &ShellBody, section_span: Span) -> Option<Diagnostic> {
+fn first_override(body: &ShellBody<Span>, section_span: Span) -> Option<Diagnostic> {
     for line in &body.lines {
         let Some(lit) = line.literal_str() else {
             continue;

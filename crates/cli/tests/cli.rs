@@ -4148,7 +4148,7 @@ B
 
     #[test]
     fn explain_json_line_indeterminate_reasons_shape() {
-        // `%if 0%{?rhel} >= 8` lands in the arithmetic-Raw path of
+        // `%if 1 + 2 == 3` lands in the arithmetic-Raw path of
         // the evaluator → produces an `indeterminate_on` entry with
         // a populated `indeterminate_reasons` map. Exercises the
         // BTreeMap-as-object serialization shape that the explain
@@ -4160,7 +4160,7 @@ Release: 1
 Summary: Test
 License: MIT
 
-%if 0%{?rhel} >= 8
+%if 1 + 2 == 3
 BuildRequires: rhel-only
 %endif
 
@@ -5174,7 +5174,7 @@ BuildRequires: gcc
 
     #[test]
     fn classes_indeterminate_branch_skip_drops_dep() {
-        // Arithmetic Raw `%if 0%{?rhel} >= 8` is Indeterminate under
+        // Arithmetic Raw `%if 1 + 2 == 3` is Indeterminate under
         // Skip policy → BR inside contributes to neither class →
         // profiles with that arithmetic see no extra dep. Two
         // profiles where the indeterminate branch is the only
@@ -5187,7 +5187,7 @@ Summary: t
 License: MIT
 BuildRequires: gcc
 
-%if 0%{?rhel} >= 8
+%if 1 + 2 == 3
 BuildRequires: maybe-rhel
 %endif
 
@@ -5352,7 +5352,7 @@ Release: 1
 Summary: t
 License: MIT
 
-%if 0%{?rhel} >= 8
+%if 1 + 2 == 3
 BuildRequires: gcc
 %endif
 
@@ -5390,6 +5390,69 @@ B
                 .as_str()
                 .is_some_and(|s| !s.is_empty()),
             "expected non-empty indeterminate_reason; got {branch}"
+        );
+    }
+
+    #[test]
+    fn expand_handles_zero_prefix_macro_or_chain() {
+        // Regression: the `0%{?distro}` "safe defined" idiom was
+        // previously dropped into the Raw fallback and rendered as
+        // `[INDETERMINATE: not analysed: arithmetic in Raw condition
+        // requires Parsed CondExpr]`. After teaching the expr parser
+        // to fuse `0` + `%{?…}` into a single `NumericConcat` primary
+        // term, the evaluator decides the condition concretely on
+        // each profile.
+        const SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+
+%if 0%{?el8} || 0%{?el9} || 0%{?el10} || 0%{?redos_version} >= 800
+BuildRequires: pinned
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "rhel-9-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        // The condition resolves on rhel-9 (which has `%rhel` defined
+        // but not `%el8`/`%el9`/...; the relational compare against
+        // `redos_version` is false on a non-RED-OS profile). Crucially
+        // the line MUST NOT contain the "arithmetic in Raw" reason —
+        // that was the regression we're guarding against.
+        assert!(
+            !stdout.contains("arithmetic in Raw"),
+            "expand must not surface `arithmetic in Raw` for `0%{{?distro}}` chain; \
+             got:\n{stdout}"
+        );
+        // And every branch directive line is tagged with one of the
+        // structural verdicts.
+        assert!(
+            stdout.contains("[ACTIVE]")
+                || stdout.contains("[INACTIVE]")
+                || stdout.contains("[INDETERMINATE:"),
+            "expected at least one branch verdict tag in:\n{stdout}"
         );
     }
 
@@ -5556,6 +5619,115 @@ B
     }
 
     #[test]
+    fn expand_marks_nested_inactive_when_ancestor_inactive() {
+        // Outer %if 0 is INACTIVE → inner %if 1 (which would be ACTIVE on
+        // its own) must be displayed as [INACTIVE: nested] because the
+        // ancestor block doesn't execute. Regression test for
+        // ancestor-inactive suppression in `render_human::ancestor_inactive`.
+        const SPEC: &str = "\
+Name: x
+Version: 1
+Release: 1
+Summary: t
+License: MIT
+
+%if 0
+  %if 1
+    echo skipped
+  %endif
+%endif
+
+%description
+B
+%files
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--color",
+                "never",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        assert!(
+            stdout.contains("[INACTIVE: nested]"),
+            "expected nested-inactive tag in:\n{stdout}"
+        );
+        // The inner %if 1 line MUST NOT be tagged [ACTIVE] (would be wrong:
+        // the outer %if 0 suppresses the whole block at build time).
+        let active_count = stdout.matches("[ACTIVE]").count();
+        assert_eq!(
+            active_count, 0,
+            "no [ACTIVE] tags allowed when ancestors inactive; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn expand_color_never_strips_ansi() {
+        // `--color never` must produce ANSI-free output even on a TTY.
+        // Pipe-captured stdout already disables `auto`, but the flag
+        // must hard-override regardless.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPAND_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "rhel-9-x86_64",
+                "--color",
+                "never",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        assert!(
+            !stdout.contains('\x1b'),
+            "--color never must not emit ANSI escapes; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn expand_color_always_emits_orange_for_inactive() {
+        // `--color always` must paint `[INACTIVE]` with the xterm-256
+        // orange escape (index 208, bold). Pins the palette so a
+        // refactor that swaps the colour surfaces here.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, EXPAND_SPEC).expect("write spec");
+        let (rc, stdout, _) = run(
+            &[
+                "matrix",
+                "expand",
+                "--profiles",
+                "altlinux-10-x86_64",
+                "--color",
+                "always",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0);
+        assert!(
+            stdout.contains("\x1b[1;38;5;208m"),
+            "--color always must emit bold orange (xterm-256 idx 208) for [INACTIVE]; got:\n{stdout}"
+        );
+    }
+
+    #[test]
     fn expand_surfaces_parser_diagnostics_for_broken_spec() {
         const BROKEN: &str = "\
 Name:    foo
@@ -5688,8 +5860,12 @@ B
         assert_eq!(v["profile_b"], "altlinux-10-x86_64");
         assert!(v["path"].as_str().is_some_and(|p| p.ends_with("foo.spec")));
         let groups = v["groups"].as_array().expect("groups");
-        // Two compared tags: BuildRequires + Requires.
-        assert_eq!(groups.len(), 2);
+        // All 11 dep-bearing preamble tags (BuildRequires, Requires,
+        // Provides, Conflicts, Obsoletes, Recommends, Suggests,
+        // Supplements, Enhances, BuildConflicts, OrderWithRequires)
+        // are surfaced in JSON — extending `COMPARED_TAGS` is a wire-
+        // format change so the count is pinned explicitly here.
+        assert_eq!(groups.len(), 11, "expected 11 dep tag groups; got {}", groups.len());
         // Per-group keys must use exactly these `snake_case` names.
         for g in groups {
             let obj = g.as_object().expect("group is object");
@@ -5710,6 +5886,24 @@ B
         assert!(common.contains(&"make"));
         // Second group is Requires.
         assert_eq!(groups[1]["tag"], "Requires");
+        // Spot-check the rest of the tag order matches `COMPARED_TAGS`.
+        let labels: Vec<&str> = groups.iter().map(|g| g["tag"].as_str().unwrap()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "BuildRequires",
+                "Requires",
+                "Provides",
+                "Conflicts",
+                "Obsoletes",
+                "Recommends",
+                "Suggests",
+                "Supplements",
+                "Enhances",
+                "BuildConflicts",
+                "OrderWithRequires",
+            ]
+        );
     }
 
     #[test]
@@ -5859,7 +6053,7 @@ B
 
     #[test]
     fn diff_skip_policy_drops_indeterminate_branch_deps() {
-        // Arithmetic Raw `%if 0%{?rhel} >= 8` → Indeterminate. Under
+        // Arithmetic Raw `%if 1 + 2 == 3` → Indeterminate. Under
         // the Skip policy that diff uses, the BR inside is hidden on
         // both profiles → it appears in neither bucket, NOT in
         // only-A or only-B. Documents the conservative semantic.
@@ -5871,7 +6065,7 @@ Summary: t
 License: MIT
 BuildRequires: outside
 
-%if 0%{?rhel} >= 8
+%if 1 + 2 == 3
 BuildRequires: maybe-rhel
 %endif
 
@@ -5956,6 +6150,159 @@ BuildRequires: gcc
             stderr.contains("parser diagnostic") || stderr.contains("recovered AST"),
             "expected parser-diagnostic banner; got stderr={stderr:?}"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Universal dep-tag coverage: all 11 dep-bearing preamble tags are
+    // diffed, not just BuildRequires/Requires. Empty-diff groups are
+    // hidden by default.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn diff_reports_provides_difference() {
+        // Regression: `Provides` (and the other dep tags beyond
+        // BR/Requires) must surface in the diff. Previously the
+        // `Provides:` divergence below would have been silently
+        // omitted, leaving the operator to wrongly assume the two
+        // profiles produced identical metadata.
+        const PROVIDES_SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+%if 0%{?rhel}
+Provides: rhel-flavoured-name
+%else
+Provides: generic-flavoured-name
+%endif
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, PROVIDES_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "diff must succeed; stderr={stderr}");
+        assert!(
+            stdout.contains("Provides"),
+            "expected `Provides` section header; got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("only rhel-9-x86_64 (1): rhel-flavoured-name"),
+            "expected rhel-only Provides line; got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("only altlinux-10-x86_64 (1): generic-flavoured-name"),
+            "expected alt-only Provides line; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn diff_message_when_no_diff_at_all() {
+        // Identical-output spec on the two profiles: every tag
+        // collapses to common-only. Default behaviour hides every
+        // group AND surfaces a friendly "(no differences)" line so
+        // the operator distinguishes "no diff" from "renderer crashed
+        // silently".
+        const SAME_SPEC: &str = "\
+Name:    foo
+Version: 1.0
+Release: 1
+Summary: t
+License: MIT
+BuildRequires: gcc
+
+%description
+B
+
+%files
+
+%changelog
+* Mon Jan 01 2024 a <a@b> - 1.0-1
+- init
+";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, SAME_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "diff must succeed; stderr={stderr}");
+        assert!(
+            stdout.contains("(no differences"),
+            "expected `(no differences …)` fallback line; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn diff_hides_completely_empty_dep_groups_by_default() {
+        // Regression: prior to this fix, `Recommends`, `Suggests`,
+        // `Supplements`, etc. always appeared in human output with
+        // 3× "(none)" lines even when the spec uses neither tag.
+        // Now: groups with empty common AND empty only_a/only_b are
+        // omitted at the default verbosity, and groups whose only
+        // contents are `common` entries are silenced too — the
+        // operator running `diff` cares about divergence, not
+        // inventory.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, DIFF_SPEC).expect("write spec");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "diff",
+                "--profiles",
+                "rhel-9-x86_64,altlinux-10-x86_64",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "diff must succeed; stderr={stderr}");
+        // DIFF_SPEC uses only BuildRequires + Requires. Every other
+        // dep tag has nothing on either side ⇒ must be hidden.
+        for hidden in [
+            "Provides",
+            "Conflicts",
+            "Obsoletes",
+            "Recommends",
+            "Suggests",
+            "Supplements",
+            "Enhances",
+            "BuildConflicts",
+            "OrderWithRequires",
+        ] {
+            assert!(
+                !stdout.contains(hidden),
+                "{hidden} is empty on both profiles → must be hidden by default; got:\n{stdout}"
+            );
+        }
+        // Sanity: the non-empty groups DO appear.
+        assert!(stdout.contains("BuildRequires"));
+        assert!(stdout.contains("Requires"));
     }
 }
 
@@ -6998,6 +7345,256 @@ B
         assert!(
             recorded.contains("show"),
             "stub trace missing `show`; got:\n{recorded}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // `--to` defaults to working tree (uncommitted changes on disk)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn impact_to_worktree_picks_up_uncommitted_changes() {
+        // PR-review primary workflow: edit the spec on disk, leave it
+        // uncommitted, run `matrix impact --from main`. The added dep
+        // must surface — previously this required an extra
+        // commit/amend cycle because `--to` defaulted to `HEAD` which
+        // ignores the worktree.
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_init(dir.path());
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BASE_SPEC).expect("write initial spec");
+        git_commit_all(dir.path(), "initial");
+        let from_sha = head_sha(dir.path());
+        // Modify on disk *without* committing — this is the case the
+        // old CLI couldn't handle.
+        let to_spec = BASE_SPEC.replace(
+            "BuildRequires:  make\n",
+            "BuildRequires:  make\nBuildRequires:  cmake\n",
+        );
+        std::fs::write(&spec, &to_spec).expect("write uncommitted edit");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--from",
+                &from_sha,
+                // No `--to` — default is working tree.
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}\nstdout={stdout}");
+        assert!(
+            stdout.contains("cmake"),
+            "uncommitted `cmake` BuildRequires must surface in impact; got:\n{stdout}"
+        );
+        // Header should reflect the worktree-mode label.
+        assert!(
+            stdout.contains("worktree"),
+            "expected `worktree` in header when `--to` omitted; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn impact_explicit_to_head_still_reads_git() {
+        // Backwards compat: passing `--to HEAD` explicitly must read
+        // the committed tip, NOT the worktree. The uncommitted edit
+        // below adds `cmake`, but `--to HEAD` should report no change.
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_init(dir.path());
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BASE_SPEC).expect("write initial spec");
+        git_commit_all(dir.path(), "initial");
+        let from_sha = head_sha(dir.path());
+        // Uncommitted edit on disk — must be ignored when `--to HEAD`
+        // is explicit.
+        let dirty = BASE_SPEC.replace(
+            "BuildRequires:  make\n",
+            "BuildRequires:  make\nBuildRequires:  cmake\n",
+        );
+        std::fs::write(&spec, &dirty).expect("write uncommitted edit");
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                &from_sha,
+                "--to",
+                "HEAD",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}\nstdout={stdout}");
+        assert!(
+            stdout.contains("no change"),
+            "explicit `--to HEAD` must ignore worktree edits; got:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains("cmake"),
+            "explicit `--to HEAD` must NOT pick up uncommitted `cmake`; got:\n{stdout}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Script-section body diff: %install/%build/%changelog/etc. changes
+    // surface even when no preamble dep moved.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn impact_install_body_change_surfaces_as_script_section() {
+        // Regression: previously a `%install` body change (e.g. adding
+        // a `--with-llvm` configure flag) reported "no change" because
+        // impact compared only preamble dep tags. Now the script-body
+        // diff catches it.
+        let to_spec = BASE_SPEC.replace(
+            "%description\n",
+            "make install\n\n%description\n",
+        )
+        .replace(
+            "%files\n",
+            "%install\nmake install\n\n%files\n",
+        );
+        let (_dir, spec, from, to) = two_commit_repo(BASE_SPEC, &to_spec);
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                &from,
+                "--to",
+                &to,
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}\nstdout={stdout}");
+        // Per-profile script-section line appears under the profile's
+        // own block, after any preamble-dep rows. Pin the substring
+        // exactly so the renderer's column shape is part of the
+        // contract.
+        assert!(
+            stdout.contains("%install: +1"),
+            "expected `%install: +1` (the added `make install` line) under a profile; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn impact_changelog_entry_surfaces_as_script_section() {
+        // Adding a new `%changelog` entry must surface — most PRs do
+        // this and operators want confirmation the entry was added.
+        let from_spec = BASE_SPEC;
+        let to_spec = BASE_SPEC.replace(
+            "- init\n",
+            "- init\n\n* Tue May 19 2026 t <t@e.invalid> - 1.0-2\n- bump\n",
+        );
+        let (_dir, spec, from, to) = two_commit_repo(from_spec, &to_spec);
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                &from,
+                "--to",
+                &to,
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}\nstdout={stdout}");
+        assert!(
+            stdout.contains("%changelog:"),
+            "expected `%changelog:` row in script sections; got:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn impact_script_section_appears_in_json() {
+        // JSON wire format: `script_sections` lives **inside each
+        // per_profile row** (mirroring how preamble dep `tags` live
+        // per profile). Pin the shape so tooling consumers can rely
+        // on the nesting + field names. Per-profile placement is
+        // deliberate — script-body changes inside an `%if` branch
+        // that's inactive on a profile don't contribute on that
+        // profile, so the diff is profile-scoped.
+        let to_spec = BASE_SPEC.replace(
+            "%files\n",
+            "%install\nmake DESTDIR=%{buildroot} install\n\n%files\n",
+        );
+        let (_dir, spec, from, to) = two_commit_repo(BASE_SPEC, &to_spec);
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic",
+                "--from",
+                &from,
+                "--to",
+                &to,
+                "--format",
+                "json",
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}\nstdout={stdout}");
+        let v: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
+        let prof = &v["per_profile"][0];
+        let sections = prof["script_sections"]
+            .as_array()
+            .unwrap_or_else(|| {
+                panic!("expected `per_profile[0].script_sections` array; got:\n{stdout}")
+            });
+        assert!(
+            !sections.is_empty(),
+            "expected non-empty script_sections; got:\n{stdout}"
+        );
+        let first = &sections[0];
+        assert!(first["label"].is_string(), "label field missing");
+        assert!(first["added"].is_number(), "added field missing");
+        assert!(first["removed"].is_number(), "removed field missing");
+        assert!(first["unchanged"].is_number(), "unchanged field missing");
+    }
+
+    #[test]
+    fn impact_worktree_with_no_changes_matches_head() {
+        // Sanity: worktree mode with a clean tree (no uncommitted
+        // edits) should yield the same no-change verdict as
+        // `--to HEAD`. Pinning this prevents a regression where
+        // worktree-mode might somehow diverge from `HEAD` content.
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_init(dir.path());
+        let spec = dir.path().join("foo.spec");
+        std::fs::write(&spec, BASE_SPEC).expect("write initial spec");
+        git_commit_all(dir.path(), "initial");
+        let from_sha = head_sha(dir.path());
+        // No worktree modification — spec on disk == HEAD.
+        let (rc, stdout, stderr) = run(
+            &[
+                "matrix",
+                "impact",
+                "--profiles",
+                "generic,rhel-9-x86_64",
+                "--from",
+                &from_sha,
+                spec.to_str().unwrap(),
+            ],
+            None,
+        );
+        assert_eq!(rc, 0, "stderr={stderr}\nstdout={stdout}");
+        assert!(
+            stdout.contains("no change"),
+            "clean worktree must match HEAD ⇒ no-change verdict; got:\n{stdout}"
         );
     }
 }

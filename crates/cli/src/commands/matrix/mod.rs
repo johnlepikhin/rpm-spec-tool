@@ -328,12 +328,14 @@ impl Cmd {
             Action::Baseline(cmd) => cmd.run(self.config.as_deref()),
             Action::Portability(opts) => portability::run(opts, self.config.as_deref(), color),
             Action::Coverage(opts) => coverage::run(opts, self.config.as_deref(), color),
-            Action::Explain(opts) => explain::run(opts, self.config.as_deref()),
-            Action::VerifyContract(opts) => verify_contract::run(opts, self.config.as_deref()),
+            Action::Explain(opts) => explain::run(opts, self.config.as_deref(), color),
+            Action::VerifyContract(opts) => {
+                verify_contract::run(opts, self.config.as_deref(), color)
+            }
             Action::Expand(opts) => expand::run(opts, self.config.as_deref(), color),
-            Action::Diff(opts) => diff::run(opts, self.config.as_deref()),
-            Action::Classes(opts) => classes::run(opts, self.config.as_deref()),
-            Action::Impact(opts) => impact::run(opts, self.config.as_deref()),
+            Action::Diff(opts) => diff::run(opts, self.config.as_deref(), color),
+            Action::Classes(opts) => classes::run(opts, self.config.as_deref(), color),
+            Action::Impact(opts) => impact::run(opts, self.config.as_deref(), color),
         }
     }
 }

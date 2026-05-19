@@ -12,17 +12,17 @@ use rpm_spec::ast::{BuildScriptKind, Section, ShellBody, Span, SpecFile, SpecIte
 /// Locate the first top-level `%prep` section's body. Returns `None`
 /// when the spec has no `%prep` — `missing-prep-section` (RPM016) covers
 /// that case separately.
-pub(crate) fn find_prep_body(spec: &SpecFile<Span>) -> Option<&ShellBody> {
+pub(crate) fn find_prep_body(spec: &SpecFile<Span>) -> Option<&ShellBody<Span>> {
     find_prep_section(spec).map(|(body, _)| body)
 }
 
 /// Same as [`find_prep_body`] but also exposes the section span,
 /// useful as a diagnostic anchor when the body itself is empty.
-pub(crate) fn find_prep_body_with_span(spec: &SpecFile<Span>) -> Option<(&ShellBody, Span)> {
+pub(crate) fn find_prep_body_with_span(spec: &SpecFile<Span>) -> Option<(&ShellBody<Span>, Span)> {
     find_prep_section(spec)
 }
 
-fn find_prep_section(spec: &SpecFile<Span>) -> Option<(&ShellBody, Span)> {
+fn find_prep_section(spec: &SpecFile<Span>) -> Option<(&ShellBody<Span>, Span)> {
     for item in &spec.items {
         if let SpecItem::Section(boxed) = item
             && let Section::BuildScript {

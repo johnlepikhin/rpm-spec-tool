@@ -14,7 +14,7 @@ use rpm_spec::ast::{
 /// span suitable for diagnostic anchoring.
 pub(crate) fn for_each_shell_body<'a, F>(spec: &'a SpecFile<Span>, mut f: F)
 where
-    F: FnMut(&'a ShellBody, Span),
+    F: FnMut(&'a ShellBody<Span>, Span),
 {
     for it in &spec.items {
         let SpecItem::Section(boxed) = it else {

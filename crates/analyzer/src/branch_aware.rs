@@ -471,7 +471,7 @@ B
 
     #[test]
     fn skip_policy_drops_indeterminate_branches() {
-        // `%if 0%{?rhel} >= 8` arithmetic Raw → Indeterminate. Under
+        // `%if 1 + 2 == 3` arithmetic Raw → Indeterminate. Under
         // Skip the conditional is conservatively dead → BR inside not
         // collected. Empty `%else` body in this test so only the BR
         // outside any conditional is left.
@@ -482,7 +482,7 @@ Release: 1
 Summary: t
 License: MIT
 BuildRequires: outside-cond
-%if 0%{?rhel} >= 8
+%if 1 + 2 == 3
 BuildRequires: inside-cond
 %endif
 
@@ -514,7 +514,7 @@ Release: 1
 Summary: t
 License: MIT
 BuildRequires: outside-cond
-%if 0%{?rhel} >= 8
+%if 1 + 2 == 3
 BuildRequires: inside-cond
 %endif
 

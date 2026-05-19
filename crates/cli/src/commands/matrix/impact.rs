@@ -23,6 +23,8 @@ use rpm_spec_analyzer::profile::ResolvedTargetSet;
 use rpm_spec_analyzer::{ImpactReport, session::parse};
 use serde::Serialize;
 
+use super::coverage_style::Style;
+use crate::app::ColorChoice;
 use crate::io;
 
 /// Upper bound on bytes read from a single `git show` invocation.
@@ -84,11 +86,17 @@ pub struct ImpactOpts {
     #[arg(long = "from", value_name = "REV")]
     pub from: String,
 
-    /// Git revision for the "after" side. Pass `HEAD` (or
-    /// `--to` omitted-with-default) for "what's about to ship?"
-    /// or a concrete SHA for a frozen comparison.
-    #[arg(long = "to", value_name = "REV", default_value = "HEAD")]
-    pub to: String,
+    /// Git revision for the "after" side. **Default: working tree** —
+    /// the spec file on disk, *including uncommitted changes*. Pass a
+    /// concrete REV (commit SHA, branch, tag, `HEAD~3`, or literal
+    /// `HEAD`) for a frozen committed-vs-committed comparison.
+    ///
+    /// The worktree default reflects the primary PR-review workflow:
+    /// "I edited the spec, what's the impact before I commit?". Older
+    /// callers that relied on the previous `HEAD` default should
+    /// switch to `--to HEAD` explicitly.
+    #[arg(long = "to", value_name = "REV")]
+    pub to: Option<String>,
 
     /// Path to `git` binary. Useful when the CLI runs in a
     /// container that ships git under a non-standard name. Default
@@ -103,7 +111,11 @@ pub struct ImpactOpts {
     pub bcond: crate::app::BcondOverridesArg,
 }
 
-pub(super) fn run(opts: ImpactOpts, config_override: Option<&Path>) -> Result<ExitCode> {
+pub(super) fn run(
+    opts: ImpactOpts,
+    config_override: Option<&Path>,
+    color: ColorChoice,
+) -> Result<ExitCode> {
     let ctx = match super::prepare_matrix(
         config_override,
         opts.target_set.as_deref(),
@@ -169,15 +181,21 @@ pub(super) fn run(opts: ImpactOpts, config_override: Option<&Path>) -> Result<Ex
         }
     };
 
-    // Resolve both revs up-front. A typo'd SHA must surface as a hard
-    // error here rather than later, because git's "path does not
-    // exist in REV" message is emitted identically for "rev unknown"
-    // and "rev valid but file missing" — without this pre-check we'd
-    // silently treat a typo as "spec added in this PR" and produce
-    // misleading impact output.
-    for rev in [&opts.from, &opts.to] {
-        if let Err(e) = git_resolve_rev(&opts.git_cmd, &repo_root, rev) {
-            eprintln!("error: revision `{rev}`: {e:#}");
+    // Resolve `--from` (always git) up-front. `--to` only needs the
+    // pre-check when it's an explicit revision — worktree-mode reads
+    // straight off disk and can't have a typo'd SHA. A typo'd `--from`
+    // SHA must surface as a hard error here rather than later, because
+    // git's "path does not exist in REV" message is emitted identically
+    // for "rev unknown" and "rev valid but file missing" — without
+    // this pre-check we'd silently treat a typo as "spec added in this
+    // PR" and produce misleading impact output.
+    if let Err(e) = git_resolve_rev(&opts.git_cmd, &repo_root, &opts.from) {
+        eprintln!("error: revision `{}`: {e:#}", opts.from);
+        return Ok(ExitCode::from(2));
+    }
+    if let Some(to_rev) = opts.to.as_deref() {
+        if let Err(e) = git_resolve_rev(&opts.git_cmd, &repo_root, to_rev) {
+            eprintln!("error: revision `{to_rev}`: {e:#}");
             return Ok(ExitCode::from(2));
         }
     }
@@ -189,12 +207,19 @@ pub(super) fn run(opts: ImpactOpts, config_override: Option<&Path>) -> Result<Ex
             return Ok(ExitCode::from(2));
         }
     };
-    let to_bytes = match git_show(&opts.git_cmd, &repo_root, &opts.to, &spec_rel) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("error: reading spec at {}: {e:#}", opts.to);
-            return Ok(ExitCode::from(2));
-        }
+    // `--to`: explicit REV → git show; omitted → working tree (the
+    // bytes already read from disk via `io::read_sources` above).
+    // The display label kept short ("worktree") so the human/JSON
+    // headers stay readable when the user hasn't supplied one.
+    let (to_bytes, to_label): (String, String) = match opts.to.as_deref() {
+        Some(rev) => match git_show(&opts.git_cmd, &repo_root, rev, &spec_rel) {
+            Ok(b) => (b, rev.to_owned()),
+            Err(e) => {
+                eprintln!("error: reading spec at {rev}: {e:#}");
+                return Ok(ExitCode::from(2));
+            }
+        },
+        None => (source.contents.clone(), "worktree".to_owned()),
     };
 
     let from_parsed = parse(&from_bytes);
@@ -209,7 +234,7 @@ pub(super) fn run(opts: ImpactOpts, config_override: Option<&Path>) -> Result<Ex
     super::surface_parser_diagnostics(
         super::ParseDiagnosticContext::ImpactSide {
             label: "to",
-            rev: &opts.to,
+            rev: &to_label,
         },
         &to_parsed,
     );
@@ -222,8 +247,11 @@ pub(super) fn run(opts: ImpactOpts, config_override: Option<&Path>) -> Result<Ex
     );
 
     match opts.format {
-        OutputFormat::Human => render_human(&source, &report, &resolved, &opts.from, &opts.to)?,
-        OutputFormat::Json => render_json(&source, &report, &resolved, &opts.from, &opts.to)?,
+        OutputFormat::Human => {
+            let style = Style::new(color);
+            render_human(&source, &report, &resolved, &opts.from, &to_label, &style)?;
+        }
+        OutputFormat::Json => render_json(&source, &report, &resolved, &opts.from, &to_label)?,
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -376,48 +404,75 @@ fn render_human(
     target_set: &ResolvedTargetSet,
     from: &str,
     to: &str,
+    style: &Style,
 ) -> Result<()> {
     use std::io::Write;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     writeln!(
         out,
-        "# Matrix impact: {from} → {to}, target set `{}` ({}/{} profile(s) affected)",
-        target_set.id,
-        report.affected_profile_count(),
-        target_set.targets.len()
+        "{}",
+        style.header(&format!(
+            "# Matrix impact: {from} → {to}, target set `{}` ({}/{} profile(s) affected)",
+            target_set.id,
+            report.affected_profile_count(),
+            target_set.targets.len(),
+        ))
     )?;
-    writeln!(out, "## {}", source.display_name())?;
+    writeln!(out, "{}", style.header(&format!("## {}", source.display_name())))?;
 
     if report.is_no_change() {
         writeln!(out)?;
-        writeln!(out, "  (no change on any profile)")?;
+        writeln!(out, "  {}", style.dim("(no change on any profile)"))?;
         return Ok(());
     }
 
     for prof in &report.per_profile {
         writeln!(out)?;
         if prof.is_no_change() {
-            writeln!(out, "  {}: (no change)", prof.profile_id)?;
+            writeln!(
+                out,
+                "  {}: {}",
+                prof.profile_id,
+                style.dim("(no change)")
+            )?;
             continue;
         }
-        // Headline: total added/removed across compared tags.
-        let (added_n, removed_n): (usize, usize) = prof.tags.iter().fold((0, 0), |acc, t| {
+        // Headline: total added/removed across compared tags +
+        // script-section lines moved on this profile (the latter
+        // already filtered by inactive `%if` branches, so the count
+        // reflects what THIS profile actually sees). `+N` painted
+        // green (`always_tag`-family) and `-N` red (`dead_tag`) so
+        // operators read the per-profile churn at a glance.
+        let (dep_added, dep_removed): (usize, usize) = prof.tags.iter().fold((0, 0), |acc, t| {
             (
                 acc.0 + t.changes.added.len(),
                 acc.1 + t.changes.removed.len(),
             )
         });
-        writeln!(out, "  {}: +{added_n} -{removed_n}", prof.profile_id)?;
+        let (script_added, script_removed): (usize, usize) =
+            prof.script_sections.iter().fold((0, 0), |acc, s| {
+                (acc.0 + s.added, acc.1 + s.removed)
+            });
+        let added_n = dep_added + script_added;
+        let removed_n = dep_removed + script_removed;
+        writeln!(
+            out,
+            "  {}: {} {}",
+            style.header(&prof.profile_id),
+            style.always_tag(&format!("+{added_n}")),
+            style.dead_tag(&format!("-{removed_n}")),
+        )?;
         for tag in &prof.tags {
             if tag.changes.has_no_movement() {
                 continue;
             }
-            writeln!(out, "    {}", tag.tag_label)?;
+            writeln!(out, "    {}", style.header(tag.tag_label))?;
             if !tag.changes.added.is_empty() {
                 writeln!(
                     out,
-                    "      added ({}): {}",
+                    "      {} ({}): {}",
+                    style.always_tag("added"),
                     tag.changes.added.len(),
                     tag.changes.added.join(", ")
                 )?;
@@ -425,11 +480,27 @@ fn render_human(
             if !tag.changes.removed.is_empty() {
                 writeln!(
                     out,
-                    "      removed ({}): {}",
+                    "      {} ({}): {}",
+                    style.dead_tag("removed"),
                     tag.changes.removed.len(),
                     tag.changes.removed.join(", ")
                 )?;
             }
+        }
+        // Per-profile script-section deltas — filtered to lines
+        // active on this profile. A `%build` change gated by `%if
+        // 0%{?el6}` only shows here for el6 profiles; on rhel-9 the
+        // edit lives in an inactive branch and contributes nothing
+        // to the profile's count.
+        for sec in &prof.script_sections {
+            writeln!(
+                out,
+                "    {}: {} {} {}",
+                style.header(&sec.label),
+                style.always_tag(&format!("+{}", sec.added)),
+                style.dead_tag(&format!("-{}", sec.removed)),
+                style.dim(&format!("({} unchanged here)", sec.unchanged)),
+            )?;
         }
     }
     Ok(())
@@ -443,6 +514,10 @@ struct ImpactJson<'a> {
     profiles: Vec<&'a str>,
     path: String,
     affected_profile_count: usize,
+    /// Per-profile rows include `tags` (preamble dep diffs) plus
+    /// `script_sections` (per-profile-filtered shell-body /
+    /// text-body diffs). See `ProfileImpact` upstream for the
+    /// exhaustive shape.
     per_profile: &'a [rpm_spec_analyzer::ProfileImpact],
 }
 

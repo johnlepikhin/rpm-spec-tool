@@ -350,7 +350,7 @@ fn walk_section(section: &Section<Span>, out: &mut BcondUsage) {
     }
 }
 
-fn walk_shell_body(body: &ShellBody, anchor: Span, out: &mut BcondUsage) {
+fn walk_shell_body(body: &ShellBody<Span>, anchor: Span, out: &mut BcondUsage) {
     for line in &body.lines {
         walk_text_for_refs(line, anchor, out);
     }

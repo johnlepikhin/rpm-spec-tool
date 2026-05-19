@@ -117,7 +117,7 @@ enum LineEffect {
     Continue,
 }
 
-fn collect_applied(body: &ShellBody, declared_count: usize) -> Applied {
+fn collect_applied(body: &ShellBody<Span>, declared_count: usize) -> Applied {
     let mut set: HashSet<u32> = HashSet::with_capacity(declared_count);
     for line in &body.lines {
         if matches!(scan_line(line, &mut set), LineEffect::ShortCircuitAll) {

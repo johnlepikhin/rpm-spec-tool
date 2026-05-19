@@ -362,10 +362,17 @@ mod tests {
     }
 
     #[test]
-    fn rpm085_silent_for_macro_expression() {
+    fn rpm085_flags_macro_expression_with_constant_or() {
+        // `%if 0%{?rhel} || 1` is now parsed structurally as
+        // `Binary(LogOr, NumericConcat, Integer(1))`. The structural
+        // walker (`detect_tautology_ast`) correctly identifies the
+        // `|| 1` tautology *regardless* of the macro on the left —
+        // an improvement over the previous Raw-text scan that bailed
+        // on any `%`.
         let src = "Name: x\n%if 0%{?rhel} || 1\nVersion: 1\n%endif\n";
-        // Bails on `%` — conservative.
-        assert!(run(src, ConstantTautologyInExpr::new()).is_empty());
+        let diags = run(src, ConstantTautologyInExpr::new());
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].lint_id, "RPM085");
     }
 
     #[test]

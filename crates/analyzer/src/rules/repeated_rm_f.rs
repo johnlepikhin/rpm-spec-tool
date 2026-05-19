@@ -31,7 +31,7 @@ impl RepeatedRmF {
         Self::default()
     }
 
-    fn scan_body(&mut self, body: &ShellBody, anchor: Span) {
+    fn scan_body(&mut self, body: &ShellBody<Span>, anchor: Span) {
         let mut prev_was_rm_f = false;
         for line in &body.lines {
             let raw = render_shell_line(line);

@@ -123,7 +123,7 @@ impl CommandUseIndex {
     }
 }
 
-fn collect_body(loc: &BodyLocation, body: &ShellBody, out: &mut Vec<CommandUse>) {
+fn collect_body(loc: &BodyLocation, body: &ShellBody<Span>, out: &mut Vec<CommandUse>) {
     let section_ref = body_location_to_section_ref(loc);
     for (idx, line) in body.lines.iter().enumerate() {
         let tokens = tokenize_line(line);

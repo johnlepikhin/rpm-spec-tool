@@ -19,6 +19,8 @@ use rpm_spec_analyzer::{
 };
 use serde::Serialize;
 
+use super::coverage_style::Style;
+use crate::app::ColorChoice;
 use crate::io;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -65,7 +67,11 @@ pub struct VerifyContractOpts {
     pub bcond: crate::app::BcondOverridesArg,
 }
 
-pub(super) fn run(opts: VerifyContractOpts, config_override: Option<&Path>) -> Result<ExitCode> {
+pub(super) fn run(
+    opts: VerifyContractOpts,
+    config_override: Option<&Path>,
+    color: ColorChoice,
+) -> Result<ExitCode> {
     let ctx = match super::prepare_matrix(
         config_override,
         opts.target_set.as_deref(),
@@ -122,7 +128,10 @@ pub(super) fn run(opts: VerifyContractOpts, config_override: Option<&Path>) -> R
     }
 
     match opts.format {
-        OutputFormat::Human => render_human(&reports, &resolved)?,
+        OutputFormat::Human => {
+            let style = Style::new(color);
+            render_human(&reports, &resolved, &style)?;
+        }
         OutputFormat::Json => render_json(&reports, &resolved)?,
     }
 
@@ -153,42 +162,61 @@ fn load_contract(path: &Path) -> Result<Contract> {
 fn render_human(
     reports: &[(io::Source, ContractReport)],
     target_set: &ResolvedTargetSet,
+    style: &Style,
 ) -> Result<()> {
     use std::io::Write;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     writeln!(
         out,
-        "# Matrix verify-contract: target set `{}` ({} profiles)",
-        target_set.id,
-        target_set.targets.len()
+        "{}",
+        style.header(&format!(
+            "# Matrix verify-contract: target set `{}` ({} profiles)",
+            target_set.id,
+            target_set.targets.len(),
+        ))
     )?;
     writeln!(out)?;
 
     if reports.is_empty() {
-        writeln!(out, "(no input specs)")?;
+        writeln!(out, "{}", style.dim("(no input specs)"))?;
         return Ok(());
     }
 
     for (source, report) in reports {
-        writeln!(out, "## {}", source.display_name())?;
+        writeln!(
+            out,
+            "{}",
+            style.header(&format!("## {}", source.display_name()))
+        )?;
         for entry in &report.per_profile {
             match &entry.status {
                 ContractProfileStatus::NoContract => {
-                    writeln!(out, "  {}: (no contract — skipping)", entry.profile_id)?;
+                    writeln!(
+                        out,
+                        "  {}: {}",
+                        entry.profile_id,
+                        style.dim("(no contract — skipping)")
+                    )?;
                 }
                 ContractProfileStatus::Pass => {
-                    writeln!(out, "  {}: PASS", entry.profile_id)?;
+                    writeln!(
+                        out,
+                        "  {}: {}",
+                        entry.profile_id,
+                        style.always_tag("PASS")
+                    )?;
                 }
                 ContractProfileStatus::Violations { violations } => {
                     writeln!(
                         out,
-                        "  {}: FAIL ({} violation(s))",
+                        "  {}: {} ({} violation(s))",
                         entry.profile_id,
-                        violations.len()
+                        style.dead_tag("FAIL"),
+                        violations.len(),
                     )?;
                     for v in violations {
-                        render_violation(&mut out, v)?;
+                        render_violation(&mut out, v, style)?;
                     }
                 }
                 // `ContractProfileStatus` is `#[non_exhaustive]` in
@@ -198,8 +226,9 @@ fn render_human(
                 // analyzer surfaces visibly in the CLI output.
                 _ => writeln!(
                     out,
-                    "  {}: (unknown status — please update rpm-spec-tool)",
-                    entry.profile_id
+                    "  {}: {}",
+                    entry.profile_id,
+                    style.indeterminate_tag("(unknown status — please update rpm-spec-tool)")
                 )?,
             }
         }
@@ -208,27 +237,36 @@ fn render_human(
     Ok(())
 }
 
-/// Render one violation in the human format. The wildcard arm
-/// exists because `ContractViolation` is `#[non_exhaustive]` in the
-/// analyzer crate and we are matching across crate boundaries —
-/// rustc requires a fallback. The fallback emits a stable label
-/// rather than a Debug-formatted blob so a future variant produces
-/// a visible UX-grade hint, not opaque struct dump.
-fn render_violation(out: &mut impl std::io::Write, v: &ContractViolation) -> std::io::Result<()> {
+/// Render one violation in the human format. Both `[missing]` and
+/// `[forbidden]` tags painted red — they're failure signals; the
+/// distinction stays in the bracket label, not the colour, so the
+/// eye reads "any red bracket = problem". The wildcard arm exists
+/// because `ContractViolation` is `#[non_exhaustive]` in the analyzer
+/// crate — surfaces visibly so a new variant doesn't get hidden.
+fn render_violation(
+    out: &mut impl std::io::Write,
+    v: &ContractViolation,
+    style: &Style,
+) -> std::io::Result<()> {
     match v {
         ContractViolation::MissingRequired { package } => {
-            writeln!(out, "    [missing] {package}")
+            writeln!(out, "    {} {package}", style.dead_tag("[missing]"))
         }
         ContractViolation::ForbiddenPresent { package, found_as } => {
             if package == found_as {
-                writeln!(out, "    [forbidden] {package}")
+                writeln!(out, "    {} {package}", style.dead_tag("[forbidden]"))
             } else {
-                writeln!(out, "    [forbidden] {package} (found as `{found_as}`)")
+                writeln!(
+                    out,
+                    "    {} {package} (found as `{found_as}`)",
+                    style.dead_tag("[forbidden]")
+                )
             }
         }
         _ => writeln!(
             out,
-            "    [unknown violation kind — please update rpm-spec-tool]"
+            "    {}",
+            style.indeterminate_tag("[unknown violation kind — please update rpm-spec-tool]")
         ),
     }
 }

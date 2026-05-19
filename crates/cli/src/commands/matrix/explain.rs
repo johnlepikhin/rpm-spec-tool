@@ -26,6 +26,8 @@ use rpm_spec_analyzer::profile::ResolvedTargetSet;
 use rpm_spec_analyzer::{CoverageReport, EvalError, session::parse};
 use serde::Serialize;
 
+use super::coverage_style::Style;
+use crate::app::ColorChoice;
 use crate::io;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -81,7 +83,11 @@ pub struct ExplainOpts {
     pub bcond: crate::app::BcondOverridesArg,
 }
 
-pub(super) fn run(opts: ExplainOpts, config_override: Option<&Path>) -> Result<ExitCode> {
+pub(super) fn run(
+    opts: ExplainOpts,
+    config_override: Option<&Path>,
+    color: ColorChoice,
+) -> Result<ExitCode> {
     let ctx = match super::prepare_matrix(
         config_override,
         opts.target_set.as_deref(),
@@ -120,6 +126,7 @@ pub(super) fn run(opts: ExplainOpts, config_override: Option<&Path>) -> Result<E
                 &source,
                 &resolved,
                 ExplainPayload::Line(report),
+                color,
             )
         }
         (None, Some(name)) => {
@@ -135,6 +142,7 @@ pub(super) fn run(opts: ExplainOpts, config_override: Option<&Path>) -> Result<E
                 &source,
                 &resolved,
                 ExplainPayload::Macro(report),
+                color,
             )
         }
         // `ArgGroup::required(true)` on `explain_query` + the
@@ -290,9 +298,13 @@ fn emit(
     source: &io::Source,
     target_set: &ResolvedTargetSet,
     payload: ExplainPayload,
+    color: ColorChoice,
 ) -> Result<ExitCode> {
     match format {
-        OutputFormat::Human => render_human(source, target_set, &payload)?,
+        OutputFormat::Human => {
+            let style = Style::new(color);
+            render_human(source, target_set, &payload, &style)?;
+        }
         OutputFormat::Json => render_json(source, target_set, &payload)?,
     }
     Ok(ExitCode::SUCCESS)
@@ -302,39 +314,68 @@ fn render_human(
     source: &io::Source,
     target_set: &ResolvedTargetSet,
     payload: &ExplainPayload,
+    style: &Style,
 ) -> Result<()> {
     use std::io::Write;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     writeln!(
         out,
-        "# Matrix explain: target set `{}` ({} profiles)",
-        target_set.id,
-        target_set.targets.len()
+        "{}",
+        style.header(&format!(
+            "# Matrix explain: target set `{}` ({} profiles)",
+            target_set.id,
+            target_set.targets.len(),
+        ))
     )?;
-    writeln!(out, "## {}", source.display_name())?;
+    writeln!(
+        out,
+        "{}",
+        style.header(&format!("## {}", source.display_name()))
+    )?;
 
     match payload {
         ExplainPayload::Line(line) => {
-            writeln!(out, "  line {}", line.line)?;
+            writeln!(out, "  {} {}", style.header("line"), line.line)?;
             if line.matched.is_empty() {
                 writeln!(
                     out,
-                    "    (no enclosing %if/%ifarch/%ifos branch covers this line)"
+                    "    {}",
+                    style.dim("(no enclosing %if/%ifarch/%ifos branch covers this line)")
                 )?;
                 return Ok(());
             }
             for b in &line.matched {
+                // Branch verdict tags: `[DEAD]` (no profile activates) →
+                // red; `[ALWAYS]` (every profile activates) → green;
+                // otherwise no tag (mixed verdict — interesting, but
+                // the active/inactive list below carries the detail).
                 let tag = if b.is_dead {
-                    " [DEAD]"
+                    format!(" {}", style.dead_tag("[DEAD]"))
                 } else if b.is_universally_active {
-                    " [ALWAYS]"
+                    format!(" {}", style.always_tag("[ALWAYS]"))
                 } else {
-                    ""
+                    String::new()
                 };
-                writeln!(out, "    branch {}: {}{tag}", b.branch_line, b.display)?;
-                writeln!(out, "      active:   {}", or_none(&b.active_on))?;
-                writeln!(out, "      inactive: {}", or_none(&b.inactive_on))?;
+                writeln!(
+                    out,
+                    "    {} {}: {}{tag}",
+                    style.header("branch"),
+                    b.branch_line,
+                    b.display
+                )?;
+                writeln!(
+                    out,
+                    "      {}:   {}",
+                    style.always_tag("active"),
+                    or_none(&b.active_on, style)
+                )?;
+                writeln!(
+                    out,
+                    "      {}: {}",
+                    style.inactive_tag("inactive"),
+                    or_none(&b.inactive_on, style)
+                )?;
                 if !b.indeterminate_on.is_empty() {
                     let mut parts = Vec::with_capacity(b.indeterminate_on.len());
                     for pid in &b.indeterminate_on {
@@ -343,17 +384,26 @@ fn render_human(
                             None => parts.push(pid.clone()),
                         }
                     }
-                    writeln!(out, "      indeterminate: {}", parts.join(", "))?;
+                    writeln!(
+                        out,
+                        "      {}: {}",
+                        style.indeterminate_tag("indeterminate"),
+                        parts.join(", ")
+                    )?;
                 }
             }
         }
         ExplainPayload::Macro(m) => {
-            writeln!(out, "  macro %{{{}}}", m.name)?;
+            writeln!(out, "  {} %{{{}}}", style.header("macro"), m.name)?;
             for p in &m.profiles {
+                // `(undefined)` and `(defined but …)` rendered dim so
+                // the literal value of defined-and-resolved macros pops.
                 let rendered = match &p.state {
-                    MacroState::Undefined => "(undefined)".to_string(),
+                    MacroState::Undefined => style.dim("(undefined)"),
                     MacroState::Literal(v) => v.clone(),
-                    MacroState::Unexpandable(reason) => format!("(defined but {reason})"),
+                    MacroState::Unexpandable(reason) => {
+                        style.dim(&format!("(defined but {reason})"))
+                    }
                 };
                 writeln!(out, "    {} = {rendered}", p.profile_id)?;
             }
@@ -362,9 +412,9 @@ fn render_human(
     Ok(())
 }
 
-fn or_none(ids: &[String]) -> String {
+fn or_none(ids: &[String], style: &Style) -> String {
     if ids.is_empty() {
-        "(none)".to_string()
+        style.dim("(none)")
     } else {
         ids.join(", ")
     }

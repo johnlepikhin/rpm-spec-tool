@@ -62,7 +62,7 @@ impl<'ast> Visit<'ast> for WerrorNotDisabled {
     }
 }
 
-fn scan_body(body: &ShellBody, section_span: Span, out: &mut Vec<Diagnostic>) {
+fn scan_body(body: &ShellBody<Span>, section_span: Span, out: &mut Vec<Diagnostic>) {
     // Emit at most one diagnostic per section — a `%build` that says
     // `-Werror` on five lines is one problem, not five.
     for line in &body.lines {

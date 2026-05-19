@@ -16,7 +16,7 @@ const MAX_DEPTH: u32 = 128;
 /// body come from?" tag so rules can filter.
 pub fn for_each_shell_body<'ast, F>(spec: &'ast SpecFile<Span>, mut f: F)
 where
-    F: FnMut(BodyLocation, &'ast ShellBody),
+    F: FnMut(BodyLocation, &'ast ShellBody<Span>),
 {
     walk_items(&spec.items, &mut f, 0);
 }
@@ -26,7 +26,7 @@ where
 /// scripts matter.
 pub fn for_each_buildscript<'ast, F>(spec: &'ast SpecFile<Span>, mut f: F)
 where
-    F: FnMut(BuildScriptKind, &'ast ShellBody, Span),
+    F: FnMut(BuildScriptKind, &'ast ShellBody<Span>, Span),
 {
     for_each_shell_body(spec, |loc, body| {
         if let BodyLocation::BuildScript { kind, span } = loc {
@@ -84,7 +84,7 @@ pub enum BodyLocation {
 
 fn walk_items<'ast, F>(items: &'ast [SpecItem<Span>], f: &mut F, depth: u32)
 where
-    F: FnMut(BodyLocation, &'ast ShellBody),
+    F: FnMut(BodyLocation, &'ast ShellBody<Span>),
 {
     if depth >= MAX_DEPTH {
         return;
@@ -107,7 +107,7 @@ where
 
 fn visit_section<'ast, F>(section: &'ast Section<Span>, f: &mut F)
 where
-    F: FnMut(BodyLocation, &'ast ShellBody),
+    F: FnMut(BodyLocation, &'ast ShellBody<Span>),
 {
     match section {
         Section::BuildScript { kind, body, data } => {

@@ -95,6 +95,48 @@ impl Style {
     pub(crate) fn dim(&self, s: &str) -> String {
         self.wrap("2", s)
     }
+
+    /// Orange via the 256-colour extended palette (xterm-256 index 208).
+    /// `matrix expand` uses this for `[INACTIVE]` so the tag stands
+    /// apart from `[ACTIVE]` (green) and `[INDETERMINATE]` (red) at a
+    /// glance: a colour-blind operator still sees three distinct hues
+    /// thanks to the bright-vs-dim contrast.
+    ///
+    /// **Terminal requirement:** the operator's `$TERM` must include
+    /// `-256color` (e.g. `xterm-256color`, `tmux-256color`); on
+    /// 8-colour terminals the escape is silently passed through and
+    /// renders as whatever the emulator picks for the unknown code.
+    /// In practice every terminal used to view spec output on modern
+    /// distros supports this — fall-back path is not worth the
+    /// complexity.
+    pub(crate) fn inactive_tag(&self, s: &str) -> String {
+        self.wrap("1;38;5;208", s)
+    }
+
+    /// Dim orange — same hue family as `inactive_tag` but quieter,
+    /// signalling "this branch is suppressed by an inactive
+    /// ancestor, not by its own condition". `matrix expand` paints
+    /// `[INACTIVE: nested]` here so the eye reads the dim as
+    /// "subordinate / not load-bearing", versus the bold direct
+    /// `[INACTIVE]`. In plain-text mode the `[INACTIVE: nested]`
+    /// text carries the distinction on its own.
+    ///
+    /// **Terminal requirement:** same `-256color` `$TERM` precondition
+    /// as [`Self::inactive_tag`]; on 8-colour terminals the escape
+    /// degrades to whatever the emulator picks for the unknown code,
+    /// but the literal `[INACTIVE: nested]` text still distinguishes
+    /// the nested case unambiguously.
+    pub(crate) fn nested_inactive_tag(&self, s: &str) -> String {
+        self.wrap("2;38;5;208", s)
+    }
+
+    /// Red used for `matrix expand`'s `[INDETERMINATE: …]` tag.
+    /// Distinct from `dead_tag` only in semantic intent — the
+    /// underlying ANSI sequence is the same bold red; operators
+    /// learn one colour family for "needs attention".
+    pub(crate) fn indeterminate_tag(&self, s: &str) -> String {
+        self.wrap("1;31", s)
+    }
 }
 
 #[cfg(test)]

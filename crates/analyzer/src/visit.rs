@@ -12,8 +12,8 @@
 use rpm_spec::ast::{
     BoolDep, BuildCondition, ChangelogEntry, Comment, Conditional, DepAtom, DepExpr, EVR,
     FileEntry, FileTrigger, FilesContent, IncludeDirective, MacroDef, MacroRef, PreambleContent,
-    PreambleItem, Scriptlet, Section, ShellBody, Span, SpecFile, SpecItem, TagValue, Text,
-    TextBody, TextSegment, Trigger,
+    PreambleItem, Scriptlet, Section, ShellBody, ShellConditional, Span, SpecFile, SpecItem,
+    TagValue, Text, TextBody, TextSegment, Trigger,
 };
 
 /// AST walker. Implement the methods you need; defaults handle traversal.
@@ -64,6 +64,19 @@ pub trait Visit<'ast> {
 
     fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         walk_files_conditional(self, node)
+    }
+
+    /// `%if`...`%endif` recognised inside a shell body (`%prep`, `%build`,
+    /// `%install`, `%check`, `%clean`, `%generate_buildrequires`, scriptlets,
+    /// triggers, `%verify`, `%sepolicy`). Unlike the other `*_conditional`
+    /// hooks, shell-body conditionals are stored *flat* on the body — nested
+    /// `%if`s are sibling entries with a containing-span relation, not
+    /// nested AST nodes — because the body's textual `lines` view is still
+    /// the source of truth for content.
+    fn visit_shell_conditional(&mut self, node: &'ast ShellConditional<Span>) {
+        // Default: no-op. There are no children to recurse into (the body
+        // content lives in [`ShellBody::lines`]).
+        let _ = node;
     }
 
     fn visit_preamble_content(&mut self, node: &'ast PreambleContent<Span>) {
@@ -118,7 +131,7 @@ pub trait Visit<'ast> {
         walk_macro_ref(self, node)
     }
 
-    fn visit_shell_body(&mut self, node: &'ast ShellBody) {
+    fn visit_shell_body(&mut self, node: &'ast ShellBody<Span>) {
         walk_shell_body(self, node)
     }
 
@@ -414,9 +427,12 @@ pub fn walk_macro_ref<'a, V: Visit<'a> + ?Sized>(v: &mut V, node: &'a MacroRef) 
     }
 }
 
-pub fn walk_shell_body<'a, V: Visit<'a> + ?Sized>(v: &mut V, node: &'a ShellBody) {
+pub fn walk_shell_body<'a, V: Visit<'a> + ?Sized>(v: &mut V, node: &'a ShellBody<Span>) {
     for line in &node.lines {
         v.visit_text(line);
+    }
+    for cond in &node.conditionals {
+        v.visit_shell_conditional(cond);
     }
 }
 

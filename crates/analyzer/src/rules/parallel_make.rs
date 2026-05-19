@@ -57,7 +57,7 @@ impl<'ast> Visit<'ast> for J1WithoutComment {
     }
 }
 
-fn scan_body(body: &ShellBody, section_span: Span, out: &mut Vec<Diagnostic>) {
+fn scan_body(body: &ShellBody<Span>, section_span: Span, out: &mut Vec<Diagnostic>) {
     // Emit at most one diag per build-script section to match the
     // Phase-23 convention (werror, optflags, network_in_build,
     // buildsystem_macros all dedup the same way). Three `make -j1`

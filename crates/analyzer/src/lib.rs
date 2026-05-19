@@ -38,11 +38,14 @@ pub mod registry;
 pub mod rules;
 pub mod session;
 pub(crate) mod shell;
+pub mod spec_locals;
 pub mod visit;
 
 pub use baseline::{Baseline, BaselineEntry, BaselineError};
 pub use bcond::{BcondEntry, BcondMap, BcondOverrides};
-pub use branch_aware::{IndeterminatePolicy, ProfileBranchSelection, SelectedBody};
+pub use branch_aware::{
+    IndeterminatePolicy, ProfileBranchSelection, SelectedBody, walk_active_preamble,
+};
 pub use branch_coverage::{
     BranchActivity, BranchCoverage, CollectedBranch, CollectedConditional, CoverageEntry,
     CoverageReport, EvalError, EvalErrorCategory,
@@ -54,7 +57,10 @@ pub use contract::{
 };
 pub use dep_walk::{for_each_dep_atom, render_text_with_macros};
 pub use diagnostic::{Applicability, Diagnostic, Edit, Label, LintCategory, Severity, Suggestion};
-pub use impact::{COMPARED_TAGS, ChangeSet, ImpactReport, ProfileImpact, TagImpact};
+pub use impact::{
+    COMPARED_TAGS, ChangeSet, ImpactReport, ProfileImpact, ScriptSectionChange, TagImpact,
+    collect_active_section_lines, collect_script_sections,
+};
 pub use lint::{Lint, LintMetadata};
 pub use macro_usage::MacroUsageCollector;
 pub use matrix::{
@@ -66,6 +72,7 @@ pub use session::{
     LintSession, ParseOutcome, ParserDiagnostic, ParserSeverity, analyze, analyze_with_profile,
     analyze_with_profile_at, parse,
 };
+pub use spec_locals::{scan_spec_locals, scan_spec_locals_into};
 pub use visit::Visit;
 
 pub use rpm_spec::ast::Span;

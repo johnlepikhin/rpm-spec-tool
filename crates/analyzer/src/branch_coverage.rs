@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rpm_spec::ast::{
     CondBranch, CondExpr, CondKind, Conditional, ExprAst, FilesContent, MacroRef, PreambleContent,
-    Span, SpecFile, SpecItem, Text, TextSegment,
+    ShellConditional, Span, SpecFile, SpecItem, Text, TextSegment,
 };
 use rpm_spec_profile::{MacroRegistry, Profile, ResolvedTargetSet};
 use serde::{Serialize, Serializer};
@@ -403,6 +403,25 @@ impl CoverageReport {
         let mut collector = ConditionalCollector::default();
         collector.visit_spec(spec);
 
+        // Augment every profile's macro registry with spec-local
+        // defaults BEFORE evaluating any condition. Without this,
+        // `%if %{ssl}` reports `[INDETERMINATE: undefined macro: ssl]`
+        // for a spec whose first line is `%{!?ssl:%global ssl 1}` —
+        // statically the macro is unconditionally `1`, but the
+        // evaluator only sees the profile's registry. Spec-local
+        // values lose to profile values (the operator's `-D` or
+        // per-profile `[macros]` is stronger signal), so the merge
+        // only fills names the profile leaves undefined.
+        //
+        // Scan is *per-profile* because top-level `%if/%else` blocks
+        // commonly set a macro to different values per distro (e.g.
+        // `%global suse 1` in `%if "%{_vendor}" == "suse"` versus
+        // `%global suse 0` in the `%else`). The scanner evaluates
+        // each branch's condition against the profile to pick the
+        // correct value.
+        let augmented_owned = augment_targets_with_spec_locals(target_set, spec, &bcond);
+        let target_set: &ResolvedTargetSet = &augmented_owned;
+
         let mut conditionals: Vec<CoverageEntry> = collector
             .collected
             .into_iter()
@@ -444,6 +463,51 @@ impl CoverageReport {
     pub fn total_branches(&self) -> usize {
         self.conditionals.iter().map(|c| c.branches.len()).sum()
     }
+}
+
+/// Clone `target_set` and merge per-profile spec-local definitions
+/// into each target's `profile.macros` for any name not already
+/// defined there. Used by [`CoverageReport::compute_with_variants`] to
+/// make `%{!?X:%global X V}` and top-level `%global` definitions
+/// visible to the branch evaluator without requiring callers to do
+/// this pre-processing themselves.
+///
+/// The scan is per-profile so that `%global suse 1` inside
+/// `%if "%{_vendor}" == "suse"` only registers on SUSE profiles —
+/// the `%else` branch's `%global suse 0` registers everywhere else.
+/// Returns a fresh `ResolvedTargetSet`; the caller swaps its borrow
+/// to point at this owned copy for the rest of evaluation.
+fn augment_targets_with_spec_locals(
+    target_set: &ResolvedTargetSet,
+    spec: &SpecFile<Span>,
+    bcond: &crate::bcond::BcondMap,
+) -> ResolvedTargetSet {
+    let mut owned = target_set.clone();
+    // Reuse a single `BTreeMap` across all profiles: each iteration
+    // calls `clear()` (cheap, keeps the existing tree node arena)
+    // instead of allocating+deallocating a fresh map per target. On
+    // matrix runs with N profiles this avoids N-1 throwaway BTreeMap
+    // allocations on the hot path.
+    let mut locals_buf: BTreeMap<String, String> = BTreeMap::new();
+    for rt in owned.targets.iter_mut() {
+        locals_buf.clear();
+        crate::spec_locals::scan_spec_locals_into(spec, &rt.profile, bcond, &mut locals_buf);
+        for (name, value) in &locals_buf {
+            if rt.profile.macros.get(name).is_some() {
+                // Profile (or operator `-D`) value wins — don't
+                // overwrite. The spec-local is purely a fallback.
+                continue;
+            }
+            rt.profile.macros.insert(
+                name.clone(),
+                rpm_spec_profile::MacroEntry::literal(
+                    value.as_str(),
+                    rpm_spec_profile::Provenance::Override,
+                ),
+            );
+        }
+    }
+    owned
 }
 
 fn evaluate_conditional(
@@ -776,6 +840,29 @@ impl ConditionalCollector {
             has_else: c.otherwise.is_some(),
         });
     }
+
+    /// Translate a [`ShellConditional`] (flat scriptlet-body conditional)
+    /// into the same `CollectedConditional` shape used for structural
+    /// `%if`s elsewhere. `matrix coverage` / `matrix expand` then treat
+    /// scriptlet-body branches uniformly with top-level/preamble/files
+    /// branches.
+    fn record_shell(&mut self, c: &ShellConditional<Span>) {
+        let branches = c
+            .branches
+            .iter()
+            .map(|b| CollectedBranch {
+                kind: b.kind,
+                expr: b.expr.clone(),
+                span: b.data,
+                display: render_condition(b.kind, &b.expr),
+            })
+            .collect();
+        self.collected.push(CollectedConditional {
+            span: c.data,
+            branches,
+            has_else: c.otherwise.is_some(),
+        });
+    }
 }
 
 impl<'ast> Visit<'ast> for ConditionalCollector {
@@ -792,6 +879,10 @@ impl<'ast> Visit<'ast> for ConditionalCollector {
     fn visit_files_conditional(&mut self, node: &'ast Conditional<Span, FilesContent<Span>>) {
         self.record(node);
         walk_files_conditional(self, node);
+    }
+
+    fn visit_shell_conditional(&mut self, node: &'ast ShellConditional<Span>) {
+        self.record_shell(node);
     }
 }
 
@@ -845,6 +936,7 @@ fn render_macro_ref(mr: &MacroRef) -> String {
 }
 
 fn render_expr_ast(expr: &ExprAst<Span>) -> String {
+    use rpm_spec::ast::ConcatPart;
     match expr {
         ExprAst::Integer { value, .. } => value.to_string(),
         ExprAst::String { value, .. } => format!("\"{value}\""),
@@ -858,6 +950,13 @@ fn render_expr_ast(expr: &ExprAst<Span>) -> String {
             kind.as_str(),
             render_expr_ast(rhs)
         ),
+        ExprAst::NumericConcat { parts, .. } => parts
+            .iter()
+            .map(|p| match p {
+                ConcatPart::Literal { text, .. } | ConcatPart::Macro { text, .. } => text.as_str(),
+                _ => "",
+            })
+            .collect(),
         _ => "?".to_string(),
     }
 }
@@ -866,7 +965,13 @@ fn render_expr_ast(expr: &ExprAst<Span>) -> String {
 // Per-branch evaluator
 // ---------------------------------------------------------------------------
 
-fn evaluate_branch(
+/// `pub(crate)` rather than private because [`crate::spec_locals`]
+/// needs to evaluate top-level conditionals against a profile during
+/// its scan (some specs guard `%global` definitions on distro
+/// detection, e.g. `%if "%{_vendor}" == "suse"` flipping a marker
+/// macro per family). Stable internal contract — bump cautiously: any
+/// signature change forces `spec_locals::scan_conditional` to follow.
+pub(crate) fn evaluate_branch(
     kind: CondKind,
     expr: &CondExpr<Span>,
     profile: &Profile,
@@ -1115,7 +1220,112 @@ fn evaluate_expr_ast(
             let r = evaluate_expr_ast(rhs, macros, bcond)?;
             apply_binop(*kind, l, r)
         }
+        ExprAst::NumericConcat { parts, .. } => evaluate_numeric_concat(parts, macros, bcond),
         _ => Err(EvalError::Unsupported("unknown ExprAst variant")),
+    }
+}
+
+/// Evaluate a [`ExprAst::NumericConcat`] node — the parsed shape of the
+/// `0%{?el8}` "safe defined" idiom. Every part contributes either
+/// literal text (digits) or the expansion of a macro reference. The
+/// concatenation is then parsed as `i64` — RPM treats anything
+/// non-numeric here as a hard error, but our analyser surfaces it as an
+/// `EvalError::TypeMismatch` so the surrounding profile renders as
+/// `[INDETERMINATE: …]` rather than crashing the whole report.
+///
+/// Macro-expansion policy mirrors the existing single-macro path
+/// (`ExprAst::Macro` arm above):
+/// * `%{?name}` undefined → empty string;
+/// * `%{!?name}` defined → empty (without default body) or
+///   `UnmodelledDefault` error;
+/// * unconditional `%{name}` undefined → `UndefinedMacro`;
+/// * `bcond` syntactic form (`%{with X}` / `%{without X}`) → resolved
+///   via the per-spec `BcondMap`.
+///
+/// We do this by rebuilding the source-equivalent text and routing
+/// through [`expand_raw_string`] — the same expander the
+/// [`CondExpr::Raw`] path uses — so semantics stay consistent across
+/// parsed and raw shapes.
+fn evaluate_numeric_concat(
+    parts: &[rpm_spec::ast::ConcatPart<Span>],
+    macros: &MacroRegistry,
+    bcond: &crate::bcond::BcondMap,
+) -> Result<EvalValue, EvalError> {
+    // AST invariant: the parser only emits `NumericConcat` when there
+    // are at least two parts to join (a leaf-only concat would be
+    // collapsed to its single child). Guard with `debug_assert` so a
+    // hand-rolled malformed AST in tests fails loudly without paying
+    // a release-build branch.
+    debug_assert!(
+        parts.len() >= 2,
+        "ExprAst::NumericConcat invariant: parts.len() must be >= 2 (got {})",
+        parts.len()
+    );
+    // Rebuild the original source-form (digits and macro-verbatim
+    // glued together) so `expand_raw_string` can do the macro work.
+    // The parts themselves carry the exact verbatim text — including
+    // the leading `%` and any braces on macro parts — so the join
+    // round-trips the source.
+    //
+    // `thread_local` buffer reuse: `evaluate_numeric_concat` is called
+    // once per `0%{?with_foo}`-style condition during matrix
+    // evaluation. On a fully-populated spec that's thousands of
+    // invocations; reusing one `String` per thread avoids the per-call
+    // allocation/free cycle. The buffer is cleared on entry and never
+    // shrunk, so steady-state cost is a single capacity that fits the
+    // largest concat seen on this thread.
+    thread_local! {
+        static CONCAT_BUF: std::cell::RefCell<String> =
+            const { std::cell::RefCell::new(String::new()) };
+    }
+    let expanded = CONCAT_BUF.with(|buf_cell| {
+        let mut buf = buf_cell.borrow_mut();
+        buf.clear();
+        buf.reserve(parts.iter().map(|p| concat_part_text(p).len()).sum());
+        for part in parts {
+            buf.push_str(concat_part_text(part));
+        }
+        expand_raw_string(&buf, macros, bcond)
+    })?;
+    // RPM parses the result as a signed integer; non-numeric content
+    // is a real condition error, not a fallback to string compare.
+    // Empty (all macros undefined, no literals) means `0` — a common
+    // case (`%{?a}%{?b}` with both undefined would only reach here if
+    // the parser created such a concat; we don't, but defend anyway).
+    let trimmed = expanded.trim();
+    if trimmed.is_empty() {
+        return Ok(EvalValue::Int(0));
+    }
+    trimmed.parse::<i64>().map(EvalValue::Int).map_err(|_| {
+        // Trace surfaces "expanded to NaN" — typical when a `%{?foo}`
+        // resolved to a string body the spec author thought was numeric.
+        tracing::trace!(
+            input = %trimmed,
+            "numeric concat: non-numeric after expansion",
+        );
+        EvalError::TypeMismatch
+    })
+}
+
+/// Extract the source-form text from a [`ConcatPart`], independent of
+/// the `Span` type parameter.
+///
+/// Both `Literal` and `Macro` carry a verbatim `text` that round-trips
+/// the original source (including the leading `%` and any braces on
+/// macro parts). Used by:
+/// * [`evaluate_numeric_concat`] — to rebuild a string for the raw
+///   macro expander.
+/// * [`crate::rules::conditional_idioms`] — to rerun the textual
+///   `0%{?with_NAME}` matcher on a `NumericConcat` AST shape.
+///
+/// `ConcatPart` is `#[non_exhaustive]` upstream; future variants
+/// fall through to `""` rather than panicking so existing callers
+/// degrade gracefully.
+pub(crate) fn concat_part_text<T>(p: &rpm_spec::ast::ConcatPart<T>) -> &str {
+    use rpm_spec::ast::ConcatPart;
+    match p {
+        ConcatPart::Literal { text, .. } | ConcatPart::Macro { text, .. } => text,
+        _ => "",
     }
 }
 
@@ -1553,6 +1763,73 @@ B\n\
         let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         assert!(report.conditionals[0].branches[0].is_dead());
         assert_eq!(report.dead_branches(), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // NumericConcat — `0%{?distro} || ... >= N` idiom regression tests.
+    // Before the parser learnt to fuse `0` + `%{?name}` into a single
+    // primary term, this whole family of `%if` conditions fell into the
+    // Raw fallback and surfaced as `[INDETERMINATE: not analysed:
+    // arithmetic in Raw condition requires Parsed CondExpr]`.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn numeric_concat_undefined_macro_evaluates_to_zero_inactive() {
+        // `%if 0%{?never_defined}` — undefined macro expands to empty,
+        // concat yields `"0"`, parsed as `0` → false → branch inactive.
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%if 0%{?never_defined}");
+        let report =
+            CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
+        let b = &report.conditionals[0].branches[0];
+        assert!(
+            b.inactive_on.contains(&"generic".to_string()),
+            "expected inactive on generic; got {b:?}"
+        );
+        assert!(b.indeterminate_on.is_empty(), "got {b:?}");
+    }
+
+    #[test]
+    fn numeric_concat_or_chain_with_relational() {
+        // The motivating real-world expression from a real-world spec.
+        // With rhel defined on rhel-9 only,
+        // `0%{?rhel} >= 9` activates rhel-9 and stays inactive on
+        // generic / rhel-7 (where rhel is undefined → concat = 0).
+        let set = resolved(&["generic", "rhel-9-x86_64"]);
+        let spec = spec_with_conditional(
+            "%if 0%{?rhel} >= 9 || 0%{?never_defined_macro_xyz}",
+        );
+        let report =
+            CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
+        let b = &report.conditionals[0].branches[0];
+        assert!(
+            b.active_on.contains(&"rhel-9-x86_64".to_string()),
+            "expected active on rhel-9-x86_64; got {b:?}"
+        );
+        assert!(
+            b.inactive_on.contains(&"generic".to_string()),
+            "expected inactive on generic; got {b:?}"
+        );
+        // Crucially: no `[INDETERMINATE]` — the old behaviour would
+        // have flagged every profile here as indeterminate.
+        assert!(b.indeterminate_on.is_empty(), "got {b:?}");
+    }
+
+    #[test]
+    fn numeric_concat_chained_or_three_distros_all_undefined() {
+        // `0%{?el8} || 0%{?el9} || 0%{?el10}` on a profile where
+        // none of them is defined — every operand is `0`, the chain
+        // is `0 || 0 || 0` → false → inactive.
+        let set = resolved(&["generic"]);
+        let spec = spec_with_conditional("%if 0%{?el8} || 0%{?el9} || 0%{?el10}");
+        let report =
+            CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
+        let b = &report.conditionals[0].branches[0];
+        assert!(
+            b.inactive_on.contains(&"generic".to_string()),
+            "expected inactive on generic; got {b:?}"
+        );
+        assert!(b.indeterminate_on.is_empty(), "got {b:?}");
     }
 
     #[test]

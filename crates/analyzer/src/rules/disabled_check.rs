@@ -70,7 +70,7 @@ impl<'ast> Visit<'ast> for DisabledCheckSection {
 /// `true` if any line in `body` carries shell content. Blank lines
 /// and lines whose literal payload is empty (or starts with `#` after
 /// trimming) are skipped; everything else counts.
-fn has_executable_line(body: &ShellBody) -> bool {
+fn has_executable_line(body: &ShellBody<Span>) -> bool {
     body.lines.iter().any(|line| {
         let Some(lit) = line.literal_str() else {
             // Macro-containing lines: assume they're executable. A

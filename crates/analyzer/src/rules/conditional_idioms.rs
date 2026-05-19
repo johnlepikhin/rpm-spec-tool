@@ -11,7 +11,8 @@
 //! which crosses block boundaries.
 
 use rpm_spec::ast::{
-    CondExpr, Conditional, FilesContent, PreambleContent, PreambleItem, Span, SpecItem, Tag,
+    CondExpr, Conditional, ExprAst, FilesContent, PreambleContent, PreambleItem, Span, SpecItem,
+    Tag,
 };
 
 use crate::diagnostic::{Applicability, Diagnostic, LintCategory, Severity, Suggestion};
@@ -51,7 +52,19 @@ impl PreferBcondForBuildOptions {
                 .map(str::trim)
                 .unwrap_or_default()
                 .to_string(),
-            CondExpr::Parsed(_) => return, // Parsed paths cover non-idiomatic forms first.
+            // `0%{?with_NAME}` is now parsed as a structural
+            // `NumericConcat` (since the parser learnt to fuse a
+            // literal digit with a following macro). The lint must
+            // recognise this shape too — recover the source-form
+            // string from the concat parts and rerun the textual
+            // matcher so the diagnostic stays identical.
+            CondExpr::Parsed(boxed) => match boxed.as_ref() {
+                ExprAst::NumericConcat { parts, .. } => parts
+                    .iter()
+                    .map(crate::branch_coverage::concat_part_text)
+                    .collect(),
+                _ => return, // Other Parsed shapes don't match the build-option idiom.
+            },
             _ => return,
         };
         if let Some(name) = parse_with_pattern(&text) {

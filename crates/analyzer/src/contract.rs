@@ -706,7 +706,7 @@ must_have_buildrequires = ["gcc"]
     fn forbidden_dep_in_indeterminate_branch_still_flagged() {
         // Indeterminate branches under Include policy (forbidden-side):
         // a forbidden dep that COULD reach the build must surface as a
-        // violation. Use `%if 0%{?rhel} >= 8` arithmetic Raw → always
+        // violation. Use `%if 1 + 2 == 3` arithmetic Raw → always
         // Indeterminate. The forbidden check uses Include policy so
         // the dep DOES count.
         const SPEC: &str = "\
@@ -715,7 +715,7 @@ Version: 1.0
 Release: 1
 Summary: t
 License: MIT
-%if 0%{?rhel} >= 8
+%if 1 + 2 == 3
 BuildRequires: banned-pkg
 %endif
 
@@ -791,10 +791,10 @@ Version: 1.0
 Release: 1
 Summary: t
 License: MIT
-%if 0%{?rhel} >= 8
+%if 1 + 2 == 3
 BuildRequires: banned-pkg
 %endif
-%if 0%{?rhel} >= 9
+%if 4 + 5 == 9
 BuildRequires: maybe-required
 %endif
 
@@ -847,7 +847,7 @@ Version: 1.0
 Release: 1
 Summary: t
 License: MIT
-%if 0%{?rhel} >= 8
+%if 1 + 2 == 3
 BuildRequires: maybe-gcc
 %endif
 

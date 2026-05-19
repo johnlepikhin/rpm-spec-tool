@@ -23,6 +23,8 @@ use rpm_spec_analyzer::profile::ResolvedTargetSet;
 use rpm_spec_analyzer::{ClassesReport, session::parse};
 use serde::Serialize;
 
+use super::coverage_style::Style;
+use crate::app::ColorChoice;
 use crate::io;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -60,7 +62,11 @@ pub struct ClassesOpts {
     pub bcond: crate::app::BcondOverridesArg,
 }
 
-pub(super) fn run(opts: ClassesOpts, config_override: Option<&Path>) -> Result<ExitCode> {
+pub(super) fn run(
+    opts: ClassesOpts,
+    config_override: Option<&Path>,
+    color: ColorChoice,
+) -> Result<ExitCode> {
     let ctx = match super::prepare_matrix(
         config_override,
         opts.target_set.as_deref(),
@@ -98,7 +104,10 @@ pub(super) fn run(opts: ClassesOpts, config_override: Option<&Path>) -> Result<E
     let report = ClassesReport::compute(&parsed.spec, &resolved, &opts.bcond.to_overrides());
 
     match opts.format {
-        OutputFormat::Human => render_human(&source, &report, &resolved)?,
+        OutputFormat::Human => {
+            let style = Style::new(color);
+            render_human(&source, &report, &resolved, &style)?;
+        }
         OutputFormat::Json => render_json(&source, &report, &resolved)?,
     }
     Ok(ExitCode::SUCCESS)
@@ -112,43 +121,71 @@ fn render_human(
     source: &io::Source,
     report: &ClassesReport,
     target_set: &ResolvedTargetSet,
+    style: &Style,
 ) -> Result<()> {
     use std::io::Write;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     writeln!(
         out,
-        "# Matrix classes: target set `{}` ({} profiles → {} class(es))",
-        target_set.id,
-        target_set.targets.len(),
-        report.class_count()
+        "{}",
+        style.header(&format!(
+            "# Matrix classes: target set `{}` ({} profiles → {} class(es))",
+            target_set.id,
+            target_set.targets.len(),
+            report.class_count(),
+        ))
     )?;
-    writeln!(out, "## {}", source.display_name())?;
+    writeln!(
+        out,
+        "{}",
+        style.header(&format!("## {}", source.display_name()))
+    )?;
 
     if report.classes.is_empty() {
-        writeln!(out, "  (no profiles in target set)")?;
+        writeln!(out, "  {}", style.dim("(no profiles in target set)"))?;
         return Ok(());
     }
 
     for (i, class) in report.classes.iter().enumerate() {
         writeln!(out)?;
+        // Class header is bold; signature dim (it's a hash, not the
+        // load-bearing identity readers need to remember).
         writeln!(
             out,
-            "## Class {} ({} members, sig {})",
-            i + 1,
-            class.members.len(),
-            class.signature
+            "{} {}",
+            style.header(&format!(
+                "## Class {} ({} members,",
+                i + 1,
+                class.members.len(),
+            )),
+            style.dim(&format!("sig {})", class.signature)),
         )?;
-        writeln!(out, "  representative: {}", class.representative)?;
-        writeln!(out, "  members:        {}", class.members.join(", "))?;
+        writeln!(
+            out,
+            "  {}: {}",
+            style.header("representative"),
+            class.representative
+        )?;
+        writeln!(
+            out,
+            "  {}:        {}",
+            style.header("members"),
+            class.members.join(", ")
+        )?;
         for bucket in &class.deps_by_tag {
             if bucket.deps.is_empty() {
-                writeln!(out, "  {} (0): (none)", bucket.tag_label)?;
+                writeln!(
+                    out,
+                    "  {} (0): {}",
+                    style.header(bucket.tag_label),
+                    style.dim("(none)")
+                )?;
             } else {
                 writeln!(
                     out,
                     "  {} ({}): {}",
-                    bucket.tag_label,
+                    style.header(bucket.tag_label),
                     bucket.deps.len(),
                     bucket.deps.join(", ")
                 )?;
@@ -162,8 +199,11 @@ fn render_human(
     writeln!(out)?;
     writeln!(
         out,
-        "## Minimal representative build set ({})",
-        report.class_count()
+        "{}",
+        style.header(&format!(
+            "## Minimal representative build set ({})",
+            report.class_count(),
+        ))
     )?;
     for rep in report.representatives() {
         writeln!(out, "  {rep}")?;
