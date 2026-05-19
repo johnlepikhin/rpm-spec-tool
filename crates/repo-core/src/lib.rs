@@ -37,6 +37,7 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("rpm-spec-repo-core requires Linux — repository handling assumes Linux-only conventions");
 
+pub mod db;
 pub mod error;
 pub mod evr;
 pub mod index;

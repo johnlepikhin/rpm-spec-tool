@@ -43,6 +43,15 @@ pub enum RepoError {
 
     #[error("unsupported repo kind: {0}")]
     UnsupportedKind(String),
+
+    #[error("repo database: {0}")]
+    Database(String),
+}
+
+impl From<rusqlite::Error> for RepoError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Database(e.to_string())
+    }
 }
 
 /// HTTP-layer error. `network` covers connect/read/timeout/TLS; `status`
