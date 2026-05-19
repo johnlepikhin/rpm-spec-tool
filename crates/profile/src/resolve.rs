@@ -80,6 +80,16 @@ pub enum ResolveError {
         key: String,
         reason: &'static str,
     },
+    /// A `[profiles.X.repos.<id>]` key did not match the repo-id
+    /// grammar (lowercase ascii, digits, `-`, `_`, ≤64 chars).
+    /// Validated at resolve time rather than parse time so the
+    /// diagnostic can name the owning profile.
+    #[error("profile `{profile}` has invalid repo id `{id}`: {reason}")]
+    InvalidRepoId {
+        profile: String,
+        id: String,
+        reason: String,
+    },
 }
 
 /// Caller-supplied knobs for [`resolve`]. Carries CLI-time inputs that
@@ -336,6 +346,49 @@ fn apply_entry(
     // Layer 4 — explicit user overrides from [profiles.X.*].
     let override_patch = entry.override_patch(profile_key);
     profile.apply(override_patch);
+
+    // Layer 5 — repositories and buildroot config. Repos slot into
+    // their own `Option<RepoSet>` slot rather than going through the
+    // patch / layer-trail mechanism because they're consumed by
+    // entirely separate analyzers (the RepoSession / RPM-REPO-*
+    // lints) and have atomic, not merged, replacement semantics
+    // (an inherited repo with the same id is replaced wholesale).
+    apply_repos(profile, profile_key, entry)?;
+
+    Ok(())
+}
+
+/// Validate repo IDs declared in `[profiles.X.repos.<id>]`, then
+/// install the [`crate::repos::RepoSet`] on the profile. Empty
+/// `repos` + empty `buildroot` short-circuits to `None` so
+/// downstream `repos.is_none()` cleanly means "this profile has no
+/// repo configuration".
+fn apply_repos(
+    profile: &mut Profile,
+    profile_key: &str,
+    entry: &ProfileEntry,
+) -> Result<(), ResolveError> {
+    use crate::repos::{validate_repo_id, RepoSet};
+
+    for id in entry.repos.keys() {
+        validate_repo_id(id).map_err(|reason| ResolveError::InvalidRepoId {
+            profile: profile_key.to_string(),
+            id: id.clone(),
+            reason,
+        })?;
+    }
+
+    if entry.repos.is_empty()
+        && entry.buildroot.base_packages.is_empty()
+        && entry.buildroot.implicit_buildrequires.is_empty()
+    {
+        return Ok(());
+    }
+
+    profile.repos = Some(RepoSet {
+        repos: entry.repos.clone(),
+        buildroot: entry.buildroot.clone(),
+    });
     Ok(())
 }
 

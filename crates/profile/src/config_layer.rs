@@ -11,6 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::merge::{IdentityPatch, ListPatch, ProfilePatch};
+use crate::repos::{BuildrootConfig, RepoConfig};
 use crate::types::{Family, MacroEntry, MacroValue, Provenance, ValidationMode};
 
 /// Top-level slice that `analyzer::config::Config` embeds.
@@ -54,6 +55,17 @@ pub struct ProfileEntry {
     pub licenses: Option<ListOverride>,
     /// Group whitelist override.
     pub groups: Option<ListOverride>,
+    /// Per-repository configuration for this profile. Keys are
+    /// human-friendly identifiers (e.g. `"baseos"`, `"appstream"`).
+    /// One repo with the same id from an inherited (`extends`)
+    /// built-in is replaced wholesale; `enabled = false` masks an
+    /// inherited entry without redefining its URL. Validated against
+    /// `[a-z0-9_-]{1,64}` at resolve time.
+    pub repos: BTreeMap<String, RepoConfig>,
+    /// Base buildroot packages — what the chroot ships before
+    /// processing `BuildRequires`. Defaults to an empty list when
+    /// the profile inherits no built-in defaults.
+    pub buildroot: BuildrootConfig,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]

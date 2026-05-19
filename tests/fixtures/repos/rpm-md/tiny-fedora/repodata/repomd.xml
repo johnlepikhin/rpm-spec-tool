@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<repomd xmlns="http://linux.duke.edu/metadata/repo">
+  <revision>1715000000</revision>
+  <data type="primary">
+    <location href="repodata/primary.xml.gz"/>
+  </data>
+</repomd>

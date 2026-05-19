@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata xmlns="http://linux.duke.edu/metadata/common"
+          xmlns:rpm="http://linux.duke.edu/metadata/rpm"
+          packages="3">
+  <package type="rpm">
+    <name>bash</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="5.1.8" rel="9.el9"/>
+    <checksum type="sha256" pkgid="YES">abc123</checksum>
+    <summary>The GNU Bourne Again shell</summary>
+    <size package="1500000" installed="6500000" archive="6800000"/>
+    <location href="Packages/b/bash-5.1.8-9.el9.x86_64.rpm"/>
+    <format>
+      <rpm:sourcerpm>bash-5.1.8-9.el9.src.rpm</rpm:sourcerpm>
+      <rpm:provides>
+        <rpm:entry name="bash" flags="EQ" epoch="0" ver="5.1.8" rel="9.el9"/>
+        <rpm:entry name="/bin/bash"/>
+        <rpm:entry name="/bin/sh"/>
+      </rpm:provides>
+      <rpm:requires>
+        <rpm:entry name="glibc" flags="GE" epoch="0" ver="2.34"/>
+      </rpm:requires>
+    </format>
+  </package>
+  <package type="rpm">
+    <name>cmake</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="3.26.5" rel="2.el9"/>
+    <checksum type="sha256" pkgid="YES">def456</checksum>
+    <summary>Cross-platform make</summary>
+    <size package="11000000" installed="40000000" archive="42000000"/>
+    <location href="Packages/c/cmake-3.26.5-2.el9.x86_64.rpm"/>
+    <format>
+      <rpm:sourcerpm>cmake-3.26.5-2.el9.src.rpm</rpm:sourcerpm>
+      <rpm:provides>
+        <rpm:entry name="cmake" flags="EQ" epoch="0" ver="3.26.5" rel="2.el9"/>
+        <rpm:entry name="/usr/bin/cmake"/>
+      </rpm:provides>
+      <rpm:requires>
+        <rpm:entry name="bash"/>
+      </rpm:requires>
+    </format>
+  </package>
+  <package type="rpm">
+    <name>glibc</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="2.34" rel="100.el9"/>
+    <checksum type="sha256" pkgid="YES">789xyz</checksum>
+    <summary>The GNU libc libraries</summary>
+    <size package="2000000" installed="15000000" archive="16000000"/>
+    <location href="Packages/g/glibc-2.34-100.el9.x86_64.rpm"/>
+    <format>
+      <rpm:sourcerpm>glibc-2.34-100.el9.src.rpm</rpm:sourcerpm>
+      <rpm:provides>
+        <rpm:entry name="glibc" flags="EQ" epoch="0" ver="2.34" rel="100.el9"/>
+        <rpm:entry name="libc.so.6"/>
+      </rpm:provides>
+    </format>
+  </package>
+</metadata>

@@ -32,6 +32,7 @@ pub mod macro_lexer;
 pub mod macro_variants;
 pub mod merge;
 pub mod overrides;
+pub mod repos;
 pub mod resolve;
 pub mod showrc;
 pub mod types;

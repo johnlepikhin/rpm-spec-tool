@@ -10,6 +10,7 @@ pub mod matrix;
 pub mod pretty;
 pub mod printer_config;
 pub mod profile;
+pub mod repo;
 pub mod target;
 
 /// Upper bound on the per-level conditional indent. The printer

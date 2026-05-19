@@ -16,6 +16,13 @@ pub struct Application {
     /// When/how to emit ANSI colours. Default `auto` follows TTY detection.
     #[arg(long, global = true, default_value_t = ColorChoice::Auto, value_enum)]
     pub color: ColorChoice,
+
+    /// Explicit path to `.rpmspec.toml`. Without this flag the nearest
+    /// `.rpmspec.toml` walking upward from each file (or CWD for
+    /// commands without input files) is used. Global flag — accepted
+    /// at any position, including before the subcommand.
+    #[arg(long, global = true)]
+    pub config: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -44,6 +51,10 @@ pub enum Command {
     Target(commands::target::Cmd),
     /// Multi-profile (release matrix) analysis.
     Matrix(commands::matrix::Cmd),
+    /// Manage RPM repository metadata for repo-aware analysis
+    /// (sync, show, cache management; lock/health land in later
+    /// milestones).
+    Repo(commands::repo::Cmd),
     /// List every built-in lint rule with a short description.
     Lints(commands::lints::Cmd),
     /// Manage `.rpmspec.toml` — generate from defaults, validate, or
@@ -162,6 +173,7 @@ impl Application {
             Command::Profile(cmd) => cmd.run(color),
             Command::Target(cmd) => cmd.run(color),
             Command::Matrix(cmd) => cmd.run(color),
+            Command::Repo(cmd) => cmd.run(color),
             Command::Lints(cmd) => cmd.run(color),
             Command::Config(cmd) => cmd.run(color),
             Command::Completions(cmd) => cmd.run(),

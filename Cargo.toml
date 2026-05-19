@@ -5,6 +5,9 @@ members = [
     "crates/cli",
     "crates/lsp",
     "crates/profile",
+    "crates/repo-core",
+    "crates/repo-metadata",
+    "crates/repo-resolver",
 ]
 
 [workspace.package]
@@ -17,11 +20,14 @@ repository   = "https://github.com/johnlepikhin/rpm-spec-tool"
 publish      = ["crates-io"]
 
 [workspace.dependencies]
-rpm-spec         = { version = "0.3.4", features = ["parser", "printer", "serde"] }
-rpm-spec-profile = { path = "crates/profile", version = "0.1.1" }
+rpm-spec               = { version = "0.3.4", features = ["parser", "printer", "serde"] }
+rpm-spec-profile       = { path = "crates/profile", version = "0.1.1" }
+rpm-spec-repo-core     = { path = "crates/repo-core", version = "0.1.1" }
+rpm-spec-repo-metadata = { path = "crates/repo-metadata", version = "0.1.1" }
+rpm-spec-repo-resolver = { path = "crates/repo-resolver", version = "0.1.1" }
 anyhow     = "1"
 thiserror  = "2"
-serde      = { version = "1", features = ["derive"] }
+serde      = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 schemars   = "1"
 toml       = "0.8"

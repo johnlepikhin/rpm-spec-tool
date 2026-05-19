@@ -29,6 +29,14 @@ pub struct Profile {
     /// Layer trail in application order (low → high precedence) — useful
     /// for `rpm-spec-tool profile show` and debugging.
     pub layers: Vec<LayerInfo>,
+    /// Repositories and buildroot configuration. `None` when the
+    /// profile declares neither (the legacy case — every existing
+    /// built-in starts here until per-profile defaults ship in PR 7).
+    /// Lazy: only TOML data lives here; the resolver building a
+    /// `RepoUniverse` happens in `rpm-spec-analyzer`'s `RepoSession`
+    /// when a repo-aware consumer asks for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repos: Option<crate::repos::RepoSet>,
 }
 
 /// Identity of the target distribution.

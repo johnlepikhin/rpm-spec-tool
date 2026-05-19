@@ -1,0 +1,45 @@
+[package]
+name        = "rpm-spec-repo-metadata"
+description = "HTTP fetch + cache + parsers for rpm-md and apt-rpm repository metadata"
+publish     = false
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "rpm_spec_repo_metadata"
+
+[features]
+default  = ["rpm-md"]
+rpm-md   = []
+apt-rpm  = []  # ALT Linux backend (stub in M1, full impl in M3)
+# Optional, off by default until the real verifier ships (see `gpg.rs`).
+gpg      = []  # warn-only stub; real verifier deferred
+
+[dev-dependencies]
+rpm-spec-profile.workspace       = true
+
+[dependencies]
+rpm-spec-repo-core.workspace = true
+serde.workspace              = true
+serde_json.workspace         = true
+thiserror.workspace          = true
+tracing.workspace            = true
+time                         = { workspace = true, features = ["serde", "macros", "formatting"] }
+ureq        = { version = "2.10", default-features = false, features = ["tls"] }
+# Direct rustls dep so `HttpCache::new(... insecure_tls: true)` can build a
+# `ClientConfig` with `dangerous().with_custom_certificate_verifier(...)`.
+# Version must match what ureq pulls in transitively (rustls 0.23).
+rustls      = "0.23"
+quick-xml   = { version = "0.36", features = ["serialize"] }
+flate2      = "1"
+zstd        = "0.13"
+xz2         = "0.1"
+sha2        = "0.10"
+directories = "5"
+tempfile    = "3"
+rustix      = { version = "0.38", features = ["fs"] }
+bincode     = { version = "1", optional = false }

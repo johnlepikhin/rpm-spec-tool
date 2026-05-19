@@ -1,0 +1,20 @@
+[package]
+name        = "rpm-spec-repo-core"
+description = "Data model + EVR comparison + error types for the rpm-spec-tool repository subsystem"
+publish     = false
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "rpm_spec_repo_core"
+
+[dependencies]
+rpm-spec-profile.workspace = true
+serde.workspace            = true
+thiserror.workspace        = true
+tracing.workspace          = true
+time                       = { workspace = true, features = ["serde", "macros", "parsing", "formatting"] }

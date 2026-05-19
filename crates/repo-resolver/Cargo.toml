@@ -1,0 +1,22 @@
+[package]
+name        = "rpm-spec-repo-resolver"
+description = "P0 walker resolver over rpm-md/apt-rpm package indexes; SAT-backed resolution (rich deps, complex conflicts) is tracked for a later milestone"
+publish     = false
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+
+[lib]
+name = "rpm_spec_repo_resolver"
+
+[dependencies]
+rpm-spec-repo-core.workspace = true
+thiserror.workspace          = true
+tracing.workspace            = true
+
+[dev-dependencies]
+time = { workspace = true, features = ["macros"] }
+
