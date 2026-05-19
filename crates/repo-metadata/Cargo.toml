@@ -1,7 +1,6 @@
 [package]
 name        = "rpm-spec-repo-metadata"
 description = "HTTP fetch + cache + parsers for rpm-md and apt-rpm repository metadata"
-publish     = false
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

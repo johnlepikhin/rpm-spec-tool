@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use rpm_spec_repo_core::db::RepoDb;
 use rpm_spec_repo_core::{RepoError, RepoIndex, RepoKind};
 
 use crate::util::{atomic_write, sha256_hex};
@@ -183,6 +184,19 @@ pub fn write_snapshot(
     let bin = bincode::serialize(index).map_err(|e| RepoError::Serialize(e.to_string()))?;
     atomic_write(&snap_dir.join("index.bincode"), &bin)?;
 
+    // Write the SQLite mirror next to the bincode snapshot. The DB
+    // becomes the load-time source of truth once Phase 3 wires the
+    // reader path, but we emit both in Phase 2 so an in-place
+    // upgrade doesn't force a re-sync. Tmp-rename keeps the file
+    // atomic from a reader's perspective; SQLite's own WAL handles
+    // crash-during-write.
+    write_repo_db(
+        &snap_dir,
+        baseurl,
+        backend_kind,
+        index,
+    )?;
+
     // Repoint `current` to the new snapshot. ENOENT is benign (first
     // snapshot for this repo); any other error indicates a real
     // filesystem problem and must surface.
@@ -195,6 +209,45 @@ pub fn write_snapshot(
     std::os::unix::fs::symlink(&snap_dir, &current)?;
 
     Ok(snap_dir)
+}
+
+/// Build the per-snapshot `repo.db` from a parsed [`RepoIndex`].
+///
+/// The DB is the load-time backend that replaces `index.bincode`
+/// (the old format is still written for downgrade safety in Phase 2;
+/// readers swap over in Phase 3 / 4). Writing happens to a `.tmp`
+/// path so a partial DB never appears under the snapshot name —
+/// if the process dies mid-ingest the next run sees no `repo.db`
+/// and re-parses XML.
+fn write_repo_db(
+    snap_dir: &Path,
+    baseurl: &str,
+    backend_kind: RepoKind,
+    index: &RepoIndex,
+) -> Result<(), RepoError> {
+    let final_path = snap_dir.join(RepoDb::file_name());
+    let tmp_path = snap_dir.join(format!("{}.tmp", RepoDb::file_name()));
+    if tmp_path.exists() {
+        fs::remove_file(&tmp_path)?;
+    }
+
+    let mut db = RepoDb::create(
+        &tmp_path,
+        &index.repo_id,
+        &index.revision,
+        index.fetched_at,
+        backend_kind.as_str(),
+        &baseurl_key(baseurl),
+    )?;
+    db.ingest_packages(&index.packages)?;
+    drop(db);
+
+    // Atomic publication: rename into place. SQLite's WAL sidecar
+    // files (`*-wal`, `*-shm`) for the freshly created DB are
+    // empty after the connection closed (commit + checkpoint), so
+    // renaming just the main file is safe.
+    fs::rename(&tmp_path, &final_path)?;
+    Ok(())
 }
 
 /// Try loading a cached parsed index. Returns `Ok(None)` when no
