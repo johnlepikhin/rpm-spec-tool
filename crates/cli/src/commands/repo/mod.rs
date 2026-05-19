@@ -27,11 +27,13 @@ use clap::{Args, Subcommand};
 
 mod cache;
 mod show;
+mod status;
 mod sync;
-pub(super) mod url;
+pub(crate) mod url;
 
 pub use cache::CacheOpts;
 pub use show::ShowOpts;
+pub use status::StatusOpts;
 pub use sync::SyncOpts;
 
 /// Fallback profile name used when the user hasn't set one in
@@ -129,6 +131,8 @@ pub enum Action {
     Sync(SyncOpts),
     /// Inspect a fetched repository.
     Show(ShowOpts),
+    /// Quick health check: per-repo sync status for a profile.
+    Status(StatusOpts),
     /// Manage the on-disk cache (list / gc / prune).
     Cache(CacheOpts),
 }
@@ -141,6 +145,7 @@ impl Cmd {
         match self.action {
             Action::Sync(opts) => sync::run(opts, self.repo_args, &config, &base_dir, &style),
             Action::Show(opts) => show::run(opts, self.repo_args, &config, &base_dir, &style),
+            Action::Status(opts) => status::run(opts, self.repo_args, &config, &base_dir, &style),
             Action::Cache(opts) => cache::run(opts, self.repo_args, &config, &base_dir, &style),
         }
     }
