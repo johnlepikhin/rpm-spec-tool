@@ -289,4 +289,27 @@ mod tests {
         let evr = EVR::new(None, "1.2", "");
         assert_eq!(cap("foo", CapFlags::None, Some(evr)).display(), "foo");
     }
+
+    #[test]
+    fn alt_set_version_ge_constraint_satisfied_by_any_set_provide() {
+        // End-to-end check that the EVR `set:`-short-circuit composes
+        // with `CapFlags::GE` to satisfy ALT soname constraints. The
+        // real-world require shape is
+        //   `libpcre2-8.so.0()(64bit) >= set:kgJAZn6...`
+        // and the matching provide is
+        //   `libpcre2-8.so.0()(64bit) = set:kdafcrS9...`
+        // — different `set:` payloads. The name index narrows to the
+        // right capability; the EVR comparison treats both as Equal,
+        // letting `GE` succeed.
+        let provide = EVR::new(Some(0), "set:kdafcrS9Ku7yZIO", "");
+        let require = EVR::new(Some(0), "set:kgJAZn6CpJkW", "");
+        assert!(
+            CapFlags::GE.matches(provide.compare_rpm(&require)),
+            "GE constraint with set: on both sides must be satisfied"
+        );
+        assert!(
+            CapFlags::EQ.matches(provide.compare_rpm(&require)),
+            "EQ constraint with set: on both sides must be satisfied"
+        );
+    }
 }

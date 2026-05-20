@@ -59,8 +59,32 @@ impl EVR {
     /// Full ordering using the rpm vercmp algorithm. Epoch is compared
     /// first as an integer, then version, then release using
     /// [`rpmvercmp`].
+    ///
+    /// ALT-style `set:`-versions short-circuit to [`Ordering::Equal`]
+    /// when **both** sides carry the prefix. These versions encode an
+    /// ABI symbol-set hash (used by ALT's rpm-build to express strict
+    /// ELF soname/symbol-subset constraints) and ALT's own
+    /// `rpmevrcmp` resolves them with a subset test that requires
+    /// base64-decoding the payload — not regular vercmp. Without the
+    /// short-circuit, every ALT soname-constraint like
+    /// `libfoo.so.0()(64bit) >= set:XXX` evaluates as Less/Greater
+    /// against the provider's `set:YYY` and produces false-positive
+    /// UNSAT. Dropping to equality means a name match alone counts
+    /// as satisfied (the same behaviour dnf+yum effectively exhibit
+    /// on rpm-md repos, which don't carry set-versions at all).
+    ///
+    /// Empty-release side: if either operand carries an empty
+    /// `release`, the release leg of the comparison is skipped.
+    /// Real-world requires like `Requires: foo = 2.84.4` (no dash,
+    /// no dist tag) are intentionally version-only — dnf/yum treat
+    /// them as "any release with this version". Without this leg
+    /// skip, every such require false-fails against an actual repo
+    /// provider whose release is non-empty (e.g. `alt1.p11`).
     #[must_use]
     pub fn compare_rpm(&self, other: &Self) -> Ordering {
+        if self.version.starts_with("set:") && other.version.starts_with("set:") {
+            return Ordering::Equal;
+        }
         match self.epoch.cmp(&other.epoch) {
             Ordering::Equal => {}
             ne => return ne,
@@ -68,6 +92,13 @@ impl EVR {
         match rpmvercmp(&self.version, &other.version) {
             Ordering::Equal => {}
             ne => return ne,
+        }
+        // Either side missing a release → version-only match. The
+        // common case is a spec written `Requires: foo = X.Y` against
+        // a repo provider with full `X.Y-altN.p11`; that's not a
+        // mismatch, that's the user saying "any release of X.Y".
+        if self.release.is_empty() || other.release.is_empty() {
+            return Ordering::Equal;
         }
         rpmvercmp(&self.release, &other.release)
     }
@@ -354,5 +385,56 @@ mod tests {
     fn evr_display_omits_zero_epoch() {
         assert_eq!(EVR::new(Some(0), "1.0", "1").to_string(), "1.0-1");
         assert_eq!(EVR::new(Some(2), "1.0", "1").to_string(), "2:1.0-1");
+    }
+
+    #[test]
+    fn alt_set_versions_compare_equal_on_both_sides() {
+        // ALT's content-addressable `set:...` ABI hashes don't have
+        // a meaningful byte ordering — they're symbol-subset markers
+        // resolved by ALT's bespoke rpmevrcmp via base64-decoded
+        // subset tests. Short-circuiting to Equal makes constraints
+        // like `libfoo.so.0()(64bit) >= set:XXX` resolve against a
+        // provider's `= set:YYY` on name-match alone, mirroring how
+        // dnf/yum effectively handle sonames on non-ALT repos.
+        let a = EVR::new(Some(0), "set:kdafcrS9Ku7yZIO", "");
+        let b = EVR::new(Some(0), "set:kgJAZn6CpJkWxvKY7JXz46IBf", "");
+        assert_eq!(a.compare_rpm(&b), Ordering::Equal);
+        assert_eq!(b.compare_rpm(&a), Ordering::Equal);
+    }
+
+    #[test]
+    fn empty_release_treated_as_wildcard_match() {
+        // `Requires: foo = 2.84.4` (no release) must satisfy against
+        // a provider whose release is non-empty. dnf/yum behave the
+        // same way; strict rpmvercmp on the release leg would fail
+        // every dist-tag-bearing repo.
+        let provider = EVR::new(Some(0), "2.84.4", "alt1.p11");
+        let require_versionless = EVR::new(Some(0), "2.84.4", "");
+        assert_eq!(provider.compare_rpm(&require_versionless), Ordering::Equal);
+        assert_eq!(require_versionless.compare_rpm(&provider), Ordering::Equal);
+
+        // Sanity: when neither side has an empty release, normal
+        // rpmvercmp on the release leg still applies.
+        let require_full = EVR::new(Some(0), "2.84.4", "alt2.p11");
+        // alt1 < alt2 lexicographically (and by rpmvercmp).
+        assert_eq!(provider.compare_rpm(&require_full), Ordering::Less);
+    }
+
+    #[test]
+    fn set_version_against_normal_version_falls_through() {
+        // One side `set:` and the other plain — well-formed ALT
+        // pkglists never mix these for the same capability, but if
+        // we see it, fall back to byte-by-byte rpmvercmp (the
+        // historic behaviour). The point of the short-circuit is
+        // ALT's symmetric set-vs-set case, not to leak `set:`
+        // semantics into rpm-md repos.
+        let set_side = EVR::new(Some(0), "set:abc", "");
+        let plain = EVR::new(Some(0), "1.0", "");
+        // Just verify it doesn't panic and is consistent across the
+        // two orderings — the exact ordering of `set:abc` vs `1.0`
+        // is rpmvercmp's call and not load-bearing for the lint.
+        let ab = set_side.compare_rpm(&plain);
+        let ba = plain.compare_rpm(&set_side);
+        assert_eq!(ab, ba.reverse());
     }
 }
