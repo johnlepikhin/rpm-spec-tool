@@ -216,7 +216,10 @@ fn simulate_one(
             n.name.as_ref() == spec_nevr.name && arch_filter.matches(&n.arch)
         })
         .map(|(_pref, n)| n)
-        .max_by(|a, b| a.evr().cmp(&b.evr()));
+        // `cmp_strict` — provider best-pick must not invoke the
+        // dnf-compatible set:/empty-release short-circuits (those
+        // belong to require-vs-provide tests via `compare_rpm`).
+        .max_by(|a, b| a.evr().cmp_strict(&b.evr()));
 
     let Some(best) = best else {
         return Ok(UpgradeRow {
@@ -256,7 +259,8 @@ fn classify(proposed: &EVR, current: &EVR, proposed_epoch: u32, current_epoch: u
     use std::cmp::Ordering::{Equal, Greater, Less};
     let proposed = EVR::new(Some(proposed_epoch), proposed.version.as_str(), proposed.release.as_str());
     let current = EVR::new(Some(current_epoch), current.version.as_str(), current.release.as_str());
-    match proposed.cmp(&current) {
+    // `EVR` has no `Ord` impl — call `compare_rpm` directly.
+    match proposed.compare_rpm(&current) {
         Greater => Verdict::Upgrade,
         Equal => Verdict::Same,
         Less => Verdict::Regress,

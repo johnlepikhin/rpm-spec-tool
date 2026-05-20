@@ -316,7 +316,9 @@ fn pick_provider(
     // definition can't drift between the two consumers.
     let (candidates, file_path_dep) = gather_candidates(universe, dep)?;
 
-    let mut best: Option<(i32, std::cmp::Reverse<EVR>, Arc<str>, ProviderRef)> = None;
+    // No `Reverse<EVR>` wrapper — we compare via `compare_rpm`
+    // directly (EVR doesn't implement `Ord`; see its doc comment).
+    let mut best: Option<(i32, EVR, Arc<str>, ProviderRef)> = None;
     for (cand_ref, nevra) in candidates {
         // File-path deps were already proven via `file_owner`;
         // other deps go through the hot-path `universe.satisfies`
@@ -332,21 +334,31 @@ fn pick_provider(
         let priority = universe
             .priority_of(&cand_ref.repo_id)
             .unwrap_or(REPO_PRIORITY_FALLBACK);
-        let key = (
-            priority,
-            std::cmp::Reverse(nevra.evr()),
-            nevra.name.clone(),
-            cand_ref,
-        );
-        match &best {
-            None => best = Some(key),
-            Some(current) => {
-                let cur_key = (&current.0, &current.1, &current.2);
-                let new_key = (&key.0, &key.1, &key.2);
-                if new_key < cur_key {
-                    best = Some(key);
-                }
-            }
+        // Tiebreak order: `(priority asc, EVR desc, name asc)`.
+        // Spelled out because `EVR` intentionally doesn't implement
+        // `Ord` (Eq/Ord contract vs the set:/empty-release short-
+        // circuits in `compare_rpm` — see the type's doc comment).
+        let cand_evr = nevra.evr();
+        let take = match &best {
+            None => true,
+            Some((cur_prio, cur_evr, cur_name, _)) => match priority.cmp(cur_prio) {
+                std::cmp::Ordering::Less => true,
+                std::cmp::Ordering::Greater => false,
+                std::cmp::Ordering::Equal => match cand_evr.cmp_strict(cur_evr) {
+                    // Reverse: higher EVR wins. Use `cmp_strict`
+                    // (not `compare_rpm`) here — both operands are
+                    // concrete provider EVRs, so the dnf/yum
+                    // "satisfies" short-circuits would conflate
+                    // distinct providers that happen to share a
+                    // version but differ in release.
+                    std::cmp::Ordering::Greater => true,
+                    std::cmp::Ordering::Less => false,
+                    std::cmp::Ordering::Equal => nevra.name < *cur_name,
+                },
+            },
+        };
+        if take {
+            best = Some((priority, cand_evr, nevra.name.clone(), cand_ref));
         }
     }
     Ok(best.map(|(_, _, _, pref)| pref))

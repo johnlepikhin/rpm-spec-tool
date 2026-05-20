@@ -74,9 +74,10 @@ pub fn evr_matches(provider_evr: &EVR, req: &Capability) -> bool {
         // Defensive: `flags=EQ` with `evr=None` is unsatisfiable.
         return false;
     };
-    // EVR's `Ord` impl delegates to `compare_rpm` (rpmvercmp), so
-    // calling `cmp` here is equivalent and keeps the predicate readable.
-    matches_flag(provider_evr.cmp(req_evr), req.flags)
+    // `EVR` exposes `compare_rpm` directly (no `Ord` impl — see the
+    // type doc comment for the Eq/Ord-contract rationale around the
+    // `set:`/empty-release short-circuits).
+    matches_flag(provider_evr.compare_rpm(req_evr), req.flags)
 }
 
 /// Map a three-way comparison result onto an RPM `CapFlags` predicate.

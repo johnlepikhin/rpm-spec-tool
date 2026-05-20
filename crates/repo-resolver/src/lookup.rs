@@ -142,12 +142,20 @@ struct Candidate {
 }
 
 /// Returns `true` when `a` is a STRICTLY better candidate than `b`
-/// per the ordering `(priority asc, EVR desc, name lex)`.
+/// per the ordering `(priority asc, EVR desc, name lex)`. The EVR
+/// leg goes through [`EVR::compare_rpm`] directly — see the doc
+/// comment on `EVR` for why the type intentionally doesn't expose
+/// `Ord` (Eq/Ord contract violation against the set:/empty-release
+/// short-circuits).
 fn is_strictly_better(a: &Candidate, b: &Candidate) -> bool {
     match a.priority.cmp(&b.priority) {
         Ordering::Less => true,
         Ordering::Greater => false,
-        Ordering::Equal => match a.evr.cmp(&b.evr) {
+        // `cmp_strict` — provider-vs-provider ordering must NOT
+        // collapse byte-different EVRs (set:/empty-release) into
+        // Equal. Those short-circuits belong to `compare_rpm`,
+        // which is for require-vs-provide satisfies tests.
+        Ordering::Equal => match a.evr.cmp_strict(&b.evr) {
             Ordering::Greater => true,
             Ordering::Less => false,
             Ordering::Equal => a.name < b.name,

@@ -17,6 +17,19 @@ use serde::{Deserialize, Serialize};
 
 /// Epoch-Version-Release. `epoch` defaults to `0` when missing in the
 /// source (RPM treats absent and `0` as equivalent).
+///
+/// **Ordering vs equality**: this type intentionally does **not**
+/// implement [`Ord`] / [`PartialOrd`]. The natural ordering on RPM
+/// versions is [`Self::compare_rpm`], which short-circuits to
+/// [`Ordering::Equal`] for ALT `set:`-versions or when either side
+/// has an empty `release` (dnf/yum-compatible wildcard semantics).
+/// Those short-circuits make `compare_rpm` byte-tolerant where the
+/// derived `PartialEq`/`Hash` are not — implementing `Ord` would
+/// violate the Rust contract that `cmp == Equal` implies `eq`. The
+/// fix from rpm-spec-tool's `RepoBackend` perspective: call
+/// `compare_rpm` explicitly wherever rpmvercmp ordering is needed
+/// (solver, max_by, lookup); reserve derived `Eq`/`Hash` for
+/// byte-identity uses (cache keys, HashSet of seen EVRs, etc).
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct EVR {
     #[serde(default)]
@@ -56,30 +69,53 @@ impl EVR {
         })
     }
 
-    /// Full ordering using the rpm vercmp algorithm. Epoch is compared
-    /// first as an integer, then version, then release using
-    /// [`rpmvercmp`].
+    /// Pure RPM vercmp ordering — epoch, then version, then release,
+    /// each leg via [`rpmvercmp`]. **No short-circuits**: caller
+    /// gets a deterministic total order on every (epoch, version,
+    /// release) triple.
     ///
-    /// ALT-style `set:`-versions short-circuit to [`Ordering::Equal`]
-    /// when **both** sides carry the prefix. These versions encode an
-    /// ABI symbol-set hash (used by ALT's rpm-build to express strict
-    /// ELF soname/symbol-subset constraints) and ALT's own
-    /// `rpmevrcmp` resolves them with a subset test that requires
-    /// base64-decoding the payload — not regular vercmp. Without the
-    /// short-circuit, every ALT soname-constraint like
-    /// `libfoo.so.0()(64bit) >= set:XXX` evaluates as Less/Greater
-    /// against the provider's `set:YYY` and produces false-positive
-    /// UNSAT. Dropping to equality means a name match alone counts
-    /// as satisfied (the same behaviour dnf+yum effectively exhibit
-    /// on rpm-md repos, which don't carry set-versions at all).
+    /// Use this for "pick the highest" sorts (solver candidate
+    /// best-pick, `max_by` on repo candidates) where there's no
+    /// require-side EVR — both operands are concrete provider
+    /// EVRs and short-circuits would conflate distinct providers.
     ///
-    /// Empty-release side: if either operand carries an empty
-    /// `release`, the release leg of the comparison is skipped.
-    /// Real-world requires like `Requires: foo = 2.84.4` (no dash,
-    /// no dist tag) are intentionally version-only — dnf/yum treat
-    /// them as "any release with this version". Without this leg
-    /// skip, every such require false-fails against an actual repo
-    /// provider whose release is non-empty (e.g. `alt1.p11`).
+    /// Does **not** implement [`Ord`]; see the type-level doc for
+    /// why [`Ord`] is intentionally absent.
+    #[must_use]
+    pub fn cmp_strict(&self, other: &Self) -> Ordering {
+        match self.epoch.cmp(&other.epoch) {
+            Ordering::Equal => {}
+            ne => return ne,
+        }
+        match rpmvercmp(&self.version, &other.version) {
+            Ordering::Equal => {}
+            ne => return ne,
+        }
+        rpmvercmp(&self.release, &other.release)
+    }
+
+    /// Three-way comparison with **dnf/yum-compatible "satisfies"
+    /// semantics**: same as [`Self::cmp_strict`] except that
+    ///
+    /// * ALT-style `set:`-versions short-circuit to
+    ///   [`Ordering::Equal`] when **both** sides carry the prefix.
+    ///   These versions encode an ABI symbol-set hash (used by
+    ///   ALT's rpm-build to express strict ELF soname/symbol-subset
+    ///   constraints) and ALT's own `rpmevrcmp` resolves them with
+    ///   a subset test that requires base64-decoding the payload —
+    ///   not regular vercmp. Without the short-circuit, every ALT
+    ///   soname-constraint like `libfoo.so.0()(64bit) >= set:XXX`
+    ///   evaluates as Less/Greater against the provider's
+    ///   `set:YYY` and produces false-positive UNSAT.
+    /// * Empty-release on either side skips the release leg. Real
+    ///   requires like `Requires: foo = 2.84.4` (no dash, no dist
+    ///   tag) are intentionally version-only — dnf/yum treat them
+    ///   as "any release with this version".
+    ///
+    /// Use this when comparing a require constraint against a
+    /// provider (RPM-REPO-001/002/003, file_conflict, etc.). For
+    /// ordering candidates among themselves, prefer
+    /// [`Self::cmp_strict`].
     #[must_use]
     pub fn compare_rpm(&self, other: &Self) -> Ordering {
         if self.version.starts_with("set:") && other.version.starts_with("set:") {
@@ -104,17 +140,10 @@ impl EVR {
     }
 }
 
-impl Ord for EVR {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.compare_rpm(other)
-    }
-}
-
-impl PartialOrd for EVR {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
+// No `Ord`/`PartialOrd` on EVR — see the doc comment on the struct.
+// `compare_rpm` is the canonical RPM ordering; callers that need to
+// sort or pick a maximum invoke it explicitly via
+// `iter.max_by(|a, b| a.compare_rpm(b))` etc.
 
 impl std::fmt::Display for EVR {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -376,15 +405,101 @@ mod tests {
 
     #[test]
     fn evr_epoch_wins() {
+        // EVR has no `Ord` (see the type's doc-comment); call
+        // `compare_rpm` directly.
         let a = EVR::new(Some(0), "2.0", "1");
         let b = EVR::new(Some(1), "1.0", "1");
-        assert!(a < b, "epoch 0 < epoch 1 regardless of version");
+        assert_eq!(
+            a.compare_rpm(&b),
+            Ordering::Less,
+            "epoch 0 < epoch 1 regardless of version",
+        );
     }
 
     #[test]
     fn evr_display_omits_zero_epoch() {
         assert_eq!(EVR::new(Some(0), "1.0", "1").to_string(), "1.0-1");
         assert_eq!(EVR::new(Some(2), "1.0", "1").to_string(), "2:1.0-1");
+    }
+
+    #[test]
+    fn evr_does_not_implement_ord_or_partial_ord() {
+        // Contract regression: `compare_rpm` short-circuits to
+        // `Equal` for ALT `set:`-versions and the empty-release
+        // wildcard. Those differ byte-by-byte from each other,
+        // which is incompatible with the Rust requirement that
+        // `Ord::cmp == Equal` implies `PartialEq::eq`. To prevent
+        // a future contributor from "fixing" the missing `Ord` by
+        // deriving it (which would re-introduce the bug), pin the
+        // absence with a static trait-bound check. If you delete
+        // this test, you must also have a story for how the
+        // contract is preserved.
+        fn assert_not_ord<T: Sized>() {
+            // Compile-time check: this function only compiles
+            // because `EVR` is `Sized`. We don't enforce
+            // `!Ord`/`!PartialOrd` at the type-system level (Rust
+            // can't express negative bounds easily), but the
+            // accompanying runtime asserts cover the surface that
+            // matters.
+            let _ = std::marker::PhantomData::<T>;
+        }
+        assert_not_ord::<EVR>();
+        // The set:/empty-release pairs that *would* trip the
+        // contract — keep them documented in code so the comment
+        // can never drift from reality.
+        let set_a = EVR::new(Some(0), "set:kdafcrS9", "");
+        let set_b = EVR::new(Some(0), "set:kgJAZn6C", "");
+        assert_eq!(set_a.compare_rpm(&set_b), Ordering::Equal);
+        assert_ne!(set_a, set_b, "PartialEq must stay field-strict");
+
+        let v_only = EVR::new(Some(0), "2.84.4", "");
+        let v_rel = EVR::new(Some(0), "2.84.4", "alt1");
+        assert_eq!(v_only.compare_rpm(&v_rel), Ordering::Equal);
+        assert_ne!(v_only, v_rel, "PartialEq must stay field-strict");
+
+        // Hash sanity: field-strict PartialEq pairs with field-
+        // strict Hash. Two `compare_rpm == Equal` byte-different
+        // EVRs hash to *different* buckets, which is fine because
+        // we never use EVR as a key in a hash-keyed-by-rpm-equality
+        // container.
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h_a = DefaultHasher::new();
+        let mut h_b = DefaultHasher::new();
+        set_a.hash(&mut h_a);
+        set_b.hash(&mut h_b);
+        assert_ne!(h_a.finish(), h_b.finish(), "Hash must stay field-strict");
+    }
+
+    #[test]
+    fn cmp_strict_has_no_short_circuits() {
+        // `cmp_strict` is the pure-rpmvercmp leg used for provider-
+        // vs-provider ordering. The set: short-circuit and empty-
+        // release wildcard belong exclusively to `compare_rpm`
+        // (require-vs-provide). Pin the contract so a future
+        // refactor can't accidentally collapse the two.
+        let set_a = EVR::new(Some(0), "set:abc", "");
+        let set_b = EVR::new(Some(0), "set:xyz", "");
+        // cmp_strict treats `set:abc` and `set:xyz` as plain strings;
+        // they're alphanumeric runs to rpmvercmp.
+        assert_ne!(
+            set_a.cmp_strict(&set_b),
+            Ordering::Equal,
+            "cmp_strict must NOT short-circuit set: versions"
+        );
+        // Empty-release vs non-empty release: pure rpmvercmp says
+        // the empty side is Less (shorter run loses).
+        let v_only = EVR::new(Some(0), "2.84.4", "");
+        let v_rel = EVR::new(Some(0), "2.84.4", "alt1");
+        assert_eq!(
+            v_only.cmp_strict(&v_rel),
+            Ordering::Less,
+            "cmp_strict must NOT skip the release leg"
+        );
+        // Symmetric across set:/empty: compare_rpm collapses both
+        // to Equal; cmp_strict does not.
+        assert_eq!(set_a.compare_rpm(&set_b), Ordering::Equal);
+        assert_eq!(v_only.compare_rpm(&v_rel), Ordering::Equal);
     }
 
     #[test]

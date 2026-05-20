@@ -448,7 +448,7 @@ impl RepoDb {
             }
             if let Some(req_evr) = req.evr.as_ref() {
                 let prov_evr = nevra.evr();
-                if req.flags.matches(prov_evr.cmp(req_evr)) {
+                if req.flags.matches(prov_evr.compare_rpm(req_evr)) {
                     return Ok(true);
                 }
             }
@@ -475,7 +475,7 @@ impl RepoDb {
                 continue;
             };
             let prov_evr = crate::evr::EVR::new(epoch, v, r);
-            if req.flags.matches(prov_evr.cmp(req_evr)) {
+            if req.flags.matches(prov_evr.compare_rpm(req_evr)) {
                 return Ok(true);
             }
         }

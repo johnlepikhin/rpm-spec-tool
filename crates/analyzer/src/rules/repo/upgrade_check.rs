@@ -102,9 +102,18 @@ impl<'ast> Visit<'ast> for UpgradeEvrCheck {
 
         let spec_evr = spec_info.to_evr();
         let profile_name = state.universe.profile_name.as_str();
+        // `EVR` doesn't expose `Ord` (see `EVR` doc-comment for the
+        // Eq/Ord-contract reasoning); compare via `compare_rpm`
+        // directly. `Ordering::Greater` is the only "good" outcome
+        // for an upgrade; `Less`/`Equal` both fire RPM-REPO-030.
+        let evr_ord = spec_evr.compare_rpm(&best.evr());
 
-        if spec_evr <= best.evr() {
-            let relation = if spec_evr == best.evr() { "equal to" } else { "less than" };
+        if !matches!(evr_ord, std::cmp::Ordering::Greater) {
+            let relation = if matches!(evr_ord, std::cmp::Ordering::Equal) {
+                "equal to"
+            } else {
+                "less than"
+            };
             self.base.diagnostics.push(
                 Diagnostic::new(
                     &METADATA_030,
@@ -201,7 +210,11 @@ fn best_published(
         .into_iter()
         .filter(|(_pref, n)| n.name.as_ref() == spec_name && arch_filter.matches(&n.arch))
         .map(|(_pref, n)| n)
-        .max_by(|a, b| a.evr().cmp(&b.evr()))
+        // `cmp_strict` — picking the highest provider EVR is a
+        // candidate-vs-candidate sort; the dnf-compatible
+        // `compare_rpm` short-circuits would collapse byte-different
+        // providers that share a version and we'd lose precision.
+        .max_by(|a, b| a.evr().cmp_strict(&b.evr()))
 }
 
 #[cfg(test)]
