@@ -37,7 +37,7 @@
 //! * Conditional branch is provably inactive on the active profile
 //!   (same gating policy as RPM-REPO-011).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use rpm_spec::ast::{BuildScriptKind, ShellBody, Span, SpecFile, Tag};
@@ -234,6 +234,15 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForCommand {
         // Per-spec dedup so `cmake` invoked from %build AND %check
         // produces only one diagnostic.
         let mut reported: BTreeSet<(String, String)> = BTreeSet::new();
+        // Per-spec memoisation of `resolve_command_owner` results —
+        // the same shell command repeated across sections (or even on
+        // multiple lines of one section) would otherwise re-run up to
+        // eight SQLite probes per repeat (four `/usr/bin/`-style
+        // prefixes × two queries each: file_owner + resolve_nevra).
+        // `None` is a valid cached value ("we asked, nobody owns it").
+        // `HashMap` over `BTreeMap` because ordering is never observed
+        // and the typical hit set is < 50 short commands.
+        let mut command_owner_cache: HashMap<String, Option<String>> = HashMap::new();
 
         for (_kind, body, section_span) in sections {
             let inactive_ranges = shared::inactive_line_ranges(body, profile, &bcond);
@@ -255,21 +264,33 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForCommand {
                     if IMPLICIT_BUILD_COMMANDS.contains(&cmd) {
                         continue;
                     }
-                    // Try /usr/bin/CMD then /usr/sbin/CMD. Most build
-                    // tools live in /usr/bin; sbin is occasionally
-                    // used (e.g. `useradd` in install scriptlets, but
-                    // those aren't %install/%build).
-                    let owner_name = match resolve_command_owner(&state.universe, cmd) {
-                        Ok(Some(name)) => name,
-                        Ok(None) => continue,
-                        Err(e) => {
-                            tracing::warn!(
-                                error = ?e,
-                                command = ?cmd,
-                                "file_owner lookup failed; skipping command",
-                            );
-                            continue;
-                        }
+                    // Memoised /usr/bin/CMD → owner-name lookup. The
+                    // cache avoids re-running up to 4 SQLite path
+                    // probes for every repeat of `cmake` / `meson` /
+                    // `make` across a multi-section build script.
+                    let owner_lookup = if let Some(cached) = command_owner_cache.get(cmd) {
+                        cached.clone()
+                    } else {
+                        let resolved = match resolve_command_owner(&state.universe, cmd) {
+                            Ok(name) => name,
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    command = cmd,
+                                    "file_owner lookup failed; skipping command",
+                                );
+                                // Don't cache the failure — a transient
+                                // SQLite error shouldn't suppress a
+                                // later legitimate hit for the same
+                                // command.
+                                continue;
+                            }
+                        };
+                        command_owner_cache.insert(cmd.to_string(), resolved.clone());
+                        resolved
+                    };
+                    let Some(owner_name) = owner_lookup else {
+                        continue;
                     };
                     if declared_br.contains(&owner_name) {
                         continue;

@@ -42,7 +42,7 @@ use crate::lint::{Lint, LintMetadata};
 use crate::visit::Visit;
 
 use super::shared::RepoRule;
-use super::upgrade_check::{SpecMainNevr, enriched_macros_with_spec_locals};
+use crate::spec_nevr::{SpecMainNevr, enriched_macros_with_spec_locals};
 
 pub static METADATA: LintMetadata = LintMetadata {
     id: "RPM-REPO-020",
@@ -95,7 +95,7 @@ impl<'ast> Visit<'ast> for FileConflictWithExistingPackage {
         // previous literal-only path silently skipped self-ownership
         // detection on every real-world spec.
         let macros = enriched_macros_with_spec_locals(spec, profile);
-        let spec_source_name = SpecMainNevr::from(spec, &macros).map(|n| n.name);
+        let spec_source_name = SpecMainNevr::extract(spec, &macros).map(|n| n.name);
         if spec_source_name.is_none() {
             // Without the source name the self-ownership filter is
             // empty → every legitimate own-subpackage owner would

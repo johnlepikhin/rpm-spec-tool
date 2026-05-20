@@ -32,10 +32,8 @@ use anyhow::{Context, Result};
 use clap::Args;
 
 use rpm_spec_analyzer::profile::Profile;
-use rpm_spec_analyzer::rules::repo::upgrade_check::{
-    SpecMainNevr, enriched_macros_with_spec_locals, upgrade_arch_filter, upgrade_arch_matches,
-};
 use rpm_spec_analyzer::session::parse;
+use rpm_spec_analyzer::{ArchFilter, SpecMainNevr, enriched_macros_with_spec_locals};
 use rpm_spec_repo_core::{EVR, NEVRA, RepoUniverse};
 use rpm_spec_repo_metadata::cache::CacheDirs;
 use serde::Serialize;
@@ -157,7 +155,7 @@ fn simulate_one(
 
     let outcome = parse(source);
     let macros = enriched_macros_with_spec_locals(&outcome.spec, profile);
-    let Some(spec_nevr) = SpecMainNevr::from(&outcome.spec, &macros) else {
+    let Some(spec_nevr) = SpecMainNevr::extract(&outcome.spec, &macros) else {
         // Parser already complained — we can't say anything useful
         // about a spec with no Name/Version/Release.
         return Ok(UpgradeRow {
@@ -202,29 +200,23 @@ fn simulate_one(
                     // / `#[source]` chains baked into the variant
                     // strings, so Display already includes the wrapped
                     // cause (e.g. `"SQLite error: …"`). The lint side
-                    // uses `?e` (Debug) for the full chain in
-                    // `tracing::warn!`; the CLI shows the Display
-                    // form to keep the human-rendered `note:` line
-                    // single-line.
+                    // also renders Display via `tracing::warn!(error = %e)`,
+                    // so the CLI's `note:` line and the structured log
+                    // entry agree by construction.
                     "repo lookup for `{}` failed: {e}",
                     spec_nevr.name
                 )),
             });
         }
     };
-    let arches = upgrade_arch_filter(profile);
-    let mut best: Option<NEVRA> = None;
-    for (_pref, nevra) in &candidates {
-        if nevra.name.as_ref() != spec_nevr.name {
-            continue;
-        }
-        if !upgrade_arch_matches(&nevra.arch, &arches) {
-            continue;
-        }
-        if best.as_ref().is_none_or(|cur| nevra.evr() > cur.evr()) {
-            best = Some(nevra.clone());
-        }
-    }
+    let arch_filter = ArchFilter::from_profile(profile);
+    let best: Option<NEVRA> = candidates
+        .into_iter()
+        .filter(|(_pref, n)| {
+            n.name.as_ref() == spec_nevr.name && arch_filter.matches(&n.arch)
+        })
+        .map(|(_pref, n)| n)
+        .max_by(|a, b| a.evr().cmp(&b.evr()));
 
     let Some(best) = best else {
         return Ok(UpgradeRow {

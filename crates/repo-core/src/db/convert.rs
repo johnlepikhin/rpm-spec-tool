@@ -124,6 +124,16 @@ pub fn checksum_from_columns(algo: &str, hex: &str) -> PkgChecksum {
 /// keeps the raw `source_rpm` and skips the indexed lookup path.
 #[must_use]
 pub fn source_rpm_name(s: &str) -> Option<String> {
+    // Defensive cap: real `<rpm:sourcerpm>` values from any sane
+    // build of `pkg-X.Y.Z-R.dist.src.rpm` are well under 200 bytes
+    // (NEVRA components combined). A malformed or hostile repo
+    // manifest with multi-megabyte filenames would otherwise produce
+    // a proportional `name.to_string()` allocation. 512 is generous
+    // (>2× the longest source name observed across Fedora, ALT, and
+    // RHEL mirrors) but rules out the entire class of amplification.
+    if s.len() > 512 {
+        return None;
+    }
     // Tolerate the alternative `.nosrc.rpm` extension (used when a
     // SourceN: cannot be redistributed); the name shape is identical.
     let stem = s
@@ -174,5 +184,67 @@ mod tests {
         assert_eq!(source_rpm_name("only-one-dash"), None);
         assert_eq!(source_rpm_name("foo-1.2-3.el9.x86_64.rpm"), None);
         assert_eq!(source_rpm_name("-1.2-3.src.rpm"), None);
+    }
+
+    #[test]
+    fn source_rpm_name_with_trailing_digit_in_name() {
+        // `gtk2-2.24.33-1.el9.src.rpm` — common GNOME-2 packaging
+        // pattern. Name ends in a digit, version starts with a digit;
+        // the rsplit_once must still keep `gtk2` as the name.
+        assert_eq!(
+            source_rpm_name("gtk2-2.24.33-1.el9.src.rpm").as_deref(),
+            Some("gtk2")
+        );
+    }
+
+    #[test]
+    fn source_rpm_name_minimal_two_segments() {
+        // The minimum valid shape is `name-version-release.src.rpm`
+        // with exactly two dashes. `foo-1-1.src.rpm` is the smallest
+        // legal form; anything with fewer dashes is malformed.
+        assert_eq!(source_rpm_name("foo-1-1.src.rpm").as_deref(), Some("foo"));
+        // Only one dash → not enough to separate name/version/release.
+        assert_eq!(source_rpm_name("foo-1.src.rpm"), None);
+    }
+
+    #[test]
+    fn source_rpm_name_case_sensitive_suffix() {
+        // rpm itself writes lowercase `.src.rpm`. An uppercase variant
+        // is non-canonical (probably operator typo or mangling) — reject
+        // rather than silently accept; otherwise the indexed lookup
+        // would split into a different bucket from the canonical writer.
+        assert_eq!(source_rpm_name("foo-1.0-1.SRC.RPM"), None);
+        assert_eq!(source_rpm_name("foo-1.0-1.Src.Rpm"), None);
+    }
+
+    #[test]
+    fn source_rpm_name_rejects_oversized_input() {
+        // Defends against a malformed/hostile `<rpm:sourcerpm>` value
+        // triggering a huge `String` allocation. Anything over 512
+        // bytes is treated as malformed.
+        let mut huge = String::with_capacity(1024);
+        huge.push_str("foo-");
+        for _ in 0..600 {
+            huge.push('a');
+        }
+        huge.push_str("-1.src.rpm");
+        assert_eq!(source_rpm_name(&huge), None);
+    }
+
+    #[test]
+    fn source_rpm_name_with_plus_and_underscore_in_version() {
+        // Fedora-style snapshot versions (`1.0+20240101`, `1.0_rc1`)
+        // — `rsplit_once('-')` doesn't care about the version's content,
+        // only that there are at least two `-` separators. Lock the
+        // behaviour so a refactor of the parser can't quietly regress
+        // it.
+        assert_eq!(
+            source_rpm_name("foo-1.0+20240101-1.src.rpm").as_deref(),
+            Some("foo")
+        );
+        assert_eq!(
+            source_rpm_name("foo-1.0_rc1-1.src.rpm").as_deref(),
+            Some("foo")
+        );
     }
 }

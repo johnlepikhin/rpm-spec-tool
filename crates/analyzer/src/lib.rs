@@ -39,6 +39,7 @@ pub mod rules;
 pub mod session;
 pub(crate) mod shell;
 pub mod spec_locals;
+pub mod spec_nevr;
 pub mod visit;
 
 pub use baseline::{Baseline, BaselineEntry, BaselineError};
@@ -73,6 +74,7 @@ pub use session::{
     analyze_with_profile_at, parse,
 };
 pub use spec_locals::{scan_spec_locals, scan_spec_locals_into};
+pub use spec_nevr::{ArchFilter, SpecMainNevr, enriched_macros_with_spec_locals};
 pub use visit::Visit;
 
 pub use rpm_spec::ast::Span;

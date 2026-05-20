@@ -19,14 +19,11 @@ use crate::bcond::{BcondMap, BcondOverrides};
 use crate::branch_coverage::evaluate_branch;
 use crate::diagnostic::Diagnostic;
 
-/// Macro expansion depth limit for BR/Requires atoms. Matches the
-/// convention used by `branch_coverage`, `files::classifier` and other
-/// analyzer modules — chains like `%{python3_pkgversion} →
-/// %{__python3_pkgversion} → "3.11"` resolve well within 8 hops.
-///
-/// Public so RPM-REPO-* siblings (e.g. `upgrade_check.rs`) share one
-/// budget rather than each carrying a private copy that can drift.
-pub const MACRO_EXPAND_DEPTH: u8 = 8;
+/// Re-export of the canonical macro-expansion depth (defined in
+/// [`crate::spec_nevr`]). Kept under this name so the RPM-REPO-*
+/// rule sites that historically referenced `shared::MACRO_EXPAND_DEPTH`
+/// don't have to change their import line on every relocation.
+pub use crate::spec_nevr::MACRO_EXPAND_DEPTH;
 
 /// Bundle of state every RPM-REPO-* rule needs. Previously also
 /// cached a priority map; with the SQLite-backed universe, priority
@@ -440,14 +437,17 @@ fn resolve_text(text: &str, macros: &MacroRegistry) -> Option<String> {
     if !text.contains('%') {
         return Some(text.to_string());
     }
-    // `expand_to_literal` only handles a pure macro name. For mixed
-    // text like `%{python3_pkgversion}-numpy` we'd need the body-level
-    // `expand_body` helper which isn't public — conservative: return
-    // `None` and let the lint skip the atom.
-    macros.expand_to_literal(
-        text.trim_start_matches('%').trim_start_matches('{'),
-        MACRO_EXPAND_DEPTH,
-    )
+    // `expand_to_literal` only handles a pure macro name. Mixed text
+    // like `%{python3_pkgversion}-numpy` flows through the AST as
+    // multiple `TextSegment`s, not a single `%` string — by the time
+    // we get here, the caller (`project_atom`) has already validated
+    // it's a literal. So the only `%`-containing case left is a bare
+    // `%{name}` / `%name` reference; resolve it as such.
+    let trimmed = text
+        .trim_start_matches('%')
+        .trim_start_matches('{')
+        .trim_end_matches('}');
+    macros.expand_to_literal(trimmed, MACRO_EXPAND_DEPTH)
 }
 
 /// Collect every active build-script section's `(kind, body, span)`

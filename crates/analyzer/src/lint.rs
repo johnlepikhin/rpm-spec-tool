@@ -55,6 +55,21 @@ impl LintMetadata {
 pub trait Lint: for<'ast> Visit<'ast> + Send {
     fn metadata(&self) -> &'static LintMetadata;
 
+    /// Extra rule IDs the lint may emit beyond [`Self::metadata`].
+    /// Empty for typical one-ID rules; non-empty for combined visitors
+    /// that fold multiple semantically distinct findings into a single
+    /// AST pass (e.g. `UpgradeEvrCheck` emits both RPM-REPO-030 and
+    /// RPM-REPO-031 from one walk so the costly macro-registry clone
+    /// and SQLite source-name lookup don't happen twice per spec).
+    ///
+    /// Surfaces in `builtin_lint_metadata()` so `rpm-spec-tool lints`
+    /// listings, severity overrides, and SARIF rule-id reporting all
+    /// see every emittable ID even though only one [`Lint`] instance
+    /// is registered.
+    fn additional_metadata(&self) -> &'static [&'static LintMetadata] {
+        &[]
+    }
+
     fn take_diagnostics(&mut self) -> Vec<Diagnostic>;
 
     /// Called by [`crate::LintSession::run`] before each visit pass.

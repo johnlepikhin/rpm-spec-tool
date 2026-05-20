@@ -16,11 +16,19 @@ use crate::rules;
 /// freely group/filter/sort without owning the heavy `Box<dyn Lint>`
 /// trait objects.
 ///
-/// Order follows [`builtin_lints`] (i.e. registration order). Callers
-/// that want stable, category-grouped output should sort the result
-/// themselves.
+/// Order follows [`builtin_lints`] (i.e. registration order); each
+/// rule's [`Lint::additional_metadata`] is inlined right after the
+/// rule's primary metadata so combined visitors (e.g. RPM-REPO-030 +
+/// RPM-REPO-031 sharing one `UpgradeEvrCheck`) still surface every
+/// emittable ID. Callers that want stable, category-grouped output
+/// should sort the result themselves.
 pub fn builtin_lint_metadata() -> Vec<&'static LintMetadata> {
-    builtin_lints().iter().map(|l| l.metadata()).collect()
+    let mut out = Vec::new();
+    for lint in builtin_lints() {
+        out.push(lint.metadata());
+        out.extend(lint.additional_metadata().iter().copied());
+    }
+    out
 }
 
 /// Construct fresh instances of every built-in rule. Each call returns a new
@@ -88,8 +96,10 @@ fn phase26_repo_aware() -> Vec<Box<dyn Lint>> {
         Box::new(rules::repo::missing_br_for_command::MissingBuildRequiresForCommand::new()),
         Box::new(rules::repo::missing_br_for_file::MissingBuildRequiresForFile::new()),
         Box::new(rules::repo::file_conflict::FileConflictWithExistingPackage::new()),
-        Box::new(rules::repo::upgrade_check::UpgradeEvrCheck::new_evr_not_greater()),
-        Box::new(rules::repo::upgrade_check::UpgradeEvrCheck::new_epoch_dropped()),
+        // One instance emits both RPM-REPO-030 and RPM-REPO-031 from a
+        // single visitor pass; the second metadata flows out via
+        // `Lint::additional_metadata` so listings still see both IDs.
+        Box::new(rules::repo::upgrade_check::UpgradeEvrCheck::new()),
     ]
 }
 
@@ -570,10 +580,48 @@ mod tests {
 
     /// Lock the total rule count so accidental drops/duplicates during
     /// refactoring of the per-phase helpers are caught immediately. Bump
-    /// this when adding/removing rules.
+    /// this when adding/removing rules. Counts `Lint` *instances* —
+    /// combined rules like `UpgradeEvrCheck` (one instance, two metadata
+    /// IDs) count as one; the full metadata count surfaced via
+    /// [`builtin_lint_metadata`] is asserted separately.
     #[test]
     fn builtin_lints_contains_expected_count() {
-        assert_eq!(builtin_lints().len(), 241);
+        assert_eq!(builtin_lints().len(), 240);
+    }
+
+    /// `builtin_lint_metadata` must include every primary metadata plus
+    /// every `additional_metadata` entry. Combined visitors (e.g.
+    /// `UpgradeEvrCheck` emitting RPM-REPO-030 + RPM-REPO-031) would
+    /// silently lose their second ID from listings if the registry
+    /// helper regresses.
+    #[test]
+    fn builtin_lint_metadata_includes_additional_ids() {
+        let ids: Vec<&str> = builtin_lint_metadata().iter().map(|m| m.id).collect();
+        assert!(ids.contains(&"RPM-REPO-030"), "primary id missing: {ids:?}");
+        assert!(
+            ids.contains(&"RPM-REPO-031"),
+            "additional metadata id missing from listing: {ids:?}",
+        );
+    }
+
+    /// Every emittable lint id must be unique across the union of
+    /// primary and `additional_metadata` entries. A duplicate id would
+    /// silently break per-id severity overrides, SARIF rule lookups
+    /// (which key on `lint.id`), and `rpm-spec-tool lints` listings
+    /// (which would deduplicate or show ambiguous entries).
+    #[test]
+    fn builtin_lint_metadata_ids_are_globally_unique() {
+        use std::collections::HashMap;
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for m in builtin_lint_metadata() {
+            *counts.entry(m.id).or_default() += 1;
+        }
+        let duplicates: Vec<(&&str, &usize)> =
+            counts.iter().filter(|(_, n)| **n > 1).collect();
+        assert!(
+            duplicates.is_empty(),
+            "duplicate lint ids found in builtin_lint_metadata: {duplicates:?}",
+        );
     }
 
     /// Per-phase helpers must round-trip into the same vector

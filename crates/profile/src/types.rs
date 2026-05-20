@@ -170,11 +170,12 @@ impl MacroRegistry {
     /// forms need runtime expansion semantics not available at lint
     /// time. `%%` is preserved as a literal `%` in the output.
     ///
-    /// Public so the RPM-REPO-* lints can expand mixed strings like
-    /// `Name: %{prog_name}-%{edition}` — `expand_to_literal` only
-    /// handles pure-macro names, which is useless for real-world
-    /// `Version:` / `Release:` declarations.
-    pub fn expand_body(&self, body: &str, depth: u8) -> Option<String> {
+    /// Internal recursion target for [`Self::expand_to_literal`]. The
+    /// public API caps depth and rejects non-ASCII bodies; downstream
+    /// callers that need text-segment-aware expansion should walk the
+    /// AST themselves and call [`Self::expand_to_literal`] per macro
+    /// reference (see `analyzer::spec_nevr::resolve_text_segments`).
+    pub(crate) fn expand_body(&self, body: &str, depth: u8) -> Option<String> {
         use crate::macro_lexer::{MacroKind, scan_macro_ref};
 
         if body.len() > MAX_EXPAND_BODY {

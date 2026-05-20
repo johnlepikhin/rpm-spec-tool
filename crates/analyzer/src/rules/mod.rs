@@ -259,7 +259,7 @@ pub mod richdep_singleton;
 // `repo/mod.rs` for the rule reference table.
 pub mod repo;
 
-mod util;
+pub(crate) mod util;
 
 #[cfg(test)]
 mod test_support;
