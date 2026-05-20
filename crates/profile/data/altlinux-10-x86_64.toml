@@ -1,3 +1,33 @@
 [identity]
 name = "ALT Linux 10 (x86_64)"
 family = "alt"
+
+# Buildroot baseline: what rpm-build ships in the chroot before
+# processing the spec's own `BuildRequires:`. Mirrors hasher's default
+# install set; users can override / extend via `[profiles.X.buildroot]`.
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "rpm-build-altlinux-compat",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# Public p10 branch (apt-rpm, "classic" component). `$basearch`
+# interpolates from `arch.build_arch` (here: `x86_64`) at sync time.
+# Enabled by default — the public mirror is open and consumers of the
+# `altlinux-10-x86_64` profile expect resolvability lints to "just
+# work" without per-user config.
+[repos.classic]
+baseurl = "http://ftp.altlinux.org/pub/distributions/ALTLinux/p10/branch/$basearch/"
+kind = "apt-rpm"
+enabled = true
+priority = 10
+role = "base"
+components = ["classic"]

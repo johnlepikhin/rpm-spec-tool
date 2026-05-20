@@ -1,3 +1,20 @@
 [identity]
 name = "RHEL 9 (aarch64)"
 dist-tag = ".el9"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "redhat-rpm-config",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# See `rhel-9-x86_64.toml` for the Rocky 9 substitute URLs;
+# substitute `$basearch = aarch64`.

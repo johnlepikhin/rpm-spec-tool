@@ -1,3 +1,19 @@
 [identity]
 name = "RHEL 10 (aarch64)"
 dist-tag = ".el10"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "redhat-rpm-config",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# See `rhel-10-x86_64.toml` for guidance; `$basearch = aarch64`.

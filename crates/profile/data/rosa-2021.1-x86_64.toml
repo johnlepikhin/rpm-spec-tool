@@ -1,2 +1,26 @@
 [identity]
 name = "Rosa 2021.1 (x86_64)"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "rosa-rpm-config",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# Mandriva-lineage distro using `lib64*` package conventions.
+# Public mirrors exist but URLs vary per release; pin in your config:
+#
+#   [repos.main]
+#   baseurl  = "https://internal-mirror.example/2021.1/$basearch/main/release/"
+#   kind     = "rpm-md"
+#   enabled  = true
+#   priority = 10
+#   role     = "base"

@@ -1,3 +1,27 @@
 [identity]
 name = "REDos 7.3 (x86_64)"
 family = "rhel"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "redhat-rpm-config",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# Vendor-internal RHEL-family rebuild — no public mirror. Configure
+# your internal repo under `[profiles."redos-7.3-x86_64".repos]`:
+#
+#   [repos.os]
+#   baseurl  = "https://internal-mirror.example/7.3/$basearch/os/"
+#   kind     = "rpm-md"
+#   enabled  = true
+#   priority = 10
+#   role     = "base"

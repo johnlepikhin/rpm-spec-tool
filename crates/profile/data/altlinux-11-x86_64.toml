@@ -1,3 +1,25 @@
 [identity]
 name = "ALT Linux 11 (x86_64)"
 family = "alt"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "rpm-build-altlinux-compat",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+[repos.classic]
+baseurl = "http://ftp.altlinux.org/pub/distributions/ALTLinux/p11/branch/$basearch/"
+kind = "apt-rpm"
+enabled = true
+priority = 10
+role = "base"
+components = ["classic"]

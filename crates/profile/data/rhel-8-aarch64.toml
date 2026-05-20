@@ -1,2 +1,19 @@
 [identity]
 name = "RHEL 8 (aarch64)"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "redhat-rpm-config",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# See `rhel-8-x86_64.toml` for the commented BaseOS / AppStream
+# example; substitute `$basearch = aarch64` in the URLs.

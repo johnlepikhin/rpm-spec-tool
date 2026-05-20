@@ -1,2 +1,37 @@
 [identity]
 name = "RHEL 8 (x86_64)"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "redhat-rpm-config",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# RHEL repositories require an active Red Hat subscription (or an
+# internal mirror). No public URL ships in the built-in catalogue;
+# add BaseOS / AppStream / CodeReady blocks in your own
+# `.rpmspec.toml` under
+# `[profiles."rhel-8-x86_64".repos]`. A community RHEL-8 rebuild (e.g. Rocky 8 / AlmaLinux 8) is a drop-in
+# substitute for non-licensed environments:
+#
+#   [repos.baseos]
+#   baseurl  = "https://internal-mirror.example/clone/8/BaseOS/$basearch/os/"
+#   kind     = "rpm-md"
+#   enabled  = true
+#   priority = 10
+#   role     = "base"
+#
+#   [repos.appstream]
+#   baseurl  = "https://internal-mirror.example/clone/8/AppStream/$basearch/os/"
+#   kind     = "rpm-md"
+#   enabled  = true
+#   priority = 20
+#   role     = "updates"

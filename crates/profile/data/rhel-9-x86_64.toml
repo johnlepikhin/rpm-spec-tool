@@ -1,3 +1,34 @@
 [identity]
 name = "RHEL 9 (x86_64)"
 dist-tag = ".el9"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "redhat-rpm-config",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# RHEL 9 repositories require an active subscription. Rocky 9
+# or AlmaLinux 9 are drop-in substitutes for non-licensed CI:
+#
+#   [repos.baseos]
+#   baseurl  = "https://internal-mirror.example/clone/9/BaseOS/$basearch/os/"
+#   kind     = "rpm-md"
+#   enabled  = true
+#   priority = 10
+#   role     = "base"
+#
+#   [repos.appstream]
+#   baseurl  = "https://internal-mirror.example/clone/9/AppStream/$basearch/os/"
+#   kind     = "rpm-md"
+#   enabled  = true
+#   priority = 20
+#   role     = "updates"

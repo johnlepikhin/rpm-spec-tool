@@ -275,6 +275,20 @@ fn apply_builtin_layer(
         }
     }
 
+    // Seed `profile.repos` from the built-in's `[repos.*]` /
+    // `[buildroot]` blocks (if any). User-side `[profiles.X.repos]`
+    // / `[profiles.X.buildroot]` layered on top by `apply_repos`
+    // below — see the merge semantics there.
+    if let Some(repo_set) = snap.repos.as_ref() {
+        tracing::debug!(
+            builtin = name,
+            repo_count = repo_set.repos.len(),
+            base_packages = repo_set.buildroot.base_packages.len(),
+            "bundled repos applied"
+        );
+        profile.repos = Some(repo_set.clone());
+    }
+
     Ok(())
 }
 
@@ -359,16 +373,31 @@ fn apply_entry(
 }
 
 /// Validate repo IDs declared in `[profiles.X.repos.<id>]`, then
-/// install the [`crate::repos::RepoSet`] on the profile. Empty
-/// `repos` + empty `buildroot` short-circuits to `None` so
-/// downstream `repos.is_none()` cleanly means "this profile has no
-/// repo configuration".
+/// overlay the user's `[profiles.X.repos]` / `[profiles.X.buildroot]`
+/// onto whatever the built-in layer already installed (if any).
+///
+/// Merge semantics:
+/// * Repos with the same `id` from `extends`-base built-in are
+///   **replaced wholesale** by the user's entry — same policy the
+///   plan document calls for (atomic merge, no per-field patching).
+/// * `enabled = false` on a user-side entry that matches an
+///   inherited id is the canonical way to mask a built-in repo.
+/// * New ids the user introduces extend the set.
+/// * `buildroot.base_packages` / `buildroot.implicit_buildrequires`
+///   from user side **extend** the built-in lists (additive). If the
+///   user wants to fully replace, they can either drop the entries
+///   from the chain (by not declaring repos at all) or use future
+///   `replace = true` syntax once added.
+///
+/// Empty user-side blocks + no built-in repos collapses to `None`
+/// so downstream `repos.is_none()` keeps meaning "this profile has
+/// no repo configuration of any flavour".
 fn apply_repos(
     profile: &mut Profile,
     profile_key: &str,
     entry: &ProfileEntry,
 ) -> Result<(), ResolveError> {
-    use crate::repos::{validate_repo_id, RepoSet};
+    use crate::repos::{RepoSet, validate_repo_id};
 
     for id in entry.repos.keys() {
         validate_repo_id(id).map_err(|reason| ResolveError::InvalidRepoId {
@@ -378,18 +407,51 @@ fn apply_repos(
         })?;
     }
 
-    if entry.repos.is_empty()
+    let user_empty = entry.repos.is_empty()
         && entry.buildroot.base_packages.is_empty()
-        && entry.buildroot.implicit_buildrequires.is_empty()
-    {
+        && entry.buildroot.implicit_buildrequires.is_empty();
+    if user_empty {
+        // Nothing to overlay — keep whatever the built-in seeded
+        // (which may itself be `None`).
         return Ok(());
     }
 
-    profile.repos = Some(RepoSet {
-        repos: entry.repos.clone(),
-        buildroot: entry.buildroot.clone(),
+    let mut merged = profile.repos.take().unwrap_or_else(|| RepoSet {
+        repos: Default::default(),
+        buildroot: Default::default(),
     });
+    for (id, cfg) in &entry.repos {
+        merged.repos.insert(id.clone(), cfg.clone());
+    }
+    // Extend then dedup so a user-side `gcc` doesn't appear twice
+    // when the built-in baseline already lists it. Stable ordering
+    // preserved (built-in packages first, user-added packages
+    // appended) — meaningful for chroot install order and
+    // `profile show` rendering. `dedup` would only kill *adjacent*
+    // duplicates; we want a true set-merge.
+    dedup_preserving_order(&mut merged.buildroot.base_packages);
+    merged
+        .buildroot
+        .base_packages
+        .extend(entry.buildroot.base_packages.iter().cloned());
+    dedup_preserving_order(&mut merged.buildroot.base_packages);
+    merged
+        .buildroot
+        .implicit_buildrequires
+        .extend(entry.buildroot.implicit_buildrequires.iter().cloned());
+    dedup_preserving_order(&mut merged.buildroot.implicit_buildrequires);
+    profile.repos = Some(merged);
     Ok(())
+}
+
+/// Drop second-and-later occurrences of any repeated entry while
+/// preserving the relative order of the first occurrences. The
+/// alternative — `Vec::dedup` — only kills *adjacent* duplicates;
+/// we want a true set-merge that keeps the "built-in first, user
+/// added last" ordering visible in `profile show`.
+fn dedup_preserving_order(v: &mut Vec<String>) {
+    let mut seen = std::collections::BTreeSet::new();
+    v.retain(|s| seen.insert(s.clone()));
 }
 
 /// Drop autodetected fields the user already specified — explicit
@@ -1241,5 +1303,144 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, ResolveError::UnknownProfile { .. }));
+    }
+
+    #[test]
+    fn builtin_repos_seed_profile_without_user_config() {
+        // Resolving a profile whose CLI override picks an ALT
+        // built-in (no user `[profiles.X]` entry) must still expose
+        // the bundled `classic` repo. Regression test for the
+        // built-in-repos seeding path in `apply_builtin_layer`.
+        let mut section = empty_section();
+        section.profile = Some("altlinux-11-x86_64".into());
+        let p = resolve(&section, Path::new("."), ResolveOptions::default()).unwrap();
+        let repos = p.repos.expect("ALT 11 must ship repos");
+        assert!(
+            repos.repos.contains_key("classic"),
+            "ALT 11 must expose classic out of the box, got keys: {:?}",
+            repos.repos.keys().collect::<Vec<_>>(),
+        );
+        assert!(repos.repos["classic"].enabled);
+        assert!(!repos.buildroot.base_packages.is_empty());
+    }
+
+    #[test]
+    fn user_repos_overlay_replaces_inherited_repo_by_id() {
+        // A user `[profiles.my-alt.repos.classic]` block must replace
+        // the inherited built-in `classic` repo wholesale — this is
+        // the canonical way to point a profile at an internal mirror
+        // while keeping the rest of the chain intact.
+        let mut section = empty_section();
+        section.profile = Some("my-alt".into());
+        let mut user_repos = BTreeMap::new();
+        let mut overridden = crate::repos::RepoConfig::default();
+        overridden.baseurl = Some("http://internal-mirror.example/p11/$basearch/".into());
+        overridden.kind = crate::repos::RepoKind::AptRpm;
+        overridden.priority = 50;
+        user_repos.insert("classic".into(), overridden);
+        section.profiles.insert(
+            "my-alt".into(),
+            ProfileEntry {
+                extends: Some("altlinux-11-x86_64".into()),
+                repos: user_repos,
+                ..Default::default()
+            },
+        );
+        let p = resolve(&section, Path::new("."), ResolveOptions::default()).unwrap();
+        let repos = p.repos.expect("repos populated");
+        let classic = &repos.repos["classic"];
+        // URL came from user — built-in URL was discarded.
+        assert_eq!(
+            classic.baseurl.as_deref(),
+            Some("http://internal-mirror.example/p11/$basearch/"),
+        );
+        // Priority also picked up the user-side value.
+        assert_eq!(classic.priority, 50);
+    }
+
+    #[test]
+    fn user_disabled_masks_inherited_repo() {
+        // Setting `enabled = false` on a user-side repo with the same
+        // id as an inherited built-in is the documented way to mask
+        // the built-in without redefining the URL. The merged set
+        // keeps the repo (so `repo cache` / `repo show` can still
+        // describe it) but downstream consumers must respect
+        // `enabled = false`.
+        let mut section = empty_section();
+        section.profile = Some("my-alt".into());
+        let mut user_repos = BTreeMap::new();
+        // Keep baseurl unset so the mask intent is unambiguous.
+        let mut masked = crate::repos::RepoConfig::default();
+        masked.enabled = false;
+        user_repos.insert("classic".into(), masked);
+        section.profiles.insert(
+            "my-alt".into(),
+            ProfileEntry {
+                extends: Some("altlinux-11-x86_64".into()),
+                repos: user_repos,
+                ..Default::default()
+            },
+        );
+        let p = resolve(&section, Path::new("."), ResolveOptions::default()).unwrap();
+        let classic = &p.repos.unwrap().repos["classic"];
+        assert!(!classic.enabled, "user disable must mask built-in");
+    }
+
+    #[test]
+    fn user_buildroot_dedup_against_inherited_baseline() {
+        // If the user lists `gcc` (which the ALT built-in baseline
+        // already provides) the merged list must contain it exactly
+        // once. The merge is order-preserving (built-in first), so
+        // `gcc` keeps its built-in position.
+        let mut section = empty_section();
+        section.profile = Some("my-alt".into());
+        let mut buildroot = crate::repos::BuildrootConfig::default();
+        buildroot.base_packages = vec!["gcc".into(), "acme-toolchain".into()];
+        section.profiles.insert(
+            "my-alt".into(),
+            ProfileEntry {
+                extends: Some("altlinux-11-x86_64".into()),
+                buildroot,
+                ..Default::default()
+            },
+        );
+        let p = resolve(&section, Path::new("."), ResolveOptions::default()).unwrap();
+        let pkgs = &p.repos.unwrap().buildroot.base_packages;
+        let gcc_count = pkgs.iter().filter(|s| *s == "gcc").count();
+        assert_eq!(
+            gcc_count, 1,
+            "duplicate gcc after merge: {pkgs:?}",
+        );
+        assert!(pkgs.iter().any(|s| s == "acme-toolchain"));
+    }
+
+    #[test]
+    fn user_buildroot_extends_inherited_base_packages() {
+        // User `[profiles.X.buildroot.base-packages]` extends the
+        // built-in baseline (additive), so a profile can add an
+        // internal `acme-toolchain` package on top of `rpm-build`
+        // etc without re-listing every default.
+        let mut section = empty_section();
+        section.profile = Some("my-alt".into());
+        let mut buildroot = crate::repos::BuildrootConfig::default();
+        buildroot.base_packages = vec!["acme-toolchain".into()];
+        section.profiles.insert(
+            "my-alt".into(),
+            ProfileEntry {
+                extends: Some("altlinux-11-x86_64".into()),
+                buildroot,
+                ..Default::default()
+            },
+        );
+        let p = resolve(&section, Path::new("."), ResolveOptions::default()).unwrap();
+        let pkgs = &p.repos.unwrap().buildroot.base_packages;
+        assert!(
+            pkgs.iter().any(|s| s == "rpm-build"),
+            "built-in `rpm-build` must survive the merge: {pkgs:?}",
+        );
+        assert!(
+            pkgs.iter().any(|s| s == "acme-toolchain"),
+            "user-added package must be present: {pkgs:?}",
+        );
     }
 }

@@ -1,3 +1,28 @@
 [identity]
 name = "ALT Linux SPT 10 (x86_64)"
-family = "alt"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "rpm-build-altlinux-compat",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# Hardened / certified vendor edition of ALT Linux — no public
+# mirror. Deployments host their own pkglist.classic. Configure
+# under `[profiles."altlinux-spt-10-x86_64".repos]` in your config:
+#
+#   [repos.classic]
+#   baseurl  = "http://internal-mirror.example/ALT-SPT/p10/branch/$basearch/"
+#   kind     = "apt-rpm"
+#   enabled  = true
+#   priority = 10
+#   role     = "base"
+#   components = ["classic"]

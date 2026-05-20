@@ -1,3 +1,20 @@
 [identity]
 name = "ALT Linux SPT 10 (e2kv4)"
 family = "alt"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "rpm-build-altlinux-compat",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# See `altlinux-spt-10-x86_64.toml` for the commented example
+# `[repos.classic]` block — same shape with `$basearch = e2kv4`.

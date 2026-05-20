@@ -1,2 +1,32 @@
 [identity]
 name = "SLES 15 (x86_64)"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# SLES requires an active SUSE subscription. A community SUSE-15.x rebuild is
+# a binary-compatible community substitute for non-licensed CI:
+#
+#   [repos.oss]
+#   baseurl  = "https://internal-mirror.example/community/leap/15.6/repo/oss/"
+#   kind     = "rpm-md"
+#   enabled  = true
+#   priority = 10
+#   role     = "base"
+#
+#   [repos.update]
+#   baseurl  = "https://internal-mirror.example/community/leap/15.6/update/oss/"
+#   kind     = "rpm-md"
+#   enabled  = true
+#   priority = 20
+#   role     = "updates"

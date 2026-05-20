@@ -11,13 +11,14 @@
 //! mirroring the flow used for user-supplied `showrc-file` entries.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{LazyLock, OnceLock};
 
 use serde::Deserialize;
 
 use crate::merge::{IdentityPatch, ListPatch, ProfilePatch};
+use crate::repos::{BuildrootConfig, RepoConfig, RepoSet, validate_repo_id};
 use crate::showrc;
 use crate::types::{Family, LayerInfo, ValidationMode};
 
@@ -172,7 +173,7 @@ const REGISTRY: &[BuiltinDef] = &[
 
 /// A fully parsed built-in, returned by [`load`].
 ///
-/// Both layers carry their source name in [`LayerInfo`]: `meta.layer` is
+/// Layers carry their source name in [`LayerInfo`]: `meta.layer` is
 /// always `Some(LayerInfo::Builtin { name })`, and `showrc.layer` is
 /// `Some(LayerInfo::BuiltinShowrc { name, macros })` when present.
 /// Construction is internal to this module ([`build_snapshot`]); the
@@ -189,6 +190,14 @@ pub struct BuiltinSnapshot {
     /// `LayerInfo::BuiltinShowrc` and macro provenance uses the
     /// `<builtin:NAME>` sentinel path from [`builtin_sentinel_path`].
     pub showrc: Option<ProfilePatch>,
+    /// Built-in `[repos.*]` + `[buildroot]` blocks from `data/<name>.toml`.
+    /// `None` when neither block was authored (the common case for
+    /// `generic` and the family-baseline profiles without a public
+    /// mirror). The resolver seeds [`crate::Profile::repos`] from this
+    /// before overlaying user-side `[profiles.X.repos]` so a profile
+    /// can ship "works out of the box against the public mirror" while
+    /// the user keeps the option to override any individual id.
+    pub repos: Option<RepoSet>,
 }
 
 /// Returns the names of every built-in profile shipped with this build,
@@ -239,7 +248,7 @@ fn build_snapshot(name: &'static str) -> BuiltinSnapshot {
     // broken file.
     let raw: RawProfile = toml::from_str(def.toml_src)
         .unwrap_or_else(|e| panic!("BUG: data/{}.toml is malformed: {e}", def.name));
-    let meta = raw.into_patch(def.name);
+    let RawProfileParts { meta, repos } = raw.into_parts(def.name);
 
     let showrc = def.showrc_src.map(|text| {
         let sentinel = builtin_sentinel_path(def.name);
@@ -256,18 +265,32 @@ fn build_snapshot(name: &'static str) -> BuiltinSnapshot {
         patch
     });
 
-    BuiltinSnapshot { meta, showrc }
+    BuiltinSnapshot { meta, showrc, repos }
 }
 
 /// On-disk representation of a built-in profile file. Kept private —
 /// users describe their own profiles via `[profiles.X.*]` in
 /// `.rpmspec.toml`, not by writing TOML matching this shape.
+///
+/// Schema parallels `crate::config_layer::ProfileEntry` for the
+/// fields that make sense at the built-in tier (no `extends`,
+/// `showrc-file`, or macro overrides — those are either redundant
+/// against the bundled showrc or specific to user TOML).
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 struct RawProfile {
     identity: RawIdentity,
     licenses: RawList,
     groups: RawList,
+    /// Per-repo configuration. Keys validated as
+    /// `[a-z0-9_-]{1,64}` at load time.
+    #[serde(default)]
+    repos: BTreeMap<String, RepoConfig>,
+    /// Buildroot baseline: `base-packages` (the chroot seed) and
+    /// `implicit-buildrequires` (shadow BRs the platform always
+    /// provides).
+    #[serde(default)]
+    buildroot: BuildrootConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -287,8 +310,25 @@ struct RawList {
     allow: Vec<String>,
 }
 
+/// Outputs of [`RawProfile::into_parts`] — the two artefacts a
+/// built-in TOML splits into. Kept as a struct (rather than a bare
+/// tuple) so future additions (e.g. a TestSuite block, signature
+/// metadata) don't churn every caller.
+struct RawProfileParts {
+    meta: ProfilePatch,
+    repos: Option<RepoSet>,
+}
+
 impl RawProfile {
-    fn into_patch(self, builtin_name: &'static str) -> ProfilePatch {
+    /// Split a parsed built-in into the layered `ProfilePatch`
+    /// (identity / licenses / groups) and the standalone `RepoSet`.
+    /// They live in different slots on [`crate::Profile`] — repos
+    /// have atomic-per-id replacement semantics, not patched merge —
+    /// so the pieces flow through different paths in the resolver.
+    fn into_parts(
+        self,
+        builtin_name: &'static str,
+    ) -> RawProfileParts {
         let identity = IdentityPatch {
             name: self.identity.name,
             family: self.identity.family,
@@ -315,7 +355,28 @@ impl RawProfile {
             None
         };
 
-        ProfilePatch {
+        // Validate every repo id at load time; a typo in a built-in
+        // TOML file is a build-time bug, so panic is appropriate.
+        for id in self.repos.keys() {
+            if let Err(reason) = validate_repo_id(id) {
+                panic!(
+                    "BUG: built-in `{builtin_name}` has invalid repo id `{id}`: {reason}",
+                );
+            }
+        }
+        let repos = if self.repos.is_empty()
+            && self.buildroot.base_packages.is_empty()
+            && self.buildroot.implicit_buildrequires.is_empty()
+        {
+            None
+        } else {
+            Some(RepoSet {
+                repos: self.repos,
+                buildroot: self.buildroot,
+            })
+        };
+
+        let meta = ProfilePatch {
             identity,
             macros: Vec::new(),
             rpmlib: Vec::new(),
@@ -325,7 +386,8 @@ impl RawProfile {
             layer: Some(LayerInfo::Builtin {
                 name: Cow::Borrowed(builtin_name),
             }),
-        }
+        };
+        RawProfileParts { meta, repos }
     }
 }
 
@@ -360,6 +422,9 @@ mod tests {
         ));
         // No bundled showrc for `generic`.
         assert!(snap.showrc.is_none());
+        // No bundled repos for `generic` — it's the synthetic
+        // baseline with no platform-specific defaults.
+        assert!(snap.repos.is_none());
     }
 
     #[test]
@@ -399,5 +464,91 @@ mod tests {
             showrc.layer.as_ref(),
             Some(LayerInfo::BuiltinShowrc { name, .. }) if name == "rhel-9-x86_64"
         ));
+    }
+
+    #[test]
+    fn altlinux_11_x86_64_ships_classic_repo() {
+        // Iteration A landed enabled apt-rpm `classic` repos for ALT
+        // built-ins so the lints work out of the box without per-user
+        // config. Regression test pins both the existence and the
+        // expected shape (kind = apt-rpm, enabled, base role).
+        let snap = load("altlinux-11-x86_64").expect("altlinux-11-x86_64 builtin exists");
+        let repos = snap.repos.as_ref().expect("ALT 11 must ship repos");
+        let classic = repos
+            .repos
+            .get("classic")
+            .expect("ALT 11 must expose `classic` component");
+        assert!(classic.enabled, "classic must be enabled in the built-in");
+        assert_eq!(classic.kind, crate::repos::RepoKind::AptRpm);
+        assert!(matches!(classic.role, crate::repos::RepoRole::Base));
+        let url = classic
+            .baseurl
+            .as_deref()
+            .expect("ALT 11 classic must declare a baseurl");
+        assert!(url.contains("p11"), "expected p11 in baseurl, got: {url}");
+        assert!(
+            url.contains("$basearch"),
+            "ALT URL must template via $basearch, got: {url}"
+        );
+        // Buildroot baseline must include rpm-build (the build-time
+        // contract the chroot must satisfy before any spec runs).
+        assert!(
+            repos
+                .buildroot
+                .base_packages
+                .iter()
+                .any(|p| p == "rpm-build"),
+            "ALT 11 buildroot missing rpm-build: {:?}",
+            repos.buildroot.base_packages,
+        );
+    }
+
+    #[test]
+    fn vendor_internal_builtin_has_no_repos_but_ships_buildroot() {
+        // ALT-SPT / REDos / MosOS / Rosa / SLES / RHEL each have no
+        // public mirror; the built-in TOML provides a buildroot
+        // baseline plus commented-example guidance in comments — but
+        // no actual [repos.*] block. The snapshot's `repos` slot is
+        // therefore `Some(...)` (because buildroot is non-empty) but
+        // the inner `repos` map is empty.
+        for name in [
+            "altlinux-spt-10-x86_64",
+            "redos-8-x86_64",
+            "mosos-15-x86_64",
+            "rosa-2021.1-x86_64",
+            "sles-15-x86_64",
+            "rhel-9-x86_64",
+        ] {
+            let snap = load(name).unwrap_or_else(|| panic!("builtin `{name}` not found"));
+            let r = snap
+                .repos
+                .as_ref()
+                .unwrap_or_else(|| panic!("`{name}` should expose buildroot"));
+            assert!(
+                r.repos.is_empty(),
+                "`{name}` ships no enabled repos by default (got {} entries)",
+                r.repos.len(),
+            );
+            assert!(
+                !r.buildroot.base_packages.is_empty(),
+                "`{name}` must declare a buildroot baseline"
+            );
+        }
+    }
+
+    #[test]
+    fn every_builtin_loads_cleanly() {
+        // Guard against shipping a broken TOML or a typo in the
+        // catalogue; every name we register must yield a snapshot.
+        for &name in names() {
+            let snap = load(name)
+                .unwrap_or_else(|| panic!("builtin `{name}` registered but failed to load"));
+            // Layer trail is always populated on the meta patch — the
+            // resolver depends on it to render `profile show`.
+            assert!(
+                snap.meta.layer.is_some(),
+                "`{name}` meta patch missing LayerInfo"
+            );
+        }
     }
 }

@@ -1,3 +1,21 @@
 [identity]
 name = "RHEL 10 (x86_64)"
 dist-tag = ".el10"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "redhat-rpm-config",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# RHEL 10 requires an active subscription. Public mirrors for the
+# clones (Rocky 10 / AlmaLinux 10) emerge as the distribution
+# stabilises; check current URLs against the project sites.

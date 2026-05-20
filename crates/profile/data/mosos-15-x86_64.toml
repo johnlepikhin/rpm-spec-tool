@@ -1,2 +1,25 @@
 [identity]
 name = "MOSos 15 (x86_64)"
+
+[buildroot]
+base-packages = [
+    "rpm-build",
+    "gcc",
+    "make",
+    "bash",
+    "coreutils",
+    "findutils",
+    "sed",
+    "tar",
+    "gzip",
+]
+
+# Vendor-internal distro — no public mirror. Configure your
+# internal repo under `[profiles."mosos-15-x86_64".repos]`:
+#
+#   [repos.os]
+#   baseurl  = "https://internal-mirror.example/15/$basearch/os/"
+#   kind     = "rpm-md"
+#   enabled  = true
+#   priority = 10
+#   role     = "base"
