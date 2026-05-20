@@ -65,7 +65,7 @@ pub fn parse(text: &str) -> Result<FileMap, AptRpmParseError> {
             });
         }
         out.entry(Arc::from(pkg))
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(Arc::from(path));
     }
     Ok(out)

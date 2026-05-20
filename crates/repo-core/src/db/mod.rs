@@ -1228,7 +1228,7 @@ mod tests {
         drop(db);
 
         let db2 = RepoDb::open(&path).unwrap();
-        assert_eq!(db2.repo_id().unwrap().as_ref(), "baseos");
+        assert_eq!(db2.repo_id().unwrap().as_str(), "baseos");
         assert_eq!(db2.revision().unwrap(), "deadbeef");
         assert_eq!(db2.package_count().unwrap(), 1);
         let ids = db2.pkg_ids_by_name("bash").unwrap();

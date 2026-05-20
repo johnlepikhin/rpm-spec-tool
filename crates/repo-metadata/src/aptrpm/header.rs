@@ -4,10 +4,10 @@
 //! `base/pkglist.classic` (post-xz-decompression) is a concatenation
 //! of "bare" rpm headers — no lead, no signature header, no payload.
 //! Each header starts with an 8-byte intro magic (`0x8e 0xad 0xe8 0x01`
-//! + 4 reserved bytes), then 4 BE bytes index count, 4 BE bytes data
-//! length, then `count × 16` bytes of index entries pointing into the
-//! `data_length` bytes of data store that follows. The next header
-//! starts immediately after.
+//! plus 4 reserved bytes), then 4 BE bytes index count, 4 BE bytes
+//! data length, then `count × 16` bytes of index entries pointing
+//! into the `data_length` bytes of data store that follows. The next
+//! header starts immediately after.
 //!
 //! This module owns the binary decoding only; the mapping from
 //! generic `Header` (tag → value) to a [`Package`] lives in

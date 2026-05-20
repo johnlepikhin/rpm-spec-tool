@@ -1333,10 +1333,12 @@ mod tests {
         let mut section = empty_section();
         section.profile = Some("my-alt".into());
         let mut user_repos = BTreeMap::new();
-        let mut overridden = crate::repos::RepoConfig::default();
-        overridden.baseurl = Some("http://internal-mirror.example/p11/$basearch/".into());
-        overridden.kind = crate::repos::RepoKind::AptRpm;
-        overridden.priority = 50;
+        let overridden = crate::repos::RepoConfig {
+            baseurl: Some("http://internal-mirror.example/p11/$basearch/".into()),
+            kind: crate::repos::RepoKind::AptRpm,
+            priority: 50,
+            ..Default::default()
+        };
         user_repos.insert("classic".into(), overridden);
         section.profiles.insert(
             "my-alt".into(),
@@ -1370,8 +1372,10 @@ mod tests {
         section.profile = Some("my-alt".into());
         let mut user_repos = BTreeMap::new();
         // Keep baseurl unset so the mask intent is unambiguous.
-        let mut masked = crate::repos::RepoConfig::default();
-        masked.enabled = false;
+        let masked = crate::repos::RepoConfig {
+            enabled: false,
+            ..Default::default()
+        };
         user_repos.insert("classic".into(), masked);
         section.profiles.insert(
             "my-alt".into(),
@@ -1394,8 +1398,10 @@ mod tests {
         // `gcc` keeps its built-in position.
         let mut section = empty_section();
         section.profile = Some("my-alt".into());
-        let mut buildroot = crate::repos::BuildrootConfig::default();
-        buildroot.base_packages = vec!["gcc".into(), "acme-toolchain".into()];
+        let buildroot = crate::repos::BuildrootConfig {
+            base_packages: vec!["gcc".into(), "acme-toolchain".into()],
+            ..Default::default()
+        };
         section.profiles.insert(
             "my-alt".into(),
             ProfileEntry {
@@ -1422,8 +1428,10 @@ mod tests {
         // etc without re-listing every default.
         let mut section = empty_section();
         section.profile = Some("my-alt".into());
-        let mut buildroot = crate::repos::BuildrootConfig::default();
-        buildroot.base_packages = vec!["acme-toolchain".into()];
+        let buildroot = crate::repos::BuildrootConfig {
+            base_packages: vec!["acme-toolchain".into()],
+            ..Default::default()
+        };
         section.profiles.insert(
             "my-alt".into(),
             ProfileEntry {
