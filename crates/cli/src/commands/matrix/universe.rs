@@ -99,8 +99,20 @@ pub(super) fn build_universe_from_cache(
     if dbs.is_empty() {
         return Ok(None);
     }
-    let universe = RepoUniverse::from_dbs(profile.identity.name.clone(), dbs)
-        .context("building per-profile RepoUniverse")?;
+    // Pin the universe's arch filter to the profile's build_arch +
+    // noarch. The resolver, file_owner, and binaries_built_from
+    // queries all respect it — without this an x86_64 profile would
+    // happily pin i686 multilib binaries from the same repo (correct
+    // for `dnf install` only because dnf has its own arch filter;
+    // the matrix solver has to do its own).
+    let mut acceptable_archs: Vec<String> = Vec::with_capacity(2);
+    if let Some(arch) = profile.arch.build_arch.as_deref() {
+        acceptable_archs.push(arch.to_string());
+    }
+    acceptable_archs.push("noarch".to_string());
+    let universe =
+        RepoUniverse::from_dbs_with_arch(profile.identity.name.clone(), dbs, acceptable_archs)
+            .context("building per-profile RepoUniverse")?;
     Ok(Some(Arc::new(universe)))
 }
 

@@ -23,19 +23,18 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Args;
 
 use rpm_spec_analyzer::profile::Profile;
-use rpm_spec_analyzer::session::parse;
-use rpm_spec_repo_core::{CapFlags, Capability, NEVRA, RepoUniverse};
+use rpm_spec_repo_core::{NEVRA, RepoUniverse};
 use rpm_spec_repo_metadata::cache::CacheDirs;
-use rpm_spec_repo_resolver::{SolveRequest, Solution, solve};
+use rpm_spec_repo_resolver::Solution;
 use serde::Serialize;
 
 use super::coverage_style::Style;
+use super::solver_glue::{self, ConflictEntry, SolveVerdict, UnmetEntry};
 use super::universe::cache_universes;
 use super::{MatrixPrepareError, prepare_matrix};
 use crate::app::{ColorChoice, MacroDefinesArg};
@@ -154,7 +153,7 @@ fn solve_one(
         return Ok(SolveRow {
             spec_path: header_spec,
             profile: profile_name,
-            verdict: Verdict::Skipped,
+            verdict: SolveVerdict::Skipped,
             closure_size: 0,
             install_size_total: 0,
             closure: Vec::new(),
@@ -163,38 +162,8 @@ fn solve_one(
         });
     };
 
-    let outcome = parse(source);
-    // Use the analyzer's conditional-aware extractor: walks `%if`
-    // branches against `profile` + bcond so cross-distro arms
-    // (`%if "%_vendor" == "rosa" / BuildRequires: lib64* / %else
-    // / ... / %endif`) don't pollute the closure on a different
-    // profile. The previous in-buildroot `extract_buildrequires`
-    // walked BOTH arms — producing the spurious 22-name unmet
-    // list we hunted down before.
-    let requirements = rpm_spec_analyzer::rules::repo::shared::active_buildrequires(
-        &outcome.spec,
-        profile,
-    );
-    // `buildroot` sits on `Profile.repos.buildroot` — `None` when no
-    // repos block is declared (legacy profiles). Default to empty in
-    // that case so the solver only sees the spec's own BRs; CI will
-    // typically also miss things, but that's the configuration's
-    // problem, not the solver's.
-    let (base_packages, implicit_brs) = match profile.repos.as_ref() {
-        Some(rs) => (
-            literal_capabilities(&rs.buildroot.base_packages),
-            literal_capabilities(&rs.buildroot.implicit_buildrequires),
-        ),
-        None => (Vec::new(), Vec::new()),
-    };
-
-    let solution = solve(SolveRequest {
-        universe,
-        requirements: &requirements,
-        base_packages: &base_packages,
-        implicit_brs: &implicit_brs,
-    })
-    .with_context(|| format!("solver for {} / {}", spec_path.display(), profile_name))?;
+    let solution = solver_glue::solve_for(source, profile, universe)
+        .with_context(|| format!("solver for {}", spec_path.display()))?;
 
     Ok(match solution {
         Solution::Ok(closure) => {
@@ -203,7 +172,7 @@ fn solve_one(
             SolveRow {
                 spec_path: header_spec,
                 profile: profile_name,
-                verdict: Verdict::Ok,
+                verdict: SolveVerdict::Ok,
                 closure_size: pinned.len(),
                 install_size_total,
                 closure: pinned,
@@ -212,65 +181,19 @@ fn solve_one(
             }
         }
         Solution::Unsatisfiable(core) => {
-            // Dedup both lists by their primary identifier (the
-            // dep text / the cause+victim NEVRA pair). The walker
-            // re-pushes the same unmet dep every time a different
-            // parent re-discovers it; without dedup the human
-            // render shows the same line dozens of times.
-            let mut unsatisfied: Vec<UnmetEntry> = Vec::new();
-            let mut seen_unsat: std::collections::HashSet<String> = Default::default();
-            for item in &core.unsatisfied {
-                let dep_text = item.dep.display();
-                if !seen_unsat.insert(dep_text.clone()) {
-                    continue;
-                }
-                let required_by: Vec<NEVRA> = item.provenance.chain.iter().cloned().collect();
-                unsatisfied.push(UnmetEntry {
-                    dep: dep_text,
-                    required_by,
-                });
-            }
-            let mut conflicts: Vec<ConflictEntry> = Vec::new();
-            let mut seen_conf: std::collections::HashSet<String> = Default::default();
-            for c in &core.conflict_chains {
-                let key = format!("{}|{}|{}", c.cause, c.victim, c.via_capability);
-                if !seen_conf.insert(key) {
-                    continue;
-                }
-                conflicts.push(ConflictEntry {
-                    cause: c.cause.clone(),
-                    cause_chain: c.cause_provenance.chain.iter().cloned().collect(),
-                    victim: c.victim.clone(),
-                    victim_chain: c.victim_provenance.chain.iter().cloned().collect(),
-                    via: c.via_capability.clone(),
-                });
-            }
+            let deduped = solver_glue::dedup_unsat_core(&core);
             SolveRow {
                 spec_path: header_spec,
                 profile: profile_name,
-                verdict: Verdict::Unsat,
+                verdict: SolveVerdict::Unsat,
                 closure_size: 0,
                 install_size_total: 0,
                 closure: Vec::new(),
-                unsatisfied,
-                conflicts,
+                unsatisfied: deduped.unsatisfied,
+                conflicts: deduped.conflicts,
             }
         }
     })
-}
-
-/// Project literal package names from `profile.buildroot.base_packages`
-/// (and the implicit BR list) into the resolver's `Capability` shape.
-/// These are simple names without version constraints.
-fn literal_capabilities(names: &[String]) -> Vec<Capability> {
-    names
-        .iter()
-        .map(|n| Capability {
-            name: Arc::from(n.as_str()),
-            flags: CapFlags::None,
-            evr: None,
-        })
-        .collect()
 }
 
 /// Render the `UNSAT` block with categorisation, prose
@@ -521,7 +444,7 @@ impl SolveReport {
                 if self
                     .rows
                     .iter()
-                    .any(|r| matches!(r.verdict, Verdict::Unsat))
+                    .any(|r| matches!(r.verdict, SolveVerdict::Unsat))
                 {
                     ExitCode::from(1)
                 } else {
@@ -536,45 +459,12 @@ impl SolveReport {
 struct SolveRow {
     spec_path: String,
     profile: String,
-    verdict: Verdict,
+    verdict: SolveVerdict,
     closure_size: usize,
     install_size_total: u64,
     closure: Vec<String>,
     unsatisfied: Vec<UnmetEntry>,
     conflicts: Vec<ConflictEntry>,
-}
-
-/// One unmet dep along with the transitive ancestry that pulled
-/// it in (`required_by[0]` is the nearest parent, `last()` the
-/// top-level BR). Empty `required_by` means the dep came directly
-/// from the spec / base / implicit slices.
-#[derive(Debug, Serialize)]
-struct UnmetEntry {
-    dep: String,
-    required_by: Vec<NEVRA>,
-}
-
-/// One conflict, with the ancestry of both sides. Operators
-/// usually care about the root puller, not the leaf NEVRAs that
-/// physically clash.
-#[derive(Debug, Serialize)]
-struct ConflictEntry {
-    cause: NEVRA,
-    cause_chain: Vec<NEVRA>,
-    victim: NEVRA,
-    victim_chain: Vec<NEVRA>,
-    via: Arc<str>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Verdict {
-    Ok,
-    Unsat,
-    /// No repo cache available for this profile; the solver wasn't
-    /// called. CI usually wants to treat this as "skipped", not
-    /// "failed" — so it does NOT count toward `--fail-on unsat`.
-    Skipped,
 }
 
 fn render(report: &SolveReport, format: OutputFormat, style: &Style) -> Result<()> {
@@ -586,13 +476,13 @@ fn render(report: &SolveReport, format: OutputFormat, style: &Style) -> Result<(
                 let header = style.header(&format!("== {} / {} ==", row.spec_path, row.profile));
                 writeln!(out, "{header}")?;
                 match row.verdict {
-                    Verdict::Skipped => {
+                    SolveVerdict::Skipped => {
                         let hint = style.dim(
                             "(no cached repo metadata for this profile — run `rpm-spec-tool repo sync`; solver skipped)",
                         );
                         writeln!(out, "  {hint}")?;
                     }
-                    Verdict::Ok => {
+                    SolveVerdict::Ok => {
                         writeln!(
                             out,
                             "  {} closure: {} packages, {} installed",
@@ -612,8 +502,22 @@ fn render(report: &SolveReport, format: OutputFormat, style: &Style) -> Result<(
                             )?;
                         }
                     }
-                    Verdict::Unsat => {
+                    SolveVerdict::Unsat => {
                         render_unsat(&mut out, row, style)?;
+                    }
+                    SolveVerdict::Error => {
+                        // `matrix buildroot solve` currently
+                        // `?`-propagates infra errors at the `run`
+                        // level rather than surfacing per-row, so
+                        // this arm is unreachable today — but the
+                        // exhaustive match guards against the day a
+                        // future refactor adopts the per-row Error
+                        // pattern used by buildroot diff / deps
+                        // explain.
+                        let hint = style.dead_tag(
+                            "ERROR  solver infrastructure failure (see logs)",
+                        );
+                        writeln!(out, "  {hint}")?;
                     }
                 }
             }
@@ -657,18 +561,6 @@ mod tests {
         assert_eq!(b.file_paths.len(), 1);
         assert_eq!(b.versioned.len(), 2);
         assert_eq!(b.plain.len(), 1);
-    }
-
-    #[test]
-    fn verdict_serialises_as_snake_case() {
-        assert_eq!(serde_json::to_string(&Verdict::Ok).unwrap(), "\"ok\"");
-        assert_eq!(serde_json::to_string(&Verdict::Unsat).unwrap(), "\"unsat\"");
-        assert_eq!(
-            serde_json::to_string(&Verdict::Skipped).unwrap(),
-            "\"skipped\"",
-            "Skipped must serialise as `skipped` so downstream JSON \
-             consumers (CI / dashboards) can stay schema-stable."
-        );
     }
 
     #[test]

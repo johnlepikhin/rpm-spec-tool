@@ -87,6 +87,7 @@ fn phase26_repo_aware() -> Vec<Box<dyn Lint>> {
         Box::new(rules::repo::br_version_unsatisfied::BuildRequiresVersionUnsatisfied::new()),
         Box::new(rules::repo::missing_br_for_command::MissingBuildRequiresForCommand::new()),
         Box::new(rules::repo::missing_br_for_file::MissingBuildRequiresForFile::new()),
+        Box::new(rules::repo::file_conflict::FileConflictWithExistingPackage::new()),
         Box::new(rules::repo::upgrade_check::UpgradeEvrCheck::new_evr_not_greater()),
         Box::new(rules::repo::upgrade_check::UpgradeEvrCheck::new_epoch_dropped()),
     ]
@@ -572,7 +573,7 @@ mod tests {
     /// this when adding/removing rules.
     #[test]
     fn builtin_lints_contains_expected_count() {
-        assert_eq!(builtin_lints().len(), 240);
+        assert_eq!(builtin_lints().len(), 241);
     }
 
     /// Per-phase helpers must round-trip into the same vector

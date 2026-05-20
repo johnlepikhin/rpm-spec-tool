@@ -17,11 +17,13 @@
 //! | `RPM-REPO-003`     | warn    | `BuildRequires:` provider exists but version constraint unmet      |
 //! | `RPM-REPO-010`     | warn    | build script invokes bare command (`cmake`, `meson`, ...) with no matching `BuildRequires` |
 //! | `RPM-REPO-011`     | warn    | build script uses absolute tool path with no matching `BuildRequires` |
+//! | `RPM-REPO-020`     | warn    | path in `%files` is already owned by another package in the repos |
 //! | `RPM-REPO-030`     | deny    | spec EVR is not strictly greater than the latest published binary |
 //! | `RPM-REPO-031`     | deny    | spec drops or lowers the `Epoch:` set on the published binary |
 
 pub mod br_unresolvable;
 pub mod br_version_unsatisfied;
+pub mod file_conflict;
 pub mod missing_br_for_command;
 pub mod missing_br_for_file;
 pub mod runtime_unresolvable;

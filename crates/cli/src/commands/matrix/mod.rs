@@ -19,16 +19,19 @@ use rpm_spec_analyzer::{ParseOutcome, ParserSeverity};
 
 pub mod baseline;
 pub mod buildroot;
+pub mod buildroot_diff;
 pub mod check;
 pub mod classes;
 pub mod coverage;
 pub(crate) mod coverage_style;
 pub mod deps;
+pub mod deps_explain;
 pub mod diff;
 pub mod expand;
 pub mod explain;
 pub mod impact;
 pub mod portability;
+pub(crate) mod solver_glue;
 pub(crate) mod universe;
 pub mod upgrade_sim;
 pub mod verify_contract;
@@ -387,6 +390,11 @@ pub enum BuildrootAction {
     /// `repo sync` — no network. Profiles without a cached snapshot
     /// produce a "NO_UNIVERSE" verdict (skipped, not failed).
     Solve(buildroot::SolveOpts),
+    /// Compare buildroot closures between exactly two profiles for
+    /// one spec. Buckets pinned packages into common / only-A /
+    /// only-B / version-drift; reports per-side verdict separately
+    /// when one or both sides can't solve.
+    Diff(buildroot_diff::DiffOpts),
 }
 
 #[derive(Debug, Args)]
@@ -399,6 +407,13 @@ pub struct DepsCmd {
 pub enum DepsAction {
     /// Check BuildRequires/Requires resolvability against the cache.
     Check(deps::DepsOpts),
+    /// Narrate the resolver's unsat core as a tree: for every unmet
+    /// dep, show the provenance chain (which parent pulled it in,
+    /// back to the top-level BR); for every conflict, show both
+    /// sides' chains plus the capability that triggered the
+    /// rejection. Reuses `matrix deps check`'s solver pass — same
+    /// output guarantees, richer rendering.
+    Explain(deps_explain::ExplainOpts),
 }
 
 impl Cmd {
@@ -418,10 +433,16 @@ impl Cmd {
             Action::Impact(opts) => impact::run(opts, self.config.as_deref(), color),
             Action::Deps(cmd) => match cmd.action {
                 DepsAction::Check(opts) => deps::run(opts, self.config.as_deref(), color),
+                DepsAction::Explain(opts) => {
+                    deps_explain::run(opts, self.config.as_deref(), color)
+                }
             },
             Action::Buildroot(cmd) => match cmd.action {
                 BuildrootAction::Solve(opts) => {
                     buildroot::run(opts, self.config.as_deref(), color)
+                }
+                BuildrootAction::Diff(opts) => {
+                    buildroot_diff::run(opts, self.config.as_deref(), color)
                 }
             },
             Action::UpgradeSim(opts) => upgrade_sim::run(opts, self.config.as_deref(), color),

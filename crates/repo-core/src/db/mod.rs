@@ -659,6 +659,30 @@ impl RepoDb {
             .optional()?)
     }
 
+    /// All `(pkg_id, arch)` pairs that own `path`. Multilib repos
+    /// commonly ship the same path under both i686 and x86_64 RPMs
+    /// (e.g. `/usr/bin/perl` lives in both architectures); the
+    /// arch-aware [`RepoUniverse::file_owner`] picks the first
+    /// arch-acceptable hit, falling back across the rest.
+    pub fn file_owners(&self, path: &str) -> Result<Vec<(i64, Arc<str>)>, RepoError> {
+        let guard = self.lock();
+        let mut stmt = guard.prepare_cached(
+            "SELECT f.pkg_id, p.arch FROM files f \
+             JOIN packages p ON p.pkg_id = f.pkg_id \
+             WHERE f.path = ?1",
+        )?;
+        let rows = stmt.query_map(params![path], |row| {
+            let pkg_id: i64 = row.get(0)?;
+            let arch: String = row.get(1)?;
+            Ok((pkg_id, Arc::<str>::from(arch.as_str())))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     /// Reverse-requires: packages that require capability `name`.
     pub fn pkg_ids_requiring(&self, name: &str) -> Result<Vec<i64>, RepoError> {
         let guard = self.lock();

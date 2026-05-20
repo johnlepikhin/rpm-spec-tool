@@ -128,6 +128,16 @@ pub struct RepoUniverse {
     /// constructor so `ProviderRef::resolve` is O(1) on the repo
     /// dispatch step.
     repo_by_id: HashMap<RepoId, usize>,
+    /// Architectures considered "installable" on this profile. The
+    /// solver, file_owner, and binaries_built_from queries all
+    /// filter results to this set so an x86_64 profile doesn't pin
+    /// (or report ownership against) an i686 binary that happens to
+    /// live in the same multilib repo. Empty = no filter (test
+    /// universes / unknown profile arch).
+    ///
+    /// Build from `profile.arch.build_arch + "noarch"` at universe
+    /// construction time.
+    acceptable_archs: Vec<String>,
 }
 
 impl RepoUniverse {
@@ -137,6 +147,24 @@ impl RepoUniverse {
     pub fn from_dbs(
         profile_name: impl Into<String>,
         dbs: Vec<RepoDb>,
+    ) -> Result<Self, RepoError> {
+        Self::from_dbs_with_arch(profile_name, dbs, Vec::new())
+    }
+
+    /// Construct a universe with an explicit arch filter — every
+    /// query (`by_name`, `provides_by_name`, `file_owner`,
+    /// `candidates_with_nevra`, `binaries_built_from`) limits its
+    /// results to packages whose arch is in `acceptable_archs`.
+    ///
+    /// Pass `vec![profile.arch.build_arch, "noarch"]` from the CLI
+    /// so an x86_64 profile doesn't pin i686 binaries from a
+    /// multilib repo (and so the resolver doesn't pick wrong-arch
+    /// candidates in the first place). Empty = no filter, which is
+    /// what test universes use.
+    pub fn from_dbs_with_arch(
+        profile_name: impl Into<String>,
+        dbs: Vec<RepoDb>,
+        acceptable_archs: Vec<String>,
     ) -> Result<Self, RepoError> {
         let mut snapshot_ids: BTreeMap<RepoId, String> = BTreeMap::new();
         let mut repo_by_id: HashMap<RepoId, usize> = HashMap::new();
@@ -151,7 +179,15 @@ impl RepoUniverse {
             dbs,
             snapshot_ids,
             repo_by_id,
+            acceptable_archs,
         })
+    }
+
+    /// `true` iff `arch` is acceptable on this profile. Empty filter
+    /// = accept everything (test universes / arch-agnostic profiles).
+    #[must_use]
+    pub fn arch_accepted(&self, arch: &str) -> bool {
+        self.acceptable_archs.is_empty() || self.acceptable_archs.iter().any(|a| a == arch)
     }
 
     /// Test-only helper: build a universe from in-memory
@@ -226,9 +262,25 @@ impl RepoUniverse {
     /// Owner of a path. Returns `Ok(None)` if no repo claims the
     /// file. Priority-aware: the first (lowest-priority-index) repo
     /// to report ownership wins, matching dnf's resolution.
+    ///
+    /// Filters by [`Self::arch_accepted`] — a multilib `i686` package
+    /// owning `/usr/lib/foo.so.1` doesn't count as the owner of a
+    /// file from the perspective of an `x86_64` profile (the i686
+    /// binary lives in `/usr/lib`, the x86_64 binary in `/usr/lib64`;
+    /// `dnf install` on x86_64 will only ever bring the x86_64
+    /// counterpart, so the i686 owner is irrelevant).
     pub fn file_owner(&self, path: &str) -> Result<Option<ProviderRef>, RepoError> {
         for db in &self.dbs {
-            if let Some(pkg_id) = db.file_owner(path)? {
+            // Multilib repos commonly list the same path under both
+            // i686 and x86_64 packages (e.g. `/usr/bin/perl`). Use
+            // the all-owners variant and pick the first
+            // arch-acceptable one; falling back to `db.file_owner`'s
+            // LIMIT 1 would let a wrong-arch owner shadow the
+            // correct one and report the file as unowned.
+            for (pkg_id, arch) in db.file_owners(path)? {
+                if !self.arch_accepted(&arch) {
+                    continue;
+                }
                 return Ok(Some(ProviderRef {
                     repo_id: db.repo_id()?,
                     pkg_id,
@@ -254,6 +306,9 @@ impl RepoUniverse {
         for db in &self.dbs {
             let repo_id = db.repo_id()?;
             for (pkg_id, nevra) in db.pkg_briefs_by_name(name)? {
+                if !self.arch_accepted(&nevra.arch) {
+                    continue;
+                }
                 let pref = ProviderRef {
                     repo_id: repo_id.clone(),
                     pkg_id,
@@ -266,6 +321,9 @@ impl RepoUniverse {
         for db in &self.dbs {
             let repo_id = db.repo_id()?;
             for (pkg_id, nevra) in db.pkg_briefs_providing(name)? {
+                if !self.arch_accepted(&nevra.arch) {
+                    continue;
+                }
                 let pref = ProviderRef {
                     repo_id: repo_id.clone(),
                     pkg_id,
@@ -296,6 +354,9 @@ impl RepoUniverse {
         for db in &self.dbs {
             let repo_id = db.repo_id()?;
             for (pkg_id, nevra) in db.pkg_briefs_by_source_name(source_name)? {
+                if !self.arch_accepted(&nevra.arch) {
+                    continue;
+                }
                 let pref = ProviderRef {
                     repo_id: repo_id.clone(),
                     pkg_id,
