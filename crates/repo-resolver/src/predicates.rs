@@ -113,7 +113,7 @@ mod tests {
     use std::cmp::Ordering;
     use std::sync::Arc;
 
-    use rpm_spec_repo_core::{CapVersion, Capability, NEVRA, Package, PkgChecksum};
+    use rpm_spec_repo_core::{CapVersion, Capability, NEVRA, Package, PkgChecksum, RepoId};
 
     use super::*;
 
@@ -130,7 +130,7 @@ mod tests {
     fn pkg(name: &str, version: &str, release: &str, provides: Vec<Capability>) -> Package {
         Package {
             nevra: nevra(name, version, release),
-            repo_id: Arc::from("test-repo"),
+            repo_id: RepoId::from("test-repo"),
             provides,
             requires: Vec::new(),
             conflicts: Vec::new(),

@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn parses_packages_with_provides_and_requires() {
-        let packages = parse(FIXTURE.as_bytes(), Arc::from("test")).unwrap();
+        let packages = parse(FIXTURE.as_bytes(), RepoId::from("test")).unwrap();
         assert_eq!(packages.len(), 3, "expected 3 packages");
 
         let bash = packages

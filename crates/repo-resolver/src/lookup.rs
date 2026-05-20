@@ -171,7 +171,7 @@ mod tests {
     //! no disk I/O) to exercise `lookup` and the `is_strictly_better`
     //! tiebreak ordering.
     use rpm_spec_repo_core::{
-        CapVersion, Capability, Package, PkgChecksum, RepoIndex, RepoUniverse,
+        Capability, Package, PkgChecksum, RepoId, RepoIndex, RepoUniverse,
     };
     use time::OffsetDateTime;
 
@@ -204,7 +204,7 @@ mod tests {
     ) -> Package {
         Package {
             nevra: nevra(name, version, release),
-            repo_id: Arc::from(repo_id),
+            repo_id: RepoId::from(repo_id),
             provides,
             requires: Vec::new(),
             conflicts: Vec::new(),
@@ -223,7 +223,7 @@ mod tests {
     }
 
     fn one_repo_universe(packages: Vec<Package>) -> RepoUniverse {
-        let repo_id: Arc<str> = Arc::from("test-repo");
+        let repo_id = RepoId::from("test-repo");
         let index = RepoIndex {
             repo_id,
             revision: "rev0".into(),
@@ -285,7 +285,7 @@ mod tests {
             name: Arc::from(name),
             nevra: nevra(name, version, "1"),
             provider_ref: ProviderRef {
-                repo_id: Arc::from("test-repo"),
+                repo_id: RepoId::from("test-repo"),
                 pkg_id: 0,
             },
         };

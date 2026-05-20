@@ -359,7 +359,7 @@ mod tests {
     use crate::rules::repo::test_fixtures::redos_profile;
     use crate::rules::test_support::run_repo_lint;
     use rpm_spec_repo_core::{
-        Capability, NEVRA, Package, PkgChecksum, RepoIndex, RepoUniverse,
+        Capability, NEVRA, Package, PkgChecksum, RepoId, RepoIndex, RepoUniverse,
     };
     use time::OffsetDateTime;
 
@@ -372,7 +372,7 @@ mod tests {
                 release: Arc::from(release),
                 arch: Arc::from("x86_64"),
             },
-            repo_id: Arc::from("baseos"),
+            repo_id: RepoId::from("baseos"),
             provides: vec![Capability::unversioned(Arc::from(name))],
             requires: Vec::new(),
             conflicts: Vec::new(),
@@ -401,7 +401,7 @@ mod tests {
             pkg("libxslt", "1.1.34", "1.el9", vec!["/usr/bin/xsltproc"]),
         ];
         let index = RepoIndex {
-            repo_id: Arc::from("baseos"),
+            repo_id: RepoId::from("baseos"),
             revision: "deadbeef".to_string(),
             fetched_at: OffsetDateTime::now_utc(),
             packages,

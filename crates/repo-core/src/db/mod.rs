@@ -28,6 +28,53 @@
 //! Single writer at a time (the existing `fcntl` snapshot lock in
 //! `repo-metadata::locks` already serialises). Multiple readers are
 //! fine because SQLite's WAL mode tolerates concurrent reads.
+//!
+//! ## Adding a column / schema change procedure
+//!
+//! There is intentionally **no in-place migration story**. A repo
+//! cache is a *snapshot* — if the schema changes, the right answer is
+//! to re-fetch the upstream metadata into a fresh database. Cache
+//! files written under an older schema are detected at open time
+//! (see [`schema::SCHEMA_VERSION`]) and the user is told to re-sync.
+//!
+//! The runbook for adding (or removing, or renaming) a column:
+//!
+//! 1. **Bump [`schema::SCHEMA_VERSION`]** by one. This is the *only*
+//!    knob — readers compare strictly against this constant and reject
+//!    older or newer cache files via [`RepoError::Database`]. There
+//!    are no compatibility shims and we don't want any.
+//! 2. **Edit `schema::CREATE_SQL`** to include the new column (or
+//!    drop / rename the old one). The full DDL lives in one string so
+//!    a code review can see the whole schema in one diff.
+//! 3. **Update the writer half** in [`RepoDb::ingest_packages`] (and
+//!    its `convert::*` helpers) to populate the new column from a
+//!    field on [`Package`]. If the column maps to a struct field that
+//!    didn't exist before, extend [`Package`] / [`NEVRA`] first and
+//!    propagate.
+//! 4. **Update every reader half** — and there are two parallel
+//!    families that are easy to confuse:
+//!    - `load_package`'s inline row closure, `load_package_with_files`,
+//!      `load_nevra`, plus the `pkg_briefs_*` helpers
+//!      (`pkg_briefs_by_name`, `pkg_briefs_by_source_name`,
+//!      `pkg_briefs_providing`) which share the free function
+//!      `read_pkg_nevra_row`.
+//!    - The brief-style readers (`top_n_by_size`, `all_packages_brief`,
+//!      `package_brief`, `packages_by_name_brief`, `file_owners`,
+//!      `files_for_pkg`) which use `PackageBrief::from_row`.
+//!
+//!    **This is the most common bug class:** the writer fills the
+//!    column but one reader still reconstructs with the default,
+//!    producing silent data loss until a user notices the field is
+//!    empty in a diagnostic. Grep for every `row.get` in this file
+//!    after a column change to confirm coverage.
+//! 5. **Add a round-trip test** in the `tests` mod at the bottom of
+//!    this file. The pattern is `ingest_packages([sample_pkg(…)])` →
+//!    `load_package(id)` → assert every new field matches. The
+//!    existing `create_open_roundtrip` test is the model.
+//! 6. **Schema bumps are user-visible breakage** — every user must
+//!    re-run `rpm-spec-tool repo sync` after upgrading past the
+//!    bump. Note it in the CHANGELOG and verify the open-error
+//!    message stays actionable.
 
 mod convert;
 mod schema;
@@ -112,7 +159,7 @@ impl RepoDb {
             schema::meta_keys::SCHEMA_VERSION,
             schema::SCHEMA_VERSION.to_string()
         ])?;
-        stmt.execute(params![schema::meta_keys::REPO_ID, repo_id.as_ref()])?;
+        stmt.execute(params![schema::meta_keys::REPO_ID, repo_id.as_str()])?;
         stmt.execute(params![schema::meta_keys::REVISION, revision])?;
         stmt.execute(params![schema::meta_keys::FETCHED_AT, fetched_at_str])?;
         stmt.execute(params![schema::meta_keys::BACKEND_KIND, backend_kind])?;
@@ -148,7 +195,7 @@ impl RepoDb {
             schema::meta_keys::SCHEMA_VERSION,
             schema::SCHEMA_VERSION.to_string()
         ])?;
-        stmt.execute(params![schema::meta_keys::REPO_ID, repo_id.as_ref()])?;
+        stmt.execute(params![schema::meta_keys::REPO_ID, repo_id.as_str()])?;
         stmt.execute(params![schema::meta_keys::REVISION, revision])?;
         stmt.execute(params![schema::meta_keys::FETCHED_AT, fetched_at_str])?;
         stmt.execute(params![schema::meta_keys::BACKEND_KIND, backend_kind])?;
@@ -177,7 +224,7 @@ impl RepoDb {
             )
             .optional()?;
 
-        let cached_repo_id: RepoId = match conn
+        let cached_repo_id = match conn
             .query_row(
                 "SELECT value FROM meta WHERE key = ?1",
                 params![schema::meta_keys::REPO_ID],
@@ -185,7 +232,23 @@ impl RepoDb {
             )
             .optional()?
         {
-            Some(s) => Arc::from(s),
+            Some(s) => {
+                // Cross-trust boundary: anything in `meta.repo_id` on
+                // disk could have been tampered with. Re-validate
+                // against the same `[a-z0-9_-]{1,64}` rule the
+                // profile loader enforces on TOML keys, so a hostile
+                // cache file can't smuggle ANSI escapes, newlines,
+                // NUL bytes, or oversized strings into the
+                // `tracing` / `eprintln!` lines that interpolate
+                // `repo_id` (see `cli::commands::repo::sync`).
+                if let Err(reason) = rpm_spec_profile::repos::validate_repo_id(&s) {
+                    return Err(RepoError::Database(format!(
+                        "repo db at {} has malformed meta.repo_id: {reason} — re-run `repo sync` to rebuild the cache",
+                        path.display()
+                    )));
+                }
+                RepoId::from(s)
+            }
             None => {
                 return Err(RepoError::Database(format!(
                     "repo db at {} is missing meta.repo_id",
@@ -806,8 +869,7 @@ impl RepoDb {
         // that still wants the full file list calls
         // [`Self::load_package_with_files`] explicitly.
         drop(guard);
-        let pkg = header.into_package(
-            self.cached_repo_id.clone(),
+        let body = PackageBody {
             provides,
             requires,
             conflicts,
@@ -816,8 +878,9 @@ impl RepoDb {
             suggests,
             supplements,
             enhances,
-            Vec::new(),
-        );
+            files: Vec::new(),
+        };
+        let pkg = header.into_package(self.cached_repo_id.clone(), body);
         Ok(Some(pkg))
     }
 
@@ -961,38 +1024,46 @@ struct PackageHeader {
     location: Arc<str>,
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Capability lists + filelist that complement a [`PackageHeader`].
+/// Collected by `load_package` from the `provides`/`requires`/... and
+/// `files` join tables, then handed to [`PackageHeader::into_package`]
+/// as a single bundle so the assembly call doesn't take ten positional
+/// arguments. Naming each vector at the call site (vs positional
+/// `into_package(provides, requires, conflicts, …)` where every arg
+/// has the same `Vec<Capability>` type) catches accidental
+/// argument-order swaps during refactors — a structural benefit, not
+/// a type-system one.
+struct PackageBody {
+    provides: Vec<Capability>,
+    requires: Vec<Capability>,
+    conflicts: Vec<Capability>,
+    obsoletes: Vec<Capability>,
+    recommends: Vec<Capability>,
+    suggests: Vec<Capability>,
+    supplements: Vec<Capability>,
+    enhances: Vec<Capability>,
+    files: Vec<Arc<str>>,
+}
+
 impl PackageHeader {
-    fn into_package(
-        self,
-        repo_id: RepoId,
-        provides: Vec<Capability>,
-        requires: Vec<Capability>,
-        conflicts: Vec<Capability>,
-        obsoletes: Vec<Capability>,
-        recommends: Vec<Capability>,
-        suggests: Vec<Capability>,
-        supplements: Vec<Capability>,
-        enhances: Vec<Capability>,
-        files: Vec<Arc<str>>,
-    ) -> Package {
+    fn into_package(self, repo_id: RepoId, body: PackageBody) -> Package {
         Package {
             nevra: self.nevra,
             repo_id,
-            provides,
-            requires,
-            conflicts,
-            obsoletes,
-            recommends,
-            suggests,
-            supplements,
-            enhances,
+            provides: body.provides,
+            requires: body.requires,
+            conflicts: body.conflicts,
+            obsoletes: body.obsoletes,
+            recommends: body.recommends,
+            suggests: body.suggests,
+            supplements: body.supplements,
+            enhances: body.enhances,
             source_rpm: self.source_rpm,
             summary: self.summary,
             size_installed: self.size_installed,
             checksum: self.checksum,
             location: self.location,
-            files,
+            files: body.files,
         }
     }
 }
@@ -1106,7 +1177,7 @@ fn insert_cap_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::{CapVersion, PkgChecksum};
+    use crate::package::PkgChecksum;
 
     fn sample_pkg(name: &str, version: &str) -> Package {
         Package {
@@ -1117,7 +1188,7 @@ mod tests {
                 release: Arc::from("1.el9"),
                 arch: Arc::from("x86_64"),
             },
-            repo_id: Arc::from("test"),
+            repo_id: RepoId::from("test"),
             provides: vec![Capability::unversioned(Arc::from(name))],
             requires: vec![Capability::ge(
                 "glibc",
@@ -1145,7 +1216,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let mut db = RepoDb::create(
             &path,
-            &Arc::from("baseos"),
+            &RepoId::from("baseos"),
             "deadbeef",
             now,
             "rpm-md",
@@ -1189,7 +1260,7 @@ mod tests {
         let path = tmp.path().join("repo.db");
         let mut db = RepoDb::create(
             &path,
-            &Arc::from("baseos"),
+            &RepoId::from("baseos"),
             "rev",
             OffsetDateTime::now_utc(),
             "rpm-md",
@@ -1210,7 +1281,7 @@ mod tests {
         let path = tmp.path().join("repo.db");
         let mut db = RepoDb::create(
             &path,
-            &Arc::from("baseos"),
+            &RepoId::from("baseos"),
             "rev",
             OffsetDateTime::now_utc(),
             "rpm-md",
@@ -1259,7 +1330,7 @@ mod tests {
                 release: Arc::from("1.el9"),
                 arch: Arc::from("x86_64"),
             },
-            repo_id: Arc::from("test"),
+            repo_id: RepoId::from("test"),
             provides,
             requires: Vec::new(),
             conflicts: Vec::new(),
@@ -1281,7 +1352,7 @@ mod tests {
     /// DB plus the `pkg_id` of each package in the same input order.
     fn satisfies_fixture(packages: Vec<Package>) -> (RepoDb, Vec<i64>) {
         let mut db = RepoDb::create_in_memory(
-            &Arc::from("test"),
+            &RepoId::from("test"),
             "rev",
             OffsetDateTime::now_utc(),
             "rpm-md",

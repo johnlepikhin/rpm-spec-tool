@@ -237,8 +237,9 @@ mod tests {
     }
 
     fn universe_with(packages: Vec<rpm_spec_repo_core::Package>) -> Arc<RepoUniverse> {
+        use rpm_spec_repo_core::RepoId;
         use time::OffsetDateTime;
-        let repo_id: Arc<str> = Arc::from("test-repo");
+        let repo_id = RepoId::from("test-repo");
         let index = rpm_spec_repo_core::RepoIndex {
             repo_id,
             revision: "rev0".into(),
@@ -260,7 +261,7 @@ mod tests {
         arch: &str,
         source_rpm: &str,
     ) -> rpm_spec_repo_core::Package {
-        use rpm_spec_repo_core::{NEVRA, Package, PkgChecksum};
+        use rpm_spec_repo_core::{NEVRA, Package, PkgChecksum, RepoId};
         Package {
             nevra: NEVRA {
                 name: Arc::from(name),
@@ -269,7 +270,7 @@ mod tests {
                 release: Arc::from(release),
                 arch: Arc::from(arch),
             },
-            repo_id: Arc::from("test-repo"),
+            repo_id: RepoId::from("test-repo"),
             provides: Vec::new(),
             requires: Vec::new(),
             conflicts: Vec::new(),

@@ -6,7 +6,6 @@
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -143,8 +142,8 @@ pub fn run(
             // stable identifier in the returned `RepoIndex.repo_id` so
             // diagnostics attribute findings to a human-friendly name
             // rather than the resolved URL.
-            let repo_id_arc: rpm_spec_repo_core::RepoId = Arc::from(repo_id.as_str());
-            let index = match backend.fetch_index(&http, &interpolated, &rev, &repo_id_arc) {
+            let repo_id_typed = rpm_spec_repo_core::RepoId::from(repo_id.as_str());
+            let index = match backend.fetch_index(&http, &interpolated, &rev, &repo_id_typed) {
                 Ok(i) => i,
                 Err(e) => {
                     eprintln!("error: {profile_name}/{repo_id} index: {e}");

@@ -29,12 +29,101 @@ use crate::package::{NEVRA, Package};
 /// Stable identifier carried through indexes and provider references
 /// so diagnostics can attribute a finding to one specific repo.
 ///
-/// Conventionally the TOML key under `[profiles.X.repos.<id>]` —
-/// the backend is expected to receive it from the caller and stuff
-/// it into the produced [`RepoIndex`]. Backends that don't have the
-/// caller's id available fall back to the canonicalised baseurl;
-/// callers should not parse this string.
-pub type RepoId = Arc<str>;
+/// Always the TOML key under `[profiles.X.repos.<id>]` (a short slug
+/// like `baseos`). The format is `[a-z0-9_-]{1,64}` — enforced by
+/// `rpm_spec_profile::repos::validate_repo_id`, called at TOML load
+/// time by `rpm_spec_profile::resolve::apply_repos`. Both production
+/// CLI paths (`cli::commands::repo::sync`,
+/// `cli::commands::matrix::universe`) feed this slug verbatim into
+/// [`Self::from`], so the validation invariant propagates to every
+/// `RepoIndex.repo_id` produced by a backend in normal use.
+///
+/// Newtype around `Arc<str>` so the compiler distinguishes a repo
+/// identifier from arbitrary string-shaped data in function signatures
+/// (e.g. you can't accidentally pass a package name where a repo id is
+/// expected). The wrapping is zero-cost; cloning is one `Arc` refcount
+/// bump (O(1)).
+///
+/// Construction is intentionally infallible — `From<&str>` /
+/// `From<String>` cover the internal hot paths. Construction does
+/// NOT re-run `validate_repo_id`; the contract is that callers above
+/// `RepoId` have already validated. The DB open path
+/// ([`crate::db::RepoDb::open`]) is the one cross-trust boundary, and
+/// it re-validates the cached `meta.repo_id` byte for byte so a
+/// tampered cache can't smuggle ANSI escapes / NULs / oversized
+/// strings into log lines and diagnostics.
+///
+/// # Examples
+///
+/// ```
+/// use rpm_spec_repo_core::RepoId;
+/// let id = RepoId::from("baseos");
+/// assert_eq!(id.as_str(), "baseos");
+/// ```
+#[derive(Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RepoId(Arc<str>);
+
+// Static `Send + Sync` guard — `RepoId` is keyed by `HashMap` /
+// `BTreeMap` inside a long-lived `Arc<RepoUniverse>` shared across
+// analyzer threads. A future inner-type change (`Rc`, `Cell`, etc.)
+// would silently break that sharing; this assert turns it into a
+// compile error.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<RepoId>();
+};
+
+// Manual `Debug` so `?repo_id` in tracing fields keeps producing
+// `"baseos"` (the pre-newtype representation) rather than
+// `RepoId("baseos")` — observability consumers parse this shape.
+impl std::fmt::Debug for RepoId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
+impl RepoId {
+    /// Borrow the underlying string slice. Equivalent to
+    /// `<Self as AsRef<str>>::as_ref(self)`, but avoids the
+    /// `AsRef<str>` / `Borrow<str>` disambiguation at non-format call
+    /// sites (SQL params, function args). Format-string call sites
+    /// should use `{repo_id}` (Display) or `{repo_id:?}` (Debug).
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for RepoId {
+    fn from(s: &str) -> Self {
+        Self(Arc::from(s))
+    }
+}
+
+impl From<String> for RepoId {
+    fn from(s: String) -> Self {
+        Self(Arc::from(s))
+    }
+}
+
+impl AsRef<str> for RepoId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for RepoId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::borrow::Borrow<str> for RepoId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Identity of one fetched metadata snapshot. `id` is the sha256 of
 /// the format-defining file (`repomd.xml` for rpm-md, `base/release`
@@ -469,4 +558,77 @@ pub enum AdvisorySeverity {
     Important,
     Critical,
     Unknown,
+}
+
+#[cfg(test)]
+mod repo_id_tests {
+    //! Contract tests for the [`RepoId`] newtype. The Borrow + Hash +
+    //! Eq triple is load-bearing: `HashMap<RepoId, _>` lookups by
+    //! `&str` only work if the three derived/manual impls agree.
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn from_str_and_string_compare_equal() {
+        // The two public constructors must produce values that
+        // compare equal (different allocation, same byte content).
+        // Cross-source equality is what keeps `HashMap` lookups
+        // working when the lookup key was built from a `&str` and
+        // the inserted key from a `String`.
+        let a = RepoId::from("baseos");
+        let b = RepoId::from(String::from("baseos"));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn debug_matches_underlying_str_repr() {
+        // Manual `Debug` impl: future tracing-field migrations
+        // (`tracing::info!(?repo_id, …)`) must keep producing
+        // `"baseos"`, not `RepoId("baseos")`, so structured-log
+        // shippers don't have to learn the newtype.
+        let id = RepoId::from("baseos");
+        assert_eq!(format!("{id:?}"), "\"baseos\"");
+    }
+
+    #[test]
+    fn btree_map_range_uses_str_ordering() {
+        // `snapshot_ids: BTreeMap<RepoId, String>` is range-queried
+        // by the lockfile writer; `Ord` on `RepoId` must therefore
+        // agree with `Borrow<str>` so a range bounded by str
+        // literals returns the same items it would for the inner
+        // `Arc<str>`. Pin that explicitly.
+        use std::collections::BTreeMap;
+        let mut bt: BTreeMap<RepoId, ()> = BTreeMap::new();
+        bt.insert(RepoId::from("appstream"), ());
+        bt.insert(RepoId::from("baseos"), ());
+        bt.insert(RepoId::from("updates"), ());
+        let lo: &str = "b";
+        let hi: &str = "z";
+        let in_range: Vec<&str> = bt
+            .range::<str, _>((std::ops::Bound::Included(lo), std::ops::Bound::Excluded(hi)))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(in_range, vec!["baseos", "updates"]);
+    }
+
+    #[test]
+    fn display_matches_underlying_str() {
+        let id = RepoId::from("appstream");
+        assert_eq!(format!("{id}"), "appstream");
+        assert_eq!(id.as_str(), "appstream");
+        assert_eq!(<RepoId as AsRef<str>>::as_ref(&id), "appstream");
+    }
+
+    #[test]
+    fn hashmap_lookup_by_str_works() {
+        // Borrow<str> + Hash + Eq agreement: required for the
+        // `HashMap<RepoId, T>::get(name: &str)` pattern used by
+        // `RepoUniverse::repo_by_id`.
+        let mut map: HashMap<RepoId, i32> = HashMap::new();
+        map.insert(RepoId::from("baseos"), 10);
+        map.insert(RepoId::from("appstream"), 20);
+        assert_eq!(map.get("baseos"), Some(&10));
+        assert_eq!(map.get("nope"), None);
+    }
 }

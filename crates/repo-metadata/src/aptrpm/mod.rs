@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn merge_files_attaches_paths_by_name() {
-        use rpm_spec_repo_core::{Capability, NEVRA, Package, PkgChecksum};
+        use rpm_spec_repo_core::{Capability, NEVRA, Package, PkgChecksum, RepoId};
         let mut packages = vec![Package {
             nevra: NEVRA {
                 name: Arc::from("bash"),
@@ -280,7 +280,7 @@ mod tests {
                 release: Arc::from("1"),
                 arch: Arc::from("x86_64"),
             },
-            repo_id: Arc::from("classic"),
+            repo_id: RepoId::from("classic"),
             provides: Vec::new(),
             requires: Vec::new(),
             conflicts: Vec::new(),

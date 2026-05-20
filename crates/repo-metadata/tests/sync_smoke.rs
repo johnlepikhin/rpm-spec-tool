@@ -109,7 +109,11 @@ fn sync_fixture_through_http_cache() {
         .expect("fetch_revision");
     assert!(!rev.id.is_empty(), "revision id should be set");
 
-    let repo_id: rpm_spec_repo_core::RepoId = std::sync::Arc::from(baseurl.as_str());
+    // Test rig has no profile-level TOML key, but production paths
+    // always pass a `[a-z0-9_-]{1,64}` slug — use one here so the
+    // resulting cache opens successfully on the asserted-shape side
+    // (see `RepoDb::open`'s `validate_repo_id` check).
+    let repo_id = rpm_spec_repo_core::RepoId::from("smoke");
     let index = backend
         .fetch_index(&http, &baseurl, &rev, &repo_id)
         .expect("fetch_index");

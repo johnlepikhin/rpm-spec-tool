@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use rpm_spec_profile::Profile;
 use rpm_spec_repo_core::{
-    Capability, NEVRA, Package, PkgChecksum, RepoIndex, RepoUniverse,
+    Capability, NEVRA, Package, PkgChecksum, RepoId, RepoIndex, RepoUniverse,
 };
 use time::OffsetDateTime;
 
@@ -38,7 +38,7 @@ pub fn tiny_universe() -> Arc<RepoUniverse> {
                 release: Arc::from(release),
                 arch: Arc::from("x86_64"),
             },
-            repo_id: Arc::from("baseos"),
+            repo_id: RepoId::from("baseos"),
             provides: provides
                 .into_iter()
                 .map(Capability::unversioned)
@@ -73,7 +73,7 @@ pub fn tiny_universe() -> Arc<RepoUniverse> {
     ];
 
     let index = RepoIndex {
-        repo_id: Arc::from("baseos"),
+        repo_id: RepoId::from("baseos"),
         revision: "deadbeef".to_string(),
         fetched_at: OffsetDateTime::now_utc(),
         packages,

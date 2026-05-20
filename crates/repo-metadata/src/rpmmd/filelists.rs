@@ -120,7 +120,7 @@ pub fn merge(xml: &[u8], packages: &mut [Package]) -> Result<(), RepoError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rpm_spec_repo_core::{NEVRA, Package, PkgChecksum};
+    use rpm_spec_repo_core::{NEVRA, Package, PkgChecksum, RepoId};
     use std::sync::Arc;
 
     fn pkg(name: &str, pkgid: &str) -> Package {
@@ -132,7 +132,7 @@ mod tests {
                 release: Arc::from("1"),
                 arch: Arc::from("x86_64"),
             },
-            repo_id: Arc::from("test"),
+            repo_id: RepoId::from("test"),
             provides: Vec::new(),
             requires: Vec::new(),
             conflicts: Vec::new(),

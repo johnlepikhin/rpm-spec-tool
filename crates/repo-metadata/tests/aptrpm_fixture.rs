@@ -68,7 +68,7 @@ fn pkglist_xz_parses_into_packages() {
         "decompressed pkglist doesn't start with rpm header magic"
     );
 
-    let repo_id: RepoId = std::sync::Arc::from("classic");
+    let repo_id = RepoId::from("classic");
     let packages = aptrpm::parse_pkglist_bytes(&bytes, &repo_id).expect("parse pkglist");
 
     assert!(

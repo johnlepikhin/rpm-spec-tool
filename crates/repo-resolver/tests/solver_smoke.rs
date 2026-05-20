@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use rpm_spec_repo_core::{
-    Capability, Dependency, NEVRA, Package, PkgChecksum, RepoIndex, RepoUniverse,
+    Capability, Dependency, NEVRA, Package, PkgChecksum, RepoId, RepoIndex, RepoUniverse,
 };
 use rpm_spec_repo_resolver::{SolveRequest, Solution, solve};
 use time::OffsetDateTime;
@@ -35,7 +35,7 @@ fn pkg(
 ) -> Package {
     Package {
         nevra: nevra(name, version, release),
-        repo_id: Arc::from(repo_id),
+        repo_id: RepoId::from(repo_id),
         provides,
         requires,
         conflicts,
@@ -54,7 +54,7 @@ fn pkg(
 }
 
 fn universe(packages: Vec<Package>) -> RepoUniverse {
-    let repo_id: Arc<str> = Arc::from("test-repo");
+    let repo_id = RepoId::from("test-repo");
     let index = RepoIndex {
         repo_id: repo_id.clone(),
         revision: "rev0".into(),
