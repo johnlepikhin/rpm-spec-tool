@@ -469,7 +469,7 @@ impl RepoUniverse {
     pub fn satisfies(
         &self,
         pref: &ProviderRef,
-        req: &crate::package::Capability,
+        req: &crate::package::Dependency,
     ) -> Result<bool, RepoError> {
         let Some(idx) = self.repo_by_id.get(&pref.repo_id).copied() else {
             return Ok(false);

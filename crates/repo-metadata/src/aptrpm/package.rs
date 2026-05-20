@@ -14,7 +14,9 @@
 
 use std::sync::Arc;
 
-use rpm_spec_repo_core::{CapVersion, Capability, EVR, NEVRA, Package, PkgChecksum, RepoId};
+use rpm_spec_repo_core::{
+    CapVersion, Capability, Dependency, EVR, NEVRA, Package, PkgChecksum, RepoId,
+};
 
 use super::header::{Header, HeaderEntry};
 
@@ -96,38 +98,38 @@ pub fn package_from_header(header: &Header, repo_id: &RepoId) -> Option<Package>
     };
 
     let provides = capability_triple(header, TAG_PROVIDENAME, TAG_PROVIDEFLAGS, TAG_PROVIDEVERSION);
-    let requires = capability_triple(header, TAG_REQUIRENAME, TAG_REQUIREFLAGS, TAG_REQUIREVERSION);
-    let conflicts = capability_triple(
+    let requires = dependency_triple(header, TAG_REQUIRENAME, TAG_REQUIREFLAGS, TAG_REQUIREVERSION);
+    let conflicts = dependency_triple(
         header,
         TAG_CONFLICTNAME,
         TAG_CONFLICTFLAGS,
         TAG_CONFLICTVERSION,
     );
-    let obsoletes = capability_triple(
+    let obsoletes = dependency_triple(
         header,
         TAG_OBSOLETENAME,
         TAG_OBSOLETEFLAGS,
         TAG_OBSOLETEVERSION,
     );
-    let recommends = capability_triple(
+    let recommends = dependency_triple(
         header,
         TAG_RECOMMENDNAME,
         TAG_RECOMMENDFLAGS,
         TAG_RECOMMENDVERSION,
     );
-    let suggests = capability_triple(
+    let suggests = dependency_triple(
         header,
         TAG_SUGGESTNAME,
         TAG_SUGGESTFLAGS,
         TAG_SUGGESTVERSION,
     );
-    let supplements = capability_triple(
+    let supplements = dependency_triple(
         header,
         TAG_SUPPLEMENTNAME,
         TAG_SUPPLEMENTFLAGS,
         TAG_SUPPLEMENTVERSION,
     );
-    let enhances = capability_triple(
+    let enhances = dependency_triple(
         header,
         TAG_ENHANCENAME,
         TAG_ENHANCEFLAGS,
@@ -192,6 +194,21 @@ fn i18n_first(header: &Header, tag: u32) -> Option<String> {
         HeaderEntry::String(s) => Some(s.clone()),
         _ => None,
     }
+}
+
+/// Wrap [`capability_triple`] for the require-side fields — each
+/// produced `Capability` is moved into a `Dependency` so the
+/// `Package.requires`/`conflicts`/... slots get the typed shape.
+fn dependency_triple(
+    header: &Header,
+    name_tag: u32,
+    flags_tag: u32,
+    version_tag: u32,
+) -> Vec<Dependency> {
+    capability_triple(header, name_tag, flags_tag, version_tag)
+        .into_iter()
+        .map(Dependency::new)
+        .collect()
 }
 
 fn capability_triple(
@@ -396,8 +413,8 @@ mod tests {
             (TAG_REQUIREVERSION, sa(&["2.0"])),
         ]);
         let p = package_from_header(&h_le, &RepoId::from("c")).unwrap();
-        let CapVersion::Le(evr_le) = &p.requires[0].version else {
-            panic!("expected Le, got {:?}", p.requires[0].version);
+        let CapVersion::Le(evr_le) = p.requires[0].version() else {
+            panic!("expected Le, got {:?}", p.requires[0].version());
         };
         assert_eq!(&*evr_le.version, "2.0");
 
@@ -411,8 +428,8 @@ mod tests {
             (TAG_REQUIREVERSION, sa(&["2.0"])),
         ]);
         let p = package_from_header(&h_ge, &RepoId::from("c")).unwrap();
-        let CapVersion::Ge(evr_ge) = &p.requires[0].version else {
-            panic!("expected Ge, got {:?}", p.requires[0].version);
+        let CapVersion::Ge(evr_ge) = p.requires[0].version() else {
+            panic!("expected Ge, got {:?}", p.requires[0].version());
         };
         assert_eq!(&*evr_ge.version, "2.0");
     }
@@ -430,7 +447,7 @@ mod tests {
         ]);
         let p = package_from_header(&h, &RepoId::from("c")).unwrap();
         assert_eq!(p.requires.len(), 1);
-        assert!(p.requires[0].version.is_unversioned());
+        assert!(p.requires[0].version().is_unversioned());
     }
 
     #[test]
@@ -464,9 +481,9 @@ mod tests {
         ]);
         let p = package_from_header(&h, &RepoId::from("c")).unwrap();
         assert_eq!(p.recommends.len(), 1);
-        assert_eq!(p.recommends[0].name.as_ref(), "nice-to-have");
+        assert_eq!(p.recommends[0].name().as_ref(), "nice-to-have");
         assert_eq!(p.suggests.len(), 1);
-        assert_eq!(p.suggests[0].name.as_ref(), "maybe");
+        assert_eq!(p.suggests[0].name().as_ref(), "maybe");
     }
 
     #[test]
@@ -497,7 +514,7 @@ mod tests {
         let p = package_from_header(&h, &RepoId::from("c")).unwrap();
         // Only the non-rpmlib `bash` survived.
         assert_eq!(p.requires.len(), 1, "got: {:?}", p.requires);
-        assert_eq!(p.requires[0].name.as_ref(), "bash");
+        assert_eq!(p.requires[0].name().as_ref(), "bash");
     }
 
     #[test]
@@ -525,7 +542,7 @@ mod tests {
         let p = package_from_header(&h, &RepoId::from("c")).unwrap();
         // Only the real, non-missingok requirement survives.
         assert_eq!(p.requires.len(), 1, "got: {:?}", p.requires);
-        assert_eq!(p.requires[0].name.as_ref(), "python3-base");
+        assert_eq!(p.requires[0].name().as_ref(), "python3-base");
     }
 
     #[test]
@@ -549,7 +566,7 @@ mod tests {
         ]);
         let p = package_from_header(&h, &RepoId::from("c")).unwrap();
         assert_eq!(p.requires.len(), 1, "got: {:?}", p.requires);
-        assert_eq!(p.requires[0].name.as_ref(), "python3-base");
+        assert_eq!(p.requires[0].name().as_ref(), "python3-base");
     }
 
     #[test]

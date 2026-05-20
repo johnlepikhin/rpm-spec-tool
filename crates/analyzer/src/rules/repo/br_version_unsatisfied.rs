@@ -53,7 +53,7 @@ impl<'ast> Visit<'ast> for BuildRequiresVersionUnsatisfied {
             spec,
             |t| matches!(t, Tag::BuildRequires),
             |state, dep, diagnostics| {
-                let outcome = match lookup(&state.universe, &dep.capability) {
+                let outcome = match lookup(&state.universe, &dep.requirement) {
                     Ok(o) => o,
                     Err(e) => {
                         tracing::warn!(
@@ -80,7 +80,7 @@ impl<'ast> Visit<'ast> for BuildRequiresVersionUnsatisfied {
                             format!(
                                 "configured repos provide `{name}` but none satisfy `{display}`; \
                                  best available is `{best_str}` (from `{nevra_str}`)",
-                                name = dep.capability.name,
+                                name = dep.requirement.name(),
                                 display = dep.display,
                             ),
                             dep.span,

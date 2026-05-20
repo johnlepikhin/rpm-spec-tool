@@ -54,7 +54,7 @@ impl<'ast> Visit<'ast> for BuildRequiresUnresolvable {
             spec,
             |t| matches!(t, Tag::BuildRequires),
             |state, dep, diagnostics| {
-                let outcome = match lookup(&state.universe, &dep.capability) {
+                let outcome = match lookup(&state.universe, &dep.requirement) {
                     Ok(o) => o,
                     Err(e) => {
                         tracing::warn!(

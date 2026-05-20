@@ -47,7 +47,7 @@ impl<'ast> Visit<'ast> for RuntimeRequiresUnresolvable {
             spec,
             |t| matches!(t, Tag::Requires),
             |state, dep, diagnostics| {
-                let outcome = match lookup(&state.universe, &dep.capability) {
+                let outcome = match lookup(&state.universe, &dep.requirement) {
                     Ok(o) => o,
                     Err(e) => {
                         tracing::warn!(

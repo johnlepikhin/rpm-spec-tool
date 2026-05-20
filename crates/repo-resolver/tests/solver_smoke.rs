@@ -24,14 +24,18 @@ fn cap(name: &str) -> Capability {
     Capability::unversioned(name)
 }
 
+fn dep(name: &str) -> Dependency {
+    Dependency::unversioned(name)
+}
+
 fn pkg(
     repo_id: &str,
     name: &str,
     version: &str,
     release: &str,
-    requires: Vec<Capability>,
+    requires: Vec<Dependency>,
     provides: Vec<Capability>,
-    conflicts: Vec<Capability>,
+    conflicts: Vec<Dependency>,
 ) -> Package {
     Package {
         nevra: nevra(name, version, release),
@@ -83,7 +87,7 @@ fn happy_path_three_package_universe() {
         "bash",
         "5.1.8",
         "9",
-        vec![cap("glibc")],
+        vec![dep("glibc")],
         vec![cap("bash"), cap("/bin/sh")],
         Vec::new(),
     );
@@ -92,13 +96,13 @@ fn happy_path_three_package_universe() {
         "cmake",
         "3.26.5",
         "1",
-        vec![cap("bash"), cap("glibc")],
+        vec![dep("bash"), dep("glibc")],
         vec![cap("cmake")],
         Vec::new(),
     );
     let uni = universe(vec![glibc, bash, cmake]);
 
-    let req = vec![cap("cmake")];
+    let req = vec![dep("cmake")];
     let sol = solve(SolveRequest {
         universe: &uni,
         requirements: &req,
@@ -143,7 +147,7 @@ fn unsatisfiable_when_provider_absent() {
     match sol {
         Solution::Unsatisfiable(core) => {
             assert_eq!(core.unsatisfied.len(), 1);
-            assert_eq!(core.unsatisfied[0].dep.name.as_ref(), "nonexistent");
+            assert_eq!(core.unsatisfied[0].dep.name().as_ref(), "nonexistent");
             // Top-level BR — no transitive ancestry.
             assert!(core.unsatisfied[0].provenance.is_from_spec());
         }
@@ -174,7 +178,7 @@ fn file_path_alternative_provider_short_circuits() {
         "1",
         Vec::new(),
         vec![cap("pkgconfig")],
-        vec![cap("pkgconf-pkg-config")],
+        vec![dep("pkgconf-pkg-config")],
     );
     let mut pkgconfig = pkgconfig;
     pkgconfig.files = vec![Arc::from("/usr/bin/pkg-config")];
@@ -186,7 +190,7 @@ fn file_path_alternative_provider_short_circuits() {
         "1",
         Vec::new(),
         vec![cap("pkgconfig")],
-        vec![cap("pkgconfig")],
+        vec![dep("pkgconfig")],
     );
     let mut pkgconf = pkgconf;
     pkgconf.files = vec![Arc::from("/usr/bin/pkg-config")];
@@ -196,14 +200,14 @@ fn file_path_alternative_provider_short_circuits() {
         "consumer",
         "1.0",
         "1",
-        vec![cap("/usr/bin/pkg-config")],
+        vec![dep("/usr/bin/pkg-config")],
         vec![cap("consumer")],
         Vec::new(),
     );
     let uni = universe(vec![pkgconfig, pkgconf, consumer]);
 
-    let base = vec![cap("pkgconfig")];
-    let req = vec![cap("consumer")];
+    let base = vec![dep("pkgconfig")];
+    let req = vec![dep("consumer")];
     let sol = solve(SolveRequest {
         universe: &uni,
         requirements: &req,
@@ -240,7 +244,7 @@ fn conflict_chain_surfaces_when_two_packages_conflict() {
         "1",
         Vec::new(),
         vec![cap("mta-alpha"), cap("mta")],
-        vec![cap("mta-beta")],
+        vec![dep("mta-beta")],
     );
     let beta = pkg(
         "test-repo",
@@ -249,11 +253,11 @@ fn conflict_chain_surfaces_when_two_packages_conflict() {
         "1",
         Vec::new(),
         vec![cap("mta-beta"), cap("mta")],
-        vec![cap("mta-alpha")],
+        vec![dep("mta-alpha")],
     );
     let uni = universe(vec![alpha, beta]);
 
-    let req = vec![cap("mta-alpha"), cap("mta-beta")];
+    let req = vec![dep("mta-alpha"), dep("mta-beta")];
     let sol = solve(SolveRequest {
         universe: &uni,
         requirements: &req,

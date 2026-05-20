@@ -13,7 +13,7 @@ use rpm_spec::ast::{
     Section, ShellBody, Span, SpecFile, SpecItem, Tag, TagValue, VerOp,
 };
 use rpm_spec_profile::{MacroRegistry, Profile};
-use rpm_spec_repo_core::{CapVersion, Capability, EVR, RepoUniverse};
+use rpm_spec_repo_core::{CapVersion, Capability, Dependency, EVR, RepoUniverse};
 
 use crate::bcond::{BcondMap, BcondOverrides};
 use crate::branch_coverage::evaluate_branch;
@@ -117,7 +117,14 @@ impl RepoRule {
 /// sees what they wrote, not the resolver's normalised form.
 #[derive(Debug)]
 pub struct ProjectedDep {
-    pub capability: Capability,
+    /// The projected require-side capability — the resolver's
+    /// `lookup` and `solve` entry points take `&Dependency`, so
+    /// downstream call sites can pass `&dep.requirement` directly
+    /// without re-wrapping. Field accesses go through the inherent
+    /// `.name()`, `.version()`, `.is_file_path()`, `.display()`
+    /// methods (the newtype deliberately has no `Deref<Capability>`
+    /// — see `rpm_spec_repo_core::Dependency` docs).
+    pub requirement: Dependency,
     pub display: String,
     pub span: Span,
 }
@@ -125,14 +132,15 @@ pub struct ProjectedDep {
 /// `project_deps` shortcut for callers that just want the active
 /// `BuildRequires:` set, already projected to resolver shape with
 /// `%if` / `%else` branches gated against `profile` + bcond.
-/// Returns `Vec<Capability>` because that's the only field
-/// downstream consumers (`matrix buildroot solve`, future
-/// `matrix upgrade-sim`) actually look at.
-pub fn active_buildrequires(spec: &SpecFile<Span>, profile: &Profile) -> Vec<Capability> {
+/// Returns `Vec<Dependency>` so downstream consumers
+/// (`matrix buildroot solve`, `matrix upgrade-sim`) get the
+/// require-side type the resolver `SolveRequest::requirements`
+/// expects without re-wrapping.
+pub fn active_buildrequires(spec: &SpecFile<Span>, profile: &Profile) -> Vec<Dependency> {
     let bcond = BcondMap::from_spec(spec, &BcondOverrides::default());
     project_deps(spec, profile, &bcond, |t| matches!(t, Tag::BuildRequires))
         .into_iter()
-        .map(|d| d.capability)
+        .map(|d| d.requirement)
         .collect()
 }
 
@@ -375,10 +383,10 @@ fn project_atom(atom: &DepAtom, macros: &MacroRegistry, span: Span) -> Option<Pr
     let display = format_capability_display(&name, arch, &cap_version);
 
     Some(ProjectedDep {
-        capability: Capability {
+        requirement: Dependency::new(Capability {
             name: Arc::from(name),
             version: cap_version,
-        },
+        }),
         display,
         span,
     })
@@ -585,7 +593,7 @@ mod tests {
         );
         let outcome = crate::session::parse(src);
         let brs = active_buildrequires(&outcome.spec, &profile);
-        let names: Vec<&str> = brs.iter().map(|c| c.name.as_ref()).collect();
+        let names: Vec<&str> = brs.iter().map(|c| c.name().as_ref()).collect();
         assert!(names.contains(&"foo"), "got {names:?}");
         assert!(
             !names.contains(&"lib64foo"),

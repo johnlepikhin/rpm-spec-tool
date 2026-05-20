@@ -107,7 +107,7 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForFile {
             |t| matches!(t, Tag::BuildRequires),
         )
         .into_iter()
-        .map(|d| d.capability.name.to_string())
+        .map(|d| d.requirement.name().to_string())
         .collect();
 
         // Walk every active build-script section.

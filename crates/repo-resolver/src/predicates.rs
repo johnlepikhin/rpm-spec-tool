@@ -1,12 +1,12 @@
-//! Shared capability-matching predicates.
+//! Shared dependency-matching predicates.
 //!
 //! Both [`crate::lookup`] (single-shot queries) and [`crate::solver`]
 //! (closure walker) need to answer "does this `Package` satisfy a
-//! requirement `Capability`?" with identical semantics. Keeping the
-//! predicate in one place prevents the two consumers from drifting.
+//! `Dependency`?" with identical semantics. Keeping the predicate
+//! in one place prevents the two consumers from drifting.
 
 use rpm_spec_repo_core::{
-    Capability, Dependency, EVR, NEVRA, Package, ProviderRef, RepoError, RepoUniverse,
+    Dependency, EVR, NEVRA, Package, ProviderRef, RepoError, RepoUniverse,
 };
 
 /// Priority assigned to repos not present in the priority map (e.g. when
@@ -27,23 +27,23 @@ pub(crate) const REPO_PRIORITY_FALLBACK: i32 = 99;
 ///   [`CapVersion::Unversioned`], accept; otherwise both sides must
 ///   carry an EVR (a versionless `Provides:` does NOT satisfy a
 ///   versioned requirement).
-pub fn provides_satisfies(provider: &Package, requirement: &Capability) -> bool {
-    if provider.nevra.name.as_ref() == requirement.name.as_ref() {
+pub fn provides_satisfies(provider: &Package, requirement: &Dependency) -> bool {
+    if provider.nevra.name.as_ref() == requirement.name().as_ref() {
         return evr_matches(&provider.nevra.evr(), requirement);
     }
     if requirement.is_file_path() {
         for path in &provider.files {
-            if path.as_ref() == requirement.name.as_ref() {
+            if path.as_ref() == requirement.name().as_ref() {
                 return true;
             }
         }
     }
     for prov in &provider.provides {
-        if prov.name.as_ref() != requirement.name.as_ref() {
+        if prov.name.as_ref() != requirement.name().as_ref() {
             continue;
         }
         // No version constraint on the requirement → name match suffices.
-        if requirement.version.is_unversioned() {
+        if requirement.version().is_unversioned() {
             return true;
         }
         // Versioned requirement: a versionless `Provides:` cannot
@@ -62,12 +62,12 @@ pub fn provides_satisfies(provider: &Package, requirement: &Capability) -> bool 
 /// in `req`. An unversioned requirement is always satisfied; a
 /// versioned one defers to [`CapVersion::matches`] over
 /// [`EVR::compare_rpm`].
-pub fn evr_matches(provider_evr: &EVR, req: &Capability) -> bool {
-    let Some(req_evr) = req.version.evr() else {
+pub fn evr_matches(provider_evr: &EVR, req: &Dependency) -> bool {
+    let Some(req_evr) = req.version().evr() else {
         // Unversioned — name match already verified by caller.
         return true;
     };
-    req.version.matches(provider_evr.compare_rpm(req_evr))
+    req.version().matches(provider_evr.compare_rpm(req_evr))
 }
 
 /// Gather every candidate that might satisfy `dep` across the
@@ -92,9 +92,9 @@ pub(crate) fn gather_candidates(
     dep: &Dependency,
 ) -> Result<(Vec<(ProviderRef, NEVRA)>, bool), RepoError> {
     let file_path_dep = dep.is_file_path();
-    let mut candidates = universe.candidates_with_nevra(&dep.name)?;
+    let mut candidates = universe.candidates_with_nevra(dep.name())?;
     if file_path_dep
-        && let Some(owner) = universe.file_owner(&dep.name)?
+        && let Some(owner) = universe.file_owner(dep.name())?
         && !candidates.iter().any(|(p, _)| p == &owner)
         && let Some(nevra) = universe.resolve_nevra(&owner)?
     {
@@ -148,11 +148,23 @@ mod tests {
         }
     }
 
-    fn cap_unversioned(name: &str) -> Capability {
+    fn dep_unversioned(name: &str) -> Dependency {
+        Dependency::unversioned(name)
+    }
+
+    fn dep(name: &str, version: CapVersion) -> Dependency {
+        Dependency::new(Capability {
+            name: Arc::from(name),
+            version,
+        })
+    }
+
+    /// Provides-side cap builder for the `Package.provides` field.
+    fn provides_cap(name: &str) -> Capability {
         Capability::unversioned(name)
     }
 
-    fn cap(name: &str, version: CapVersion) -> Capability {
+    fn provides_cap_versioned(name: &str, version: CapVersion) -> Capability {
         Capability {
             name: Arc::from(name),
             version,
@@ -166,14 +178,14 @@ mod tests {
     #[test]
     fn provides_satisfies_direct_name_match_no_flags() {
         let p = pkg("bash", "5.1.8", "9", vec![]);
-        let req = cap_unversioned("bash");
+        let req = dep_unversioned("bash");
         assert!(provides_satisfies(&p, &req));
     }
 
     #[test]
     fn provides_satisfies_via_provides_versionless() {
-        let p = pkg("bash", "5.1.8", "9", vec![cap_unversioned("/bin/sh")]);
-        let req = cap_unversioned("/bin/sh");
+        let p = pkg("bash", "5.1.8", "9", vec![provides_cap("/bin/sh")]);
+        let req = dep_unversioned("/bin/sh");
         assert!(provides_satisfies(&p, &req));
     }
 
@@ -183,9 +195,9 @@ mod tests {
             "libfoo",
             "1.0",
             "1",
-            vec![cap("libabc", CapVersion::Eq(evr("2.0", "1")))],
+            vec![provides_cap_versioned("libabc", CapVersion::Eq(evr("2.0", "1")))],
         );
-        let req = cap("libabc", CapVersion::Ge(evr("1.0", "1")));
+        let req = dep("libabc", CapVersion::Ge(evr("1.0", "1")));
         assert!(provides_satisfies(&p, &req));
     }
 
@@ -195,16 +207,16 @@ mod tests {
             "libfoo",
             "1.0",
             "1",
-            vec![cap("virtual-cap", CapVersion::Eq(evr("9.9", "9")))],
+            vec![provides_cap_versioned("virtual-cap", CapVersion::Eq(evr("9.9", "9")))],
         );
-        let req = cap_unversioned("virtual-cap");
+        let req = dep_unversioned("virtual-cap");
         assert!(provides_satisfies(&p, &req));
     }
 
     #[test]
     fn provides_versioned_requirement_against_versionless_provides_fails() {
-        let p = pkg("libfoo", "1.0", "1", vec![cap_unversioned("virtual-cap")]);
-        let req = cap("virtual-cap", CapVersion::Ge(evr("1.0", "1")));
+        let p = pkg("libfoo", "1.0", "1", vec![provides_cap("virtual-cap")]);
+        let req = dep("virtual-cap", CapVersion::Ge(evr("1.0", "1")));
         assert!(!provides_satisfies(&p, &req));
     }
 
@@ -212,28 +224,28 @@ mod tests {
     fn provides_satisfies_file_path_requirement_via_files() {
         let mut p = pkg("glibc", "2.34", "1", vec![]);
         p.files = vec![Arc::from("/sbin/ldconfig")];
-        let req = cap_unversioned("/sbin/ldconfig");
+        let req = dep_unversioned("/sbin/ldconfig");
         assert!(provides_satisfies(&p, &req));
     }
 
     #[test]
     fn provides_satisfies_file_path_no_match_when_path_absent() {
         let p = pkg("bash", "5.1.8", "9", vec![]);
-        let req = cap_unversioned("/usr/bin/xsltproc");
+        let req = dep_unversioned("/usr/bin/xsltproc");
         assert!(!provides_satisfies(&p, &req));
     }
 
     #[test]
     fn provides_direct_name_versioned_lt_failure() {
         let p = pkg("cmake", "3.26.5", "1", vec![]);
-        let req = cap("cmake", CapVersion::Lt(evr("3.0.0", "1")));
+        let req = dep("cmake", CapVersion::Lt(evr("3.0.0", "1")));
         assert!(!provides_satisfies(&p, &req));
     }
 
     #[test]
     fn evr_matches_none_flag_always_true() {
         let e = EVR::new(Some(0), "1.0", "1");
-        let req = cap_unversioned("anything");
+        let req = dep_unversioned("anything");
         assert!(evr_matches(&e, &req));
     }
 
@@ -241,22 +253,22 @@ mod tests {
     fn evr_matches_all_flag_variants() {
         let pe = EVR::new(Some(0), "2.0", "1");
         // Eq
-        assert!(evr_matches(&pe, &cap("x", CapVersion::Eq(evr("2.0", "1")))));
-        assert!(!evr_matches(&pe, &cap("x", CapVersion::Eq(evr("2.1", "1")))));
+        assert!(evr_matches(&pe, &dep("x", CapVersion::Eq(evr("2.0", "1")))));
+        assert!(!evr_matches(&pe, &dep("x", CapVersion::Eq(evr("2.1", "1")))));
         // Lt
-        assert!(evr_matches(&pe, &cap("x", CapVersion::Lt(evr("3.0", "1")))));
-        assert!(!evr_matches(&pe, &cap("x", CapVersion::Lt(evr("2.0", "1")))));
+        assert!(evr_matches(&pe, &dep("x", CapVersion::Lt(evr("3.0", "1")))));
+        assert!(!evr_matches(&pe, &dep("x", CapVersion::Lt(evr("2.0", "1")))));
         // Le
-        assert!(evr_matches(&pe, &cap("x", CapVersion::Le(evr("2.0", "1")))));
-        assert!(evr_matches(&pe, &cap("x", CapVersion::Le(evr("3.0", "1")))));
-        assert!(!evr_matches(&pe, &cap("x", CapVersion::Le(evr("1.0", "1")))));
+        assert!(evr_matches(&pe, &dep("x", CapVersion::Le(evr("2.0", "1")))));
+        assert!(evr_matches(&pe, &dep("x", CapVersion::Le(evr("3.0", "1")))));
+        assert!(!evr_matches(&pe, &dep("x", CapVersion::Le(evr("1.0", "1")))));
         // Gt
-        assert!(evr_matches(&pe, &cap("x", CapVersion::Gt(evr("1.0", "1")))));
-        assert!(!evr_matches(&pe, &cap("x", CapVersion::Gt(evr("2.0", "1")))));
+        assert!(evr_matches(&pe, &dep("x", CapVersion::Gt(evr("1.0", "1")))));
+        assert!(!evr_matches(&pe, &dep("x", CapVersion::Gt(evr("2.0", "1")))));
         // Ge
-        assert!(evr_matches(&pe, &cap("x", CapVersion::Ge(evr("2.0", "1")))));
-        assert!(evr_matches(&pe, &cap("x", CapVersion::Ge(evr("1.0", "1")))));
-        assert!(!evr_matches(&pe, &cap("x", CapVersion::Ge(evr("3.0", "1")))));
+        assert!(evr_matches(&pe, &dep("x", CapVersion::Ge(evr("2.0", "1")))));
+        assert!(evr_matches(&pe, &dep("x", CapVersion::Ge(evr("1.0", "1")))));
+        assert!(!evr_matches(&pe, &dep("x", CapVersion::Ge(evr("3.0", "1")))));
     }
 
     #[test]

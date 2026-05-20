@@ -62,6 +62,17 @@
 //!      `package_brief`, `packages_by_name_brief`, `file_owners`,
 //!      `files_for_pkg`) which use `PackageBrief::from_row`.
 //!
+//!    **Require-side `CapKind` rows** (`requires` / `conflicts` /
+//!    `obsoletes` / `recommends` / `suggests` / `supplements` /
+//!    `enhances`) wrap each raw `Capability` into
+//!    `Dependency::new(cap)` at the match arm in `load_package` and
+//!    are pushed into `Vec<Dependency>` fields on `PackageBody` /
+//!    `Package`. A new `CapKind` in this family needs both the
+//!    match-arm wrap AND the matching `Vec<Dependency>` field;
+//!    forgetting the wrap is a compile error (good), forgetting the
+//!    field is the silent-data-loss path this runbook is here to
+//!    prevent.
+//!
 //!    **This is the most common bug class:** the writer fills the
 //!    column but one reader still reconstructs with the default,
 //!    producing silent data loss until a user notices the field is
@@ -88,7 +99,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::error::RepoError;
 use crate::index::RepoId;
-use crate::package::{Capability, NEVRA, Package, PkgChecksum};
+use crate::package::{Capability, Dependency, NEVRA, Package, PkgChecksum};
 
 pub use schema::{CapKind, SCHEMA_VERSION};
 
@@ -364,13 +375,13 @@ impl RepoDb {
                 let pkg_id = tx.last_insert_rowid();
 
                 insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Provides, &pkg.provides)?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Requires, &pkg.requires)?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Conflicts, &pkg.conflicts)?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Obsoletes, &pkg.obsoletes)?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Recommends, &pkg.recommends)?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Suggests, &pkg.suggests)?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Supplements, &pkg.supplements)?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Enhances, &pkg.enhances)?;
+                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Requires, pkg.requires.iter().map(|d| d.as_capability()))?;
+                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Conflicts, pkg.conflicts.iter().map(|d| d.as_capability()))?;
+                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Obsoletes, pkg.obsoletes.iter().map(|d| d.as_capability()))?;
+                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Recommends, pkg.recommends.iter().map(|d| d.as_capability()))?;
+                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Suggests, pkg.suggests.iter().map(|d| d.as_capability()))?;
+                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Supplements, pkg.supplements.iter().map(|d| d.as_capability()))?;
+                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Enhances, pkg.enhances.iter().map(|d| d.as_capability()))?;
 
                 for path in &pkg.files {
                     insert_file.execute(params![pkg_id, path.as_ref()])?;
@@ -478,7 +489,7 @@ impl RepoDb {
     pub fn package_satisfies(
         &self,
         pkg_id: i64,
-        req: &crate::package::Capability,
+        req: &crate::package::Dependency,
     ) -> Result<bool, RepoError> {
         let guard = self.lock();
         let nevra = guard
@@ -508,13 +519,13 @@ impl RepoDb {
         // requires accept any provider; versioned ones check via
         // `CapVersion::matches(compare_rpm)`. The new enum collapses
         // the old `flags == None` / `evr.is_some()` two-step into one.
-        if nevra.name.as_ref() == req.name.as_ref() {
-            if req.version.is_unversioned() {
+        if nevra.name.as_ref() == req.name().as_ref() {
+            if req.version().is_unversioned() {
                 return Ok(true);
             }
-            if let Some(req_evr) = req.version.evr() {
+            if let Some(req_evr) = req.version().evr() {
                 let prov_evr = nevra.evr();
-                if req.version.matches(prov_evr.compare_rpm(req_evr)) {
+                if req.version().matches(prov_evr.compare_rpm(req_evr)) {
                     return Ok(true);
                 }
             }
@@ -523,7 +534,7 @@ impl RepoDb {
             "SELECT epoch, version, release FROM caps \
              WHERE pkg_id = ?1 AND kind = 'provides' AND name = ?2",
         )?;
-        let rows = stmt.query_map(params![pkg_id, req.name.as_ref()], |row| {
+        let rows = stmt.query_map(params![pkg_id, req.name().as_ref()], |row| {
             let epoch: Option<u32> = row.get(0)?;
             let version: Option<String> = row.get(1)?;
             let release: Option<String> = row.get(2)?;
@@ -531,17 +542,17 @@ impl RepoDb {
         })?;
         for r in rows {
             let (epoch, version, release) = r?;
-            if req.version.is_unversioned() {
+            if req.version().is_unversioned() {
                 return Ok(true);
             }
-            let Some(req_evr) = req.version.evr() else {
+            let Some(req_evr) = req.version().evr() else {
                 continue;
             };
             let (Some(v), Some(r)) = (version.as_deref(), release.as_deref()) else {
                 continue;
             };
             let prov_evr = crate::evr::EVR::new(epoch, v, r);
-            if req.version.matches(prov_evr.compare_rpm(req_evr)) {
+            if req.version().matches(prov_evr.compare_rpm(req_evr)) {
                 return Ok(true);
             }
         }
@@ -840,15 +851,17 @@ impl RepoDb {
                 version.as_deref(),
                 release.as_deref(),
             )?;
+            // Wrap into `Dependency` for the seven require-side
+            // buckets; `provides` stays raw `Capability`.
             match kind.as_str() {
                 "provides" => provides.push(cap),
-                "requires" => requires.push(cap),
-                "conflicts" => conflicts.push(cap),
-                "obsoletes" => obsoletes.push(cap),
-                "recommends" => recommends.push(cap),
-                "suggests" => suggests.push(cap),
-                "supplements" => supplements.push(cap),
-                "enhances" => enhances.push(cap),
+                "requires" => requires.push(Dependency::new(cap)),
+                "conflicts" => conflicts.push(Dependency::new(cap)),
+                "obsoletes" => obsoletes.push(Dependency::new(cap)),
+                "recommends" => recommends.push(Dependency::new(cap)),
+                "suggests" => suggests.push(Dependency::new(cap)),
+                "supplements" => supplements.push(Dependency::new(cap)),
+                "enhances" => enhances.push(Dependency::new(cap)),
                 other => {
                     return Err(RepoError::Database(format!(
                         "unknown caps.kind discriminator: {other}"
@@ -1035,13 +1048,13 @@ struct PackageHeader {
 /// a type-system one.
 struct PackageBody {
     provides: Vec<Capability>,
-    requires: Vec<Capability>,
-    conflicts: Vec<Capability>,
-    obsoletes: Vec<Capability>,
-    recommends: Vec<Capability>,
-    suggests: Vec<Capability>,
-    supplements: Vec<Capability>,
-    enhances: Vec<Capability>,
+    requires: Vec<Dependency>,
+    conflicts: Vec<Dependency>,
+    obsoletes: Vec<Dependency>,
+    recommends: Vec<Dependency>,
+    suggests: Vec<Dependency>,
+    supplements: Vec<Dependency>,
+    enhances: Vec<Dependency>,
     files: Vec<Arc<str>>,
 }
 
@@ -1153,11 +1166,11 @@ fn apply_read_pragmas(conn: &Connection) -> Result<(), RepoError> {
     Ok(())
 }
 
-fn insert_cap_batch(
+fn insert_cap_batch<'a>(
     stmt: &mut rusqlite::Statement<'_>,
     pkg_id: i64,
     kind: CapKind,
-    caps: &[Capability],
+    caps: impl IntoIterator<Item = &'a Capability>,
 ) -> Result<(), RepoError> {
     for cap in caps {
         let (name, flags, epoch, version, release) = convert::capability_columns(cap);
@@ -1190,7 +1203,7 @@ mod tests {
             },
             repo_id: RepoId::from("test"),
             provides: vec![Capability::unversioned(Arc::from(name))],
-            requires: vec![Capability::ge(
+            requires: vec![Dependency::ge(
                 "glibc",
                 crate::EVR::new(Some(0), "2.28", "0"),
             )],
@@ -1373,21 +1386,21 @@ mod tests {
     #[test]
     fn package_satisfies_via_name_no_version() {
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides("bash", "5.1.8", vec![])]);
-        let req = Capability::unversioned(Arc::from("bash"));
+        let req = Dependency::unversioned(Arc::from("bash"));
         assert!(db.package_satisfies(ids[0], &req).unwrap());
     }
 
     #[test]
     fn package_satisfies_via_name_ge_pass() {
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides("bash", "5.1.8", vec![])]);
-        let req = Capability::ge("bash", crate::EVR::new(Some(0), "5.0.0", "1.el9"));
+        let req = Dependency::ge("bash", crate::EVR::new(Some(0), "5.0.0", "1.el9"));
         assert!(db.package_satisfies(ids[0], &req).unwrap());
     }
 
     #[test]
     fn package_satisfies_via_name_ge_fail() {
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides("bash", "5.1.8", vec![])]);
-        let req = Capability::ge("bash", crate::EVR::new(Some(0), "6.0.0", "1.el9"));
+        let req = Dependency::ge("bash", crate::EVR::new(Some(0), "6.0.0", "1.el9"));
         assert!(!db.package_satisfies(ids[0], &req).unwrap());
     }
 
@@ -1401,7 +1414,7 @@ mod tests {
             "252",
             vec![Capability::unversioned(Arc::from("pkgconfig(libsystemd)"))],
         )]);
-        let req = Capability::unversioned(Arc::from("pkgconfig(libsystemd)"));
+        let req = Dependency::unversioned(Arc::from("pkgconfig(libsystemd)"));
         assert!(db.package_satisfies(ids[0], &req).unwrap());
     }
 
@@ -1416,7 +1429,7 @@ mod tests {
             "1.2",
             vec![Capability::eq("foo", crate::EVR::new(Some(0), "1.2", "3"))],
         )]);
-        let req = Capability::ge("foo", crate::EVR::new(Some(0), "1.0", "1"));
+        let req = Dependency::ge("foo", crate::EVR::new(Some(0), "1.0", "1"));
         assert!(db.package_satisfies(ids[0], &req).unwrap());
     }
 
@@ -1430,14 +1443,14 @@ mod tests {
             "1.2",
             vec![Capability::unversioned(Arc::from("foo"))],
         )]);
-        let req = Capability::ge("foo", crate::EVR::new(Some(0), "1.0", "1"));
+        let req = Dependency::ge("foo", crate::EVR::new(Some(0), "1.0", "1"));
         assert!(!db.package_satisfies(ids[0], &req).unwrap());
     }
 
     #[test]
     fn package_satisfies_eq_exact() {
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides("bash", "5.1.8", vec![])]);
-        let req = Capability::eq("bash", crate::EVR::new(Some(0), "5.1.8", "1.el9"));
+        let req = Dependency::eq("bash", crate::EVR::new(Some(0), "5.1.8", "1.el9"));
         assert!(db.package_satisfies(ids[0], &req).unwrap());
     }
 
@@ -1446,7 +1459,7 @@ mod tests {
         // Package name = "bash", no virtual provides. A request for
         // "glibc" must not be satisfied.
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides("bash", "5.1.8", vec![])]);
-        let req = Capability::unversioned(Arc::from("glibc"));
+        let req = Dependency::unversioned(Arc::from("glibc"));
         assert!(!db.package_satisfies(ids[0], &req).unwrap());
     }
 

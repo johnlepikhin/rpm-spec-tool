@@ -24,7 +24,7 @@ use anyhow::{Context, Result};
 
 use rpm_spec_analyzer::profile::Profile;
 use rpm_spec_analyzer::session::parse;
-use rpm_spec_repo_core::{Capability, NEVRA, RepoUniverse};
+use rpm_spec_repo_core::{Dependency, NEVRA, RepoUniverse};
 use rpm_spec_repo_resolver::{ConflictChain, SolveRequest, Solution, UnsatCore, solve};
 use serde::Serialize;
 
@@ -55,8 +55,8 @@ pub fn solve_for(
     );
     let (base_packages, implicit_brs) = match profile.repos.as_ref() {
         Some(rs) => (
-            literal_capabilities(&rs.buildroot.base_packages),
-            literal_capabilities(&rs.buildroot.implicit_buildrequires),
+            literal_dependencies(&rs.buildroot.base_packages),
+            literal_dependencies(&rs.buildroot.implicit_buildrequires),
         ),
         None => (Vec::new(), Vec::new()),
     };
@@ -70,12 +70,14 @@ pub fn solve_for(
 }
 
 /// Project literal package names from `profile.buildroot.base_packages`
-/// (and the implicit BR list) into the resolver's [`Capability`] shape.
+/// (and the implicit BR list) into the resolver's [`Dependency`] shape.
 /// These are simple names without version constraints — the resolver
-/// itself does the EVR work.
+/// itself does the EVR work. Returns `Vec<Dependency>` (not
+/// `Vec<Capability>`) because `SolveRequest::base_packages` /
+/// `implicit_brs` are require-side slots.
 #[must_use]
-pub fn literal_capabilities(names: &[String]) -> Vec<Capability> {
-    names.iter().map(|n| Capability::unversioned(n.as_str())).collect()
+pub fn literal_dependencies(names: &[String]) -> Vec<Dependency> {
+    names.iter().map(|n| Dependency::unversioned(n.as_str())).collect()
 }
 
 /// Convert the resolver's raw `UnsatCore` into the dedup'd shape
@@ -191,11 +193,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn literal_capabilities_produces_unversioned_caps() {
-        let caps = literal_capabilities(&["bash".into(), "make".into()]);
-        assert_eq!(caps.len(), 2);
-        assert_eq!(caps[0].name.as_ref(), "bash");
-        assert!(caps[0].version.is_unversioned());
+    fn literal_dependencies_produces_unversioned_deps() {
+        let deps = literal_dependencies(&["bash".into(), "make".into()]);
+        assert_eq!(deps.len(), 2);
+        // Field access uses the inherent forwarders on `Dependency`
+        // (the newtype has no `Deref<Capability>` — deliberate).
+        assert_eq!(deps[0].name().as_ref(), "bash");
+        assert!(deps[0].version().is_unversioned());
     }
 
     #[test]

@@ -110,9 +110,9 @@ pub fn solve(req: SolveRequest<'_>) -> Result<Solution, RepoError> {
     let mut rich_deps_skipped = 0usize;
 
     while let Some((dep, provenance)) = work.pop() {
-        if is_rich_expression(&dep.name) {
+        if is_rich_expression(dep.name()) {
             rich_deps_skipped += 1;
-            tracing::debug!(expr = ?dep.name, "skipping rich dep");
+            tracing::debug!(expr = ?dep.name(), "skipping rich dep");
             continue;
         }
         if state.is_met(&dep) {
@@ -127,12 +127,12 @@ pub fn solve(req: SolveRequest<'_>) -> Result<Solution, RepoError> {
         // `Conflicts:`) trip a false unsat: the first one wins
         // the virtual-cap satisfaction round, the second is
         // picked for the file-path round and clashes.
-        if dep.is_file_path() && state.any_pinned_owns(universe, &dep.name)? {
+        if dep.is_file_path() && state.any_pinned_owns(universe, dep.name())? {
             continue;
         }
 
         let Some(provider) = pick_provider(universe, &dep)? else {
-            tracing::debug!(req = ?dep.name, "no provider");
+            tracing::debug!(req = ?dep.name(), "no provider");
             unsatisfied.push(UnsatItem { dep, provenance });
             continue;
         };
@@ -189,7 +189,7 @@ struct SolverState {
 
 impl SolverState {
     fn is_met(&self, dep: &Dependency) -> bool {
-        self.met_caps.contains(&dep.name)
+        self.met_caps.contains(dep.name())
     }
 
     fn pin(
@@ -298,7 +298,7 @@ fn conflict_between(
                 cause_provenance,
                 victim: victim.nevra.clone(),
                 victim_provenance,
-                via_capability: c.name.clone(),
+                via_capability: c.name().clone(),
             });
         }
     }

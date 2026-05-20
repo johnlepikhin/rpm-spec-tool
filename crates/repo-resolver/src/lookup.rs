@@ -171,7 +171,7 @@ mod tests {
     //! no disk I/O) to exercise `lookup` and the `is_strictly_better`
     //! tiebreak ordering.
     use rpm_spec_repo_core::{
-        Capability, Package, PkgChecksum, RepoId, RepoIndex, RepoUniverse,
+        Capability, Dependency, Package, PkgChecksum, RepoId, RepoIndex, RepoUniverse,
     };
     use time::OffsetDateTime;
 
@@ -187,12 +187,12 @@ mod tests {
         }
     }
 
-    fn cap_unversioned(name: &str) -> Capability {
-        Capability::unversioned(name)
+    fn dep_unversioned(name: &str) -> Dependency {
+        Dependency::unversioned(name)
     }
 
-    fn cap_ge(name: &str, version: &str, release: &str) -> Capability {
-        Capability::ge(name, EVR::new(Some(0), version, release))
+    fn dep_ge(name: &str, version: &str, release: &str) -> Dependency {
+        Dependency::ge(name, EVR::new(Some(0), version, release))
     }
 
     fn pkg(
@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn lookup_satisfied_for_direct_name_match() {
         let uni = one_repo_universe(vec![pkg("test-repo", "bash", "5.1.8", "9", vec![])]);
-        let dep = cap_unversioned("bash");
+        let dep = dep_unversioned("bash");
 
         match lookup(&uni, &dep).expect("query") {
             LookupOutcome::Satisfied { nevra, .. } => {
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn lookup_no_provider_for_missing_name() {
         let uni = one_repo_universe(vec![pkg("test-repo", "bash", "5.1.8", "9", vec![])]);
-        let dep = cap_unversioned("nonexistent");
+        let dep = dep_unversioned("nonexistent");
 
         match lookup(&uni, &dep).expect("query") {
             LookupOutcome::NoProvider => {}
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn lookup_version_unsatisfied_when_evr_too_low() {
         let uni = one_repo_universe(vec![pkg("test-repo", "cmake", "3.20.0", "1", vec![])]);
-        let dep = cap_ge("cmake", "3.26.0", "1");
+        let dep = dep_ge("cmake", "3.26.0", "1");
 
         match lookup(&uni, &dep).expect("query") {
             LookupOutcome::VersionUnsatisfied {

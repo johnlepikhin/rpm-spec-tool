@@ -152,10 +152,15 @@ impl CapVersion {
     }
 }
 
-/// One RPM capability: either a `Provides:` entry or a constraint on
-/// a `Requires:` / `Conflicts:` / `Obsoletes:` entry. The same shape
-/// covers both directions; the discriminator is which Vec the value
-/// lives in on [`Package`].
+/// One RPM `Provides:` entry — a `(name, version-constraint)` pair
+/// a package supplies. The require-side direction (`Requires:` /
+/// `Conflicts:` / `Obsoletes:` / weak-deps / spec `BuildRequires:`)
+/// shares the same `(name, version)` syntactic shape but lives
+/// behind the [`Dependency`] newtype so a single resolver function
+/// can't accept both directions interchangeably (the prior
+/// `pub type Dependency = Capability` alias allowed Provides-shaped
+/// values to flow into Require-shaped slots silently — see
+/// `Dependency`'s doc for the rationale).
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Capability {
     pub name: Arc<str>,
@@ -164,9 +169,135 @@ pub struct Capability {
     pub version: CapVersion,
 }
 
-/// `Requires`/`Conflicts`/`Obsoletes` entries share Capability's shape.
-/// Named for caller-site readability.
-pub type Dependency = Capability;
+/// A required-side capability — `Requires:` / `Conflicts:` /
+/// `Obsoletes:` / weak-dep entry on a package, or a literal
+/// `BuildRequires:` line off a spec. Same syntactic shape as
+/// [`Capability`] (which models the `Provides:` direction), wrapped
+/// in a newtype so the type system catches "passed Provides where
+/// Requires expected" bugs at every function boundary.
+///
+/// Read access uses inherent forwarders ([`Self::name`],
+/// [`Self::version`], [`Self::is_file_path`], [`Self::display`]) —
+/// see the `# Conversions` section below for why
+/// `Deref<Target = Capability>` is deliberately absent. Cloning is
+/// O(1) (one `Arc<str>` refcount bump for the name, plus the
+/// inline `CapVersion` enum copy).
+///
+/// **When to use which:**
+/// - [`Capability`] for `Package.provides` and any "this is what a
+///   package supplies" position.
+/// - [`Dependency`] for `Package.requires` / `conflicts` /
+///   `obsoletes` / `recommends` / `suggests` / `supplements` /
+///   `enhances` and for the resolver's `requirements` /
+///   `base_packages` / `implicit_brs` slots — the "this is what a
+///   package or build needs" position.
+///
+/// # Conversions
+///
+/// - `Capability → Dependency`: explicit via `Dependency::new(cap)`
+///   or `cap.into()` (both fire the same `From<Capability>` impl,
+///   which is the only direction with a `From` to keep the strong
+///   require-side claim at the type-system layer).
+/// - `&Dependency → &Capability`: explicit via
+///   [`Self::as_capability`] when an `&Capability`-shaped API
+///   (e.g. the DB writer) genuinely needs the unwrapped value.
+/// - Read access (`.name()`, `.version()`, `.is_file_path()`,
+///   `.display()`): inherent forwarders on `Dependency`, not via
+///   `Deref`. `Deref<Target = Capability>` would silently coerce
+///   `&Dependency` into `&Capability` at every callsite, defeating
+///   the whole point of the newtype — so it's deliberately absent.
+#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Dependency(Capability);
+
+impl Dependency {
+    /// Wrap an existing [`Capability`] in the requires-side newtype.
+    /// Equivalent to `cap.into()` (via `From<Capability>`); pick the
+    /// form that reads better at the call site — `Dependency::new`
+    /// when the type is non-obvious, `.into()` in iterator chains.
+    #[must_use]
+    pub fn new(cap: Capability) -> Self {
+        Self(cap)
+    }
+
+    /// Unversioned requirement (`Requires: foo`). Mirror of
+    /// [`Capability::unversioned`] so test code and builders don't
+    /// have to wrap.
+    #[must_use]
+    pub fn unversioned(name: impl Into<Arc<str>>) -> Self {
+        Self(Capability::unversioned(name))
+    }
+
+    /// `name >= E:V-R` requirement. Mirrors [`Capability::ge`].
+    #[must_use]
+    pub fn ge(name: impl Into<Arc<str>>, evr: EVR) -> Self {
+        Self(Capability::ge(name, evr))
+    }
+
+    /// `name = E:V-R` requirement. Mirrors [`Capability::eq`].
+    /// `lt` / `le` / `gt` are unimplemented — add them when a
+    /// caller appears (YAGNI).
+    #[must_use]
+    pub fn eq(name: impl Into<Arc<str>>, evr: EVR) -> Self {
+        Self(Capability::eq(name, evr))
+    }
+
+    /// Borrow the underlying `Capability` — for sites that need to
+    /// hand the unwrapped shape to a function generic over
+    /// `Capability` (e.g. the DB writer feeding `insert_cap_batch`).
+    /// **Read access** (`.name()`, `.version()`, `.display()`,
+    /// `.is_file_path()`) should go through the inherent methods on
+    /// `Dependency` instead so the require-side boundary stays
+    /// visible at every call site.
+    #[must_use]
+    pub fn as_capability(&self) -> &Capability {
+        &self.0
+    }
+
+    /// Borrow the dependency's name. Forwards to `Capability::name`
+    /// without an `as_capability()` indirection at the call site.
+    #[must_use]
+    pub fn name(&self) -> &Arc<str> {
+        &self.0.name
+    }
+
+    /// Borrow the dependency's version constraint. Forwards to
+    /// [`Capability::version`].
+    #[must_use]
+    pub fn version(&self) -> &CapVersion {
+        &self.0.version
+    }
+
+    /// File-path requirement check — forwards to
+    /// [`Capability::is_file_path`].
+    #[must_use]
+    pub fn is_file_path(&self) -> bool {
+        self.0.is_file_path()
+    }
+
+    /// User-facing render of the dependency. Forwards to
+    /// [`Capability::display`].
+    #[must_use]
+    pub fn display(&self) -> String {
+        self.0.display()
+    }
+}
+
+// Manual `Debug` so log entries keep producing the inner
+// `Capability { name, version }` shape rather than wrapping it in
+// `Dependency(Capability { … })` — observability consumers that
+// grep the existing format don't have to learn the newtype.
+impl std::fmt::Debug for Dependency {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl From<Capability> for Dependency {
+    fn from(cap: Capability) -> Self {
+        Self(cap)
+    }
+}
 
 impl Capability {
     /// Constructor for the unversioned form. Shorthand for tests and
@@ -601,5 +732,82 @@ mod tests {
             CapVersion::Eq(require).matches(ord),
             "Eq constraint with set: on both sides must be satisfied"
         );
+    }
+}
+
+#[cfg(test)]
+mod dependency_tests {
+    //! Contract tests for the [`Dependency`] newtype. The newtype
+    //! deliberately omits `Deref<Target = Capability>`, so the read
+    //! API has to be exercised through inherent forwarders; pin that
+    //! shape here so a future "let's just add Deref" change is a
+    //! test diff, not a silent regression.
+    use super::*;
+
+    fn cap(name: &str) -> Capability {
+        Capability::unversioned(name)
+    }
+
+    #[test]
+    fn from_and_new_construct_equal_values() {
+        // Both constructors round-trip through the same `Arc<str>`
+        // body, so structural equality holds.
+        let a = Dependency::new(cap("bash"));
+        let b: Dependency = cap("bash").into();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn as_capability_round_trips_through_clone() {
+        let dep = Dependency::unversioned("glibc");
+        // `as_capability` borrows the inner value; constructing
+        // a fresh `Dependency` from the clone must compare equal.
+        let recovered = Dependency::new(dep.as_capability().clone());
+        assert_eq!(dep, recovered);
+    }
+
+    #[test]
+    fn name_version_forwarders_match_inner_capability() {
+        // Read API: the inherent forwarders return the same
+        // references the `Capability` would expose via its fields.
+        let cap = Capability::ge(
+            "openssl",
+            EVR::new(Some(0), "3.0.0", "1.el9"),
+        );
+        let inner_name = cap.name.clone();
+        let inner_version = cap.version.clone();
+        let dep = Dependency::new(cap);
+        assert_eq!(dep.name(), &inner_name);
+        assert_eq!(dep.version(), &inner_version);
+    }
+
+    #[test]
+    fn is_file_path_forwards() {
+        let dep = Dependency::unversioned("/usr/bin/bash");
+        assert!(dep.is_file_path());
+        let dep = Dependency::unversioned("bash");
+        assert!(!dep.is_file_path());
+    }
+
+    #[test]
+    fn debug_format_matches_inner_capability() {
+        // Manual `Debug` forwards to the wrapped `Capability`, so
+        // `?dep` in tracing fields keeps producing the same shape
+        // log shippers parsed before the newtype.
+        let cap = Capability::unversioned("bash");
+        let dep = Dependency::new(cap.clone());
+        assert_eq!(format!("{dep:?}"), format!("{cap:?}"));
+    }
+
+    #[test]
+    fn hashset_dedups_equal_dependencies() {
+        // Hash + Eq derive on the tuple struct delegates to the
+        // inner `Capability` impls — clones must collapse in a set.
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(Dependency::unversioned("bash"));
+        set.insert(Dependency::unversioned("bash"));
+        set.insert(Dependency::unversioned("glibc"));
+        assert_eq!(set.len(), 2);
     }
 }

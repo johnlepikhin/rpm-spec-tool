@@ -118,15 +118,17 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
                 b"rpm:entry" => {
                     if let Some(kind) = dep_collector {
                         let cap = parse_entry(&e)?;
+                        // `provides` is the only Capability-shaped
+                        // bucket; the rest are `Dependency`s.
                         match kind {
                             DepKind::Provides => current.provides.push(cap),
-                            DepKind::Requires => current.requires.push(cap),
-                            DepKind::Conflicts => current.conflicts.push(cap),
-                            DepKind::Obsoletes => current.obsoletes.push(cap),
-                            DepKind::Recommends => current.recommends.push(cap),
-                            DepKind::Suggests => current.suggests.push(cap),
-                            DepKind::Supplements => current.supplements.push(cap),
-                            DepKind::Enhances => current.enhances.push(cap),
+                            DepKind::Requires => current.requires.push(cap.into()),
+                            DepKind::Conflicts => current.conflicts.push(cap.into()),
+                            DepKind::Obsoletes => current.obsoletes.push(cap.into()),
+                            DepKind::Recommends => current.recommends.push(cap.into()),
+                            DepKind::Suggests => current.suggests.push(cap.into()),
+                            DepKind::Supplements => current.supplements.push(cap.into()),
+                            DepKind::Enhances => current.enhances.push(cap.into()),
                         }
                     }
                 }
@@ -380,7 +382,7 @@ mod tests {
         assert_eq!(bash.nevra.arch.as_ref(), "x86_64");
         assert_eq!(bash.provides.len(), 3, "bash provides bash + /bin/bash + /bin/sh");
         assert_eq!(bash.requires.len(), 1, "bash requires glibc");
-        assert_eq!(bash.requires[0].name.as_ref(), "glibc");
+        assert_eq!(bash.requires[0].name().as_ref(), "glibc");
         assert_eq!(bash.source_rpm.as_deref(), Some("bash-5.1.8-9.el9.src.rpm"));
         assert_eq!(bash.summary.as_ref(), "The GNU Bourne Again shell");
         assert_eq!(bash.size_installed, 6_500_000);
@@ -405,6 +407,6 @@ mod tests {
             .expect("cmake present");
         // cmake's Requires references plain `bash` (no version constraint)
         assert_eq!(cmake.requires.len(), 1);
-        assert!(cmake.requires[0].version.is_unversioned());
+        assert!(cmake.requires[0].version().is_unversioned());
     }
 }

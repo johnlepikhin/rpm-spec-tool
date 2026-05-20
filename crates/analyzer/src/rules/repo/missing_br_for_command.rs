@@ -225,7 +225,7 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForCommand {
             |t| matches!(t, Tag::BuildRequires),
         )
         .into_iter()
-        .map(|d| d.capability.name.to_string())
+        .map(|d| d.requirement.name().to_string())
         .collect();
 
         let sections: Vec<(BuildScriptKind, &ShellBody<Span>, Span)> =
