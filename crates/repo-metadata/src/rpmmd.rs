@@ -14,7 +14,7 @@ mod updateinfo;
 
 use time::OffsetDateTime;
 
-use rpm_spec_repo_core::{RepoConfig, RepoError, RepoId, RepoIndex, RepoKind, RepoRevision};
+use rpm_spec_repo_core::{RepoError, RepoId, RepoIndex, RepoKind, RepoRevision};
 
 use crate::backend::RepoBackend;
 use crate::http::HttpCache;
@@ -32,12 +32,8 @@ impl RepoBackend for RpmMdBackend {
     fn fetch_revision(
         &self,
         http: &HttpCache,
-        repo: &RepoConfig,
+        baseurl: &str,
     ) -> Result<RepoRevision, RepoError> {
-        let baseurl = repo
-            .baseurl
-            .as_ref()
-            .ok_or_else(|| RepoError::Config("repo has no baseurl".into()))?;
         let url = join_url(baseurl, "repodata/repomd.xml");
         let bytes = http.fetch(&url)?;
         let revision = crate::cache::revision_from(&bytes);
@@ -51,15 +47,10 @@ impl RepoBackend for RpmMdBackend {
     fn fetch_index(
         &self,
         http: &HttpCache,
-        repo: &RepoConfig,
+        baseurl: &str,
         rev: &RepoRevision,
         repo_id: &RepoId,
     ) -> Result<RepoIndex, RepoError> {
-        let baseurl = repo
-            .baseurl
-            .as_ref()
-            .ok_or_else(|| RepoError::Config("repo has no baseurl".into()))?;
-
         let repomd = repomd::parse(&rev.raw_bytes)?;
 
         let mut index = RepoIndex {

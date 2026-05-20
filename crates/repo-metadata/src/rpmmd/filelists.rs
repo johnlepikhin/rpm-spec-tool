@@ -51,7 +51,7 @@ pub fn merge(xml: &[u8], packages: &mut [Package]) -> Result<(), RepoError> {
     loop {
         match reader
             .read_event_into(&mut buf)
-            .map_err(|e| RepoError::Parse(format!("filelists.xml: {e}")))?
+            .map_err(|e| RepoError::parse_at_file("filelists.xml", format!("{e}")))?
         {
             Event::Start(e) if e.name().as_ref() == b"package" => {
                 current_pkgid = None;
@@ -59,7 +59,7 @@ pub fn merge(xml: &[u8], packages: &mut [Package]) -> Result<(), RepoError> {
                 files_for_pkg.clear();
                 for attr in e.attributes().with_checks(false).flatten() {
                     let val = std::str::from_utf8(&attr.value)
-                        .map_err(|e| RepoError::Parse(format!("filelists attr: {e}")))?;
+                        .map_err(|e| RepoError::parse_at_file("filelists.xml", format!("attr: {e}")))?;
                     match attr.key.as_ref() {
                         b"pkgid" => current_pkgid = Some(val.to_string()),
                         b"name" => current_name = Some(val.to_string()),
@@ -74,17 +74,21 @@ pub fn merge(xml: &[u8], packages: &mut [Package]) -> Result<(), RepoError> {
             Event::Text(t) if collecting_file => {
                 file_text.push_str(
                     &t.unescape()
-                        .map_err(|e| RepoError::Parse(format!("file text: {e}")))?,
+                        .map_err(|e| RepoError::parse_at_file("filelists.xml", format!("text: {e}")))?,
                 );
             }
             Event::End(e) if e.name().as_ref() == b"file" => {
                 if collecting_file {
                     files_for_pkg.push(Arc::from(file_text.clone()));
                     if files_for_pkg.len() > MAX_FILES_PER_PACKAGE {
-                        return Err(RepoError::Parse(format!(
-                            "filelists.xml: package {name:?} has more than {MAX_FILES_PER_PACKAGE} files (likely hostile or corrupt repo)",
-                            name = current_name.as_deref().unwrap_or("<unknown>")
-                        )));
+                        return Err(RepoError::parse_at_file(
+                            "filelists.xml",
+                            format!(
+                                "package {name:?} has more than {MAX_FILES_PER_PACKAGE} files \
+                                 (likely hostile or corrupt repo)",
+                                name = current_name.as_deref().unwrap_or("<unknown>"),
+                            ),
+                        ));
                     }
                 }
                 collecting_file = false;

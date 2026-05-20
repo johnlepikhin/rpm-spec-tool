@@ -45,7 +45,7 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
     loop {
         match reader
             .read_event_into(&mut buf)
-            .map_err(|e| RepoError::Parse(format!("primary.xml: {e}")))?
+            .map_err(|e| RepoError::parse_at_file("primary.xml", e.to_string()))?
         {
             Event::Start(e) => match e.name().as_ref() {
                 b"package" => {
@@ -61,7 +61,7 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
                     for attr in e.attributes().with_checks(false).flatten() {
                         if attr.key.as_ref() == b"type" {
                             current.checksum_algo = std::str::from_utf8(&attr.value)
-                                .map_err(|err| RepoError::Parse(format!("checksum type: {err}")))?
+                                .map_err(|err| RepoError::parse_at_file("primary.xml", format!("checksum type: {err}")))?
                                 .to_string();
                         }
                     }
@@ -83,7 +83,7 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
                 b"version" => {
                     for attr in e.attributes().with_checks(false).flatten() {
                         let val = std::str::from_utf8(&attr.value)
-                            .map_err(|e| RepoError::Parse(format!("version: {e}")))?;
+                            .map_err(|e| RepoError::parse_at_file("primary.xml", format!("version: {e}")))?;
                         match attr.key.as_ref() {
                             // Missing/non-numeric epoch → 0. Matches rpm
                             // semantics (absent epoch == 0) and lines
@@ -99,9 +99,9 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
                     for attr in e.attributes().with_checks(false).flatten() {
                         if attr.key.as_ref() == b"installed" {
                             let s = std::str::from_utf8(&attr.value)
-                                .map_err(|err| RepoError::Parse(format!("size@installed for {}: {err}", current.name)))?;
+                                .map_err(|err| RepoError::parse_at_file("primary.xml", format!("size@installed for {}: {err}", current.name)))?;
                             current.size_installed = s.parse()
-                                .map_err(|err| RepoError::Parse(format!("size@installed for {} = {s:?}: {err}", current.name)))?;
+                                .map_err(|err| RepoError::parse_at_file("primary.xml", format!("size@installed for {} = {s:?}: {err}", current.name)))?;
                         }
                     }
                 }
@@ -109,7 +109,7 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
                     for attr in e.attributes().with_checks(false).flatten() {
                         if attr.key.as_ref() == b"href" {
                             current.location = std::str::from_utf8(&attr.value)
-                                .map_err(|e| RepoError::Parse(format!("location: {e}")))?
+                                .map_err(|e| RepoError::parse_at_file("primary.xml", format!("location: {e}")))?
                                 .to_string();
                         }
                     }
@@ -135,7 +135,7 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
             Event::Text(t) => {
                 let s = t
                     .unescape()
-                    .map_err(|e| RepoError::Parse(format!("text decode: {e}")))?;
+                    .map_err(|e| RepoError::parse_at_file("primary.xml", format!("text decode: {e}")))?;
                 last_text = s.into_owned();
                 if let Some(field) = last_field {
                     match field {
@@ -163,9 +163,13 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
                     if in_package {
                         packages.push(current.take().build(repo_id.clone())?);
                         if packages.len() > MAX_PACKAGES_PER_REPO {
-                            return Err(RepoError::Parse(format!(
-                                "primary.xml: package count exceeded {MAX_PACKAGES_PER_REPO} (likely hostile or corrupt repo)"
-                            )));
+                            return Err(RepoError::parse_at_file(
+                                "primary.xml",
+                                format!(
+                                    "package count exceeded {MAX_PACKAGES_PER_REPO} \
+                                     (likely hostile or corrupt repo)"
+                                ),
+                            ));
                         }
                     }
                     in_package = false;
@@ -232,19 +236,34 @@ impl PackageBuilder {
 
     fn build(self, repo_id: RepoId) -> Result<Package, RepoError> {
         if self.name.is_empty() {
-            return Err(RepoError::Parse("package without name".into()));
+            return Err(RepoError::parse_at_file("primary.xml", "package without name"));
         }
-        let checksum = match self.checksum_algo.as_str() {
-            "sha256" => PkgChecksum::Sha256(self.checksum_hex),
-            "sha1" => PkgChecksum::Sha1(self.checksum_hex),
-            "" => PkgChecksum::Other {
+        // Route through the validating constructor so a malformed
+        // `<rpm:checksum>` (wrong length, non-hex bytes) doesn't
+        // silently slip into the universe. Empty algorithm gets the
+        // historic "unknown / empty hex" placeholder unchanged
+        // because primary.xml DOES occasionally ship an entry with
+        // no checksum block (older composers), and we want the
+        // package to remain queryable for resolution.
+        let checksum = if self.checksum_algo.is_empty() {
+            PkgChecksum::Other {
                 algo: "unknown".into(),
                 hex: String::new(),
-            },
-            other => PkgChecksum::Other {
-                algo: other.into(),
-                hex: self.checksum_hex,
-            },
+            }
+        } else {
+            PkgChecksum::try_new(&self.checksum_algo, &self.checksum_hex).map_err(|e| {
+                // Wrap with `parse_at_file` so the diagnostic carries
+                // the primary.xml file context alongside the NEVRA in
+                // detail — matches the rest of this parser's call
+                // sites and keeps grep-greppable output uniform.
+                RepoError::parse_at_file(
+                    "primary.xml",
+                    format!(
+                        "package `{}-{}-{}.{}` has invalid checksum: {e}",
+                        self.name, self.version, self.release, self.arch
+                    ),
+                )
+            })?
         };
 
         Ok(Package {
@@ -283,7 +302,7 @@ fn parse_entry(e: &quick_xml::events::BytesStart) -> Result<Capability, RepoErro
 
     for attr in e.attributes().with_checks(false).flatten() {
         let val = std::str::from_utf8(&attr.value)
-            .map_err(|e| RepoError::Parse(format!("entry attr: {e}")))?;
+            .map_err(|e| RepoError::parse_at_file("primary.xml", format!("entry attr: {e}")))?;
         match attr.key.as_ref() {
             b"name" => name = val.to_string(),
             b"flags" => {
@@ -345,8 +364,16 @@ mod tests {
         assert_eq!(bash.size_installed, 6_500_000);
         assert_eq!(bash.location.as_ref(), "Packages/b/bash-5.1.8-9.el9.x86_64.rpm");
         assert!(
-            matches!(&bash.checksum, PkgChecksum::Sha256(hex) if hex == "abc123"),
-            "expected bash checksum sha256=abc123, got {:?}",
+            // Fixture uses sha256("bash") = 37d2b…c6c2 (real digest,
+            // not just a length-correct placeholder, so the test
+            // doubles as an end-to-end check that hex normalisation
+            // and casing pass through unchanged).
+            matches!(
+                &bash.checksum,
+                PkgChecksum::Sha256(hex)
+                    if hex == "37d2b12d5d9abc2a364ef9448767ee03938e383c0284193477dc7618f4b7c6c2"
+            ),
+            "expected bash sha256, got {:?}",
             bash.checksum,
         );
 

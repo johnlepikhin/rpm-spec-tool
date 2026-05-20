@@ -6,7 +6,7 @@
     <name>bash</name>
     <arch>x86_64</arch>
     <version epoch="0" ver="5.1.8" rel="9.el9"/>
-    <checksum type="sha256" pkgid="YES">abc123</checksum>
+    <checksum type="sha256" pkgid="YES">37d2b12d5d9abc2a364ef9448767ee03938e383c0284193477dc7618f4b7c6c2</checksum>
     <summary>The GNU Bourne Again shell</summary>
     <size package="1500000" installed="6500000" archive="6800000"/>
     <location href="Packages/b/bash-5.1.8-9.el9.x86_64.rpm"/>
@@ -26,7 +26,7 @@
     <name>cmake</name>
     <arch>x86_64</arch>
     <version epoch="0" ver="3.26.5" rel="2.el9"/>
-    <checksum type="sha256" pkgid="YES">def456</checksum>
+    <checksum type="sha256" pkgid="YES">251d177e3e7db921c05d14a06c2495601e4bb0e8ccfff429ac77fa6cd65786ec</checksum>
     <summary>Cross-platform make</summary>
     <size package="11000000" installed="40000000" archive="42000000"/>
     <location href="Packages/c/cmake-3.26.5-2.el9.x86_64.rpm"/>
@@ -45,7 +45,7 @@
     <name>glibc</name>
     <arch>x86_64</arch>
     <version epoch="0" ver="2.34" rel="100.el9"/>
-    <checksum type="sha256" pkgid="YES">789xyz</checksum>
+    <checksum type="sha256" pkgid="YES">1b11757d33424678ba2d9d6fbd9eb6293a7bfa196dca15a29af179af778c235d</checksum>
     <summary>The GNU libc libraries</summary>
     <size package="2000000" installed="15000000" archive="16000000"/>
     <location href="Packages/g/glibc-2.34-100.el9.x86_64.rpm"/>

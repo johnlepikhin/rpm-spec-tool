@@ -116,6 +116,6 @@ impl std::error::Error for AptRpmParseError {}
 
 impl From<AptRpmParseError> for RepoError {
     fn from(e: AptRpmParseError) -> Self {
-        Self::Parse(e.to_string())
+        Self::parse_msg(e.to_string())
     }
 }

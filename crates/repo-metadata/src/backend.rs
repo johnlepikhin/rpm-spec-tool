@@ -1,6 +1,5 @@
 //! `RepoBackend` trait — the surface a backend (rpm-md, apt-rpm)
-//! exposes to the rest of the tool. Stubbed in M1 PR1 skeleton; the
-//! rpm-md implementation lands in this same PR before merge.
+//! exposes to the rest of the tool.
 
 use rpm_spec_repo_core::{RepoConfig, RepoError, RepoId, RepoIndex, RepoKind, RepoRevision};
 
@@ -10,6 +9,16 @@ use crate::http::HttpCache;
 /// network and disk I/O. Implementations are constructed by
 /// [`detect_backend`] and stored as `Box<dyn RepoBackend>` in the
 /// session layer.
+///
+/// **Calling contract**: callers pass `baseurl: &str` already
+/// interpolated against the profile (`$basearch`/`$releasever`
+/// expanded) and pre-validated as non-empty. Backends do not look
+/// inside the user's full [`RepoConfig`]; everything the wire
+/// protocol needs is captured in `baseurl`. This keeps the trait
+/// narrow: a backend can be exercised with a one-line synthetic
+/// URL in unit tests without constructing a full `RepoConfig`, and
+/// the caller (`cli::repo::sync`) owns the responsibility for
+/// pre-flight URL resolution.
 pub trait RepoBackend: Send + Sync + std::fmt::Debug {
     fn kind(&self) -> RepoKind;
 
@@ -18,7 +27,7 @@ pub trait RepoBackend: Send + Sync + std::fmt::Debug {
     fn fetch_revision(
         &self,
         http: &HttpCache,
-        repo: &RepoConfig,
+        baseurl: &str,
     ) -> Result<RepoRevision, RepoError>;
 
     /// Fetch + parse the full metadata into a populated
@@ -33,7 +42,7 @@ pub trait RepoBackend: Send + Sync + std::fmt::Debug {
     fn fetch_index(
         &self,
         http: &HttpCache,
-        repo: &RepoConfig,
+        baseurl: &str,
         rev: &RepoRevision,
         repo_id: &RepoId,
     ) -> Result<RepoIndex, RepoError>;
@@ -41,6 +50,9 @@ pub trait RepoBackend: Send + Sync + std::fmt::Debug {
 
 /// Pick a backend for the given config. `Auto` sniffs by HEADing
 /// well-known paths.
+///
+/// Still takes the full [`RepoConfig`] (not just `kind`) because
+/// auto-sniff in a future implementation will need the baseurl too.
 pub fn detect_backend(repo: &RepoConfig) -> Result<Box<dyn RepoBackend>, RepoError> {
     match repo.kind {
         #[cfg(feature = "rpm-md")]

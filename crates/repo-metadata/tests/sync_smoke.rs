@@ -104,12 +104,14 @@ fn sync_fixture_through_http_cache() {
     cfg.enabled = true;
 
     let backend: Box<dyn RepoBackend> = detect_backend(&cfg).expect("backend");
-    let rev = backend.fetch_revision(&http, &cfg).expect("fetch_revision");
+    let rev = backend
+        .fetch_revision(&http, &baseurl)
+        .expect("fetch_revision");
     assert!(!rev.id.is_empty(), "revision id should be set");
 
     let repo_id: rpm_spec_repo_core::RepoId = std::sync::Arc::from(baseurl.as_str());
     let index = backend
-        .fetch_index(&http, &cfg, &rev, &repo_id)
+        .fetch_index(&http, &baseurl, &rev, &repo_id)
         .expect("fetch_index");
     assert_eq!(index.packages.len(), 3, "tiny-fedora has 3 packages");
 

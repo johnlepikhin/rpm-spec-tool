@@ -15,14 +15,15 @@ pub const MAX_DECOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 /// Decompress `bytes` based on `name`'s suffix (`.gz`, `.zst`, `.xz`,
 /// `.bz2`). Pass-through when no known suffix matches. All decoders
 /// are wrapped in a [`MAX_DECOMPRESSED_BYTES`] limit; oversized
-/// outputs error rather than allocate.
+/// outputs error rather than allocate. Errors carry `name` as the
+/// file context via [`RepoError::decompress_at_file`].
 pub fn decompress(name: &str, bytes: &[u8]) -> Result<Vec<u8>, RepoError> {
     if name.ends_with(".gz") {
         return read_capped(name, flate2::read::GzDecoder::new(bytes));
     }
     if name.ends_with(".zst") {
         let dec = zstd::stream::read::Decoder::new(bytes)
-            .map_err(|e| RepoError::Decompress(e.to_string()))?;
+            .map_err(|e| RepoError::decompress_at_file(name, e.to_string()))?;
         return read_capped(name, dec);
     }
     if name.ends_with(".xz") {
@@ -40,9 +41,10 @@ pub fn decompress(name: &str, bytes: &[u8]) -> Result<Vec<u8>, RepoError> {
         // bz2 is rare in modern rpm-md; the rare time we see it on a
         // legacy mirror, surface a clear "unsupported" error rather
         // than silently mis-parsing.
-        return Err(RepoError::Decompress(format!(
-            "bzip2 compression not enabled for {name}; please ask upstream to publish .gz or .zst"
-        )));
+        return Err(RepoError::decompress_at_file(
+            name,
+            "bzip2 compression not enabled; please ask upstream to publish .gz or .zst",
+        ));
     }
     Ok(bytes.to_vec())
 }
@@ -54,16 +56,20 @@ fn read_capped<R: Read>(name: &str, inner: R) -> Result<Vec<u8>, RepoError> {
     let mut d = inner.take(MAX_DECOMPRESSED_BYTES);
     let mut out = Vec::new();
     d.read_to_end(&mut out)
-        .map_err(|e| RepoError::Decompress(e.to_string()))?;
+        .map_err(|e| RepoError::decompress_at_file(name, e.to_string()))?;
     check_bomb(name, out.len() as u64)?;
     Ok(out)
 }
 
 fn check_bomb(name: &str, len: u64) -> Result<(), RepoError> {
     if len >= MAX_DECOMPRESSED_BYTES {
-        return Err(RepoError::Decompress(format!(
-            "{name}: decompressed output exceeded {MAX_DECOMPRESSED_BYTES} byte cap (likely a decompression bomb)"
-        )));
+        return Err(RepoError::decompress_at_file(
+            name,
+            format!(
+                "decompressed output exceeded {MAX_DECOMPRESSED_BYTES} byte cap \
+                 (likely a decompression bomb)"
+            ),
+        ));
     }
     Ok(())
 }
@@ -105,10 +111,12 @@ mod tests {
     fn bz2_unsupported_errors() {
         let err = decompress("x.bz2", b"whatever").unwrap_err();
         match err {
-            RepoError::Decompress(msg) => {
+            RepoError::Decompress(loc) => {
+                assert_eq!(loc.file(), Some("x.bz2"));
                 assert!(
-                    msg.contains("bzip2 compression not enabled"),
-                    "unexpected message: {msg}"
+                    loc.detail().contains("bzip2 compression not enabled"),
+                    "unexpected detail: {}",
+                    loc.detail()
                 );
             }
             other => panic!("expected Decompress error, got {other:?}"),

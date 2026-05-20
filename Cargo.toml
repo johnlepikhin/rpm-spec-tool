@@ -20,7 +20,7 @@ repository   = "https://github.com/johnlepikhin/rpm-spec-tool"
 publish      = ["crates-io"]
 
 [workspace.dependencies]
-rpm-spec               = { version = "0.3.4", features = ["parser", "printer", "serde"] }
+rpm-spec               = { version = "0.4", features = ["parser", "printer", "serde"] }
 rpm-spec-profile       = { path = "crates/profile", version = "0.1.1" }
 rpm-spec-repo-core     = { path = "crates/repo-core", version = "0.1.1" }
 rpm-spec-repo-metadata = { path = "crates/repo-metadata", version = "0.1.1" }

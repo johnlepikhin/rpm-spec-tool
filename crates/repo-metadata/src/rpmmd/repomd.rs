@@ -39,14 +39,14 @@ pub fn parse(bytes: &[u8]) -> Result<Repomd, RepoError> {
     loop {
         match reader
             .read_event_into(&mut buf)
-            .map_err(|e| RepoError::Parse(format!("repomd.xml: {e}")))?
+            .map_err(|e| RepoError::parse_at_file("repomd.xml", format!("{e}")))?
         {
             Event::Start(e) if e.name().as_ref() == b"data" => {
                 for attr in e.attributes().with_checks(false).flatten() {
                     if attr.key.as_ref() == b"type" {
                         current_type = Some(
                             std::str::from_utf8(&attr.value)
-                                .map_err(|e| RepoError::Parse(format!("repomd type: {e}")))?
+                                .map_err(|e| RepoError::parse_at_file("repomd.xml", format!("type: {e}")))?
                                 .to_string(),
                         );
                     }
@@ -57,16 +57,19 @@ pub fn parse(bytes: &[u8]) -> Result<Repomd, RepoError> {
                     for attr in e.attributes().with_checks(false).flatten() {
                         if attr.key.as_ref() == b"href" {
                             let href = std::str::from_utf8(&attr.value)
-                                .map_err(|e| RepoError::Parse(format!("repomd href: {e}")))?
+                                .map_err(|e| RepoError::parse_at_file("repomd.xml", format!("href: {e}")))?
                                 .to_string();
                             if href.contains("://")
                                 || href.contains("..")
                                 || href.starts_with('/')
                                 || href.chars().any(|c| c.is_control() || c == '\\')
                             {
-                                return Err(RepoError::Parse(format!(
-                                    "repomd.xml: rejected suspicious href {href:?} for data type {ct}"
-                                )));
+                                return Err(RepoError::parse_at_file(
+                                    "repomd.xml",
+                                    format!(
+                                        "rejected suspicious href {href:?} for data type {ct}"
+                                    ),
+                                ));
                             }
                             entries.push((ct.clone(), href));
                         }
@@ -133,9 +136,10 @@ mod tests {
         let xml = sample_with_href(href);
         let err = parse(xml.as_bytes()).expect_err(&format!("expected rejection for {href:?}"));
         match err {
-            RepoError::Parse(msg) => assert!(
-                msg.contains("rejected suspicious href"),
-                "unexpected message for {href:?}: {msg}"
+            RepoError::Parse(loc) => assert!(
+                loc.detail().contains("rejected suspicious href"),
+                "unexpected message for {href:?}: {}",
+                loc.detail()
             ),
             other => panic!("expected Parse error for {href:?}, got {other:?}"),
         }

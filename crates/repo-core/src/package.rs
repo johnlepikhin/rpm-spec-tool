@@ -173,6 +173,22 @@ impl Capability {
 /// validation can compare against repomd's recorded digest when the
 /// .rpm is later downloaded (P0 does not download .rpm bodies — only
 /// metadata).
+///
+/// Construct via [`PkgChecksum::try_new`] for any input that crosses
+/// a trust boundary (rpm-md `<rpm:checksum type="...">`, apt-rpm
+/// pkglist header). The constructor validates the hex string length
+/// matches the algorithm (sha256 → 64, sha1 → 40, md5 → 32), rejects
+/// non-hex characters, and stores the resulting hex in **canonical
+/// lowercase form**; unknown algorithm names are preserved verbatim
+/// in [`PkgChecksum::Other`] for forward-compat but their hex is
+/// still hex-validated.
+///
+/// Direct struct-literal construction is permitted but should be
+/// confined to **tests** and **explicit-sentinel** sites (e.g. the
+/// "missing checksum block" fallback in `rpmmd::primary`, which
+/// inserts an empty `Other { algo: "unknown", hex: "" }`
+/// deliberately to keep the package queryable). Any untrusted input
+/// must route through `try_new`.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum PkgChecksum {
     Sha256(String),
@@ -180,6 +196,111 @@ pub enum PkgChecksum {
     /// Unknown algorithm carried through verbatim so we don't lose
     /// information when a repo uses something we don't validate yet.
     Other { algo: String, hex: String },
+}
+
+/// Validation failure from [`PkgChecksum::try_new`]. The variant
+/// carries the offending pair so a caller logging the error can
+/// attribute the failure to a specific package.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ChecksumParseError {
+    /// Hex string length doesn't match the algorithm's digest size.
+    #[error(
+        "checksum length mismatch for `{algo}`: expected {expected} hex chars, got {got}"
+    )]
+    BadLength {
+        algo: String,
+        expected: usize,
+        got: usize,
+    },
+    /// Hex string contains a non-`[0-9a-fA-F]` byte.
+    #[error("checksum for `{algo}` contains non-hex character: {hex:?}")]
+    NotHex { algo: String, hex: String },
+    /// Empty algorithm name. We tolerate unknown algorithm names but
+    /// not literally empty ones.
+    #[error("checksum algorithm is empty")]
+    EmptyAlgorithm,
+}
+
+/// Known digest algorithms with their hex-string length. Centralised
+/// so adding SHA-512 (or any other new variant) is a single-line
+/// extension that automatically catches the dispatch arm via the
+/// loop below.
+const KNOWN_DIGEST_LENGTHS: &[(&str, usize)] =
+    &[("sha256", 64), ("sha1", 40), ("md5", 32)];
+
+impl PkgChecksum {
+    /// Validate `(algo, hex)` and construct a [`PkgChecksum`]. The
+    /// algorithm name is lowercased before dispatch so callers don't
+    /// have to canonicalise (rpm-md primary.xml occasionally ships
+    /// `SHA256` uppercased); the resulting `Sha256(hex)` variant
+    /// **stores hex in canonical lowercase form** so byte-equal
+    /// comparison (`==`) and `Hash` agree across input cases.
+    ///
+    /// The method follows Rust's `try_new` convention for many-arg
+    /// validating constructors. `parse` is kept as a deprecated alias
+    /// for callers that haven't migrated yet.
+    ///
+    /// # Errors
+    ///
+    /// * [`ChecksumParseError::EmptyAlgorithm`] — algorithm is empty.
+    /// * [`ChecksumParseError::NotHex`] — hex string contains a byte
+    ///   outside `[0-9a-fA-F]`. The stored `hex` field is truncated to
+    ///   at most 80 chars to bound allocation on hostile input.
+    /// * [`ChecksumParseError::BadLength`] — hex length doesn't match
+    ///   the well-known digest size for `algo` (sha256: 64, sha1: 40,
+    ///   md5: 32). Unknown algorithms skip the length check and land
+    ///   in [`PkgChecksum::Other`] for forward-compat.
+    pub fn try_new(algo: &str, hex: &str) -> Result<Self, ChecksumParseError> {
+        let algo_lc = algo.to_ascii_lowercase();
+        if algo_lc.is_empty() {
+            return Err(ChecksumParseError::EmptyAlgorithm);
+        }
+        if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            // Cap the captured hex at 80 chars: real digests are <= 128
+            // (sha512), legitimate non-hex inputs are short typos. A
+            // hostile mirror sending megabytes of garbage as a
+            // "checksum" would otherwise allocate proportionally in
+            // the error path. ASCII-only slice safe because non-hex
+            // implies any byte, but a head-byte slice on a `&str`
+            // would panic on a multibyte boundary — use `chars()`.
+            let truncated: String = hex.chars().take(80).collect();
+            return Err(ChecksumParseError::NotHex {
+                algo: algo_lc,
+                hex: truncated,
+            });
+        }
+        if let Some(&(_, expected)) = KNOWN_DIGEST_LENGTHS
+            .iter()
+            .find(|(name, _)| *name == algo_lc.as_str())
+            && hex.len() != expected
+        {
+            return Err(ChecksumParseError::BadLength {
+                algo: algo_lc,
+                expected,
+                got: hex.len(),
+            });
+        }
+        // Single hex lowercase pass (was three identical
+        // `.to_ascii_lowercase()` calls; now one shared buffer).
+        let hex_lc = hex.to_ascii_lowercase();
+        Ok(match algo_lc.as_str() {
+            "sha256" => Self::Sha256(hex_lc),
+            "sha1" => Self::Sha1(hex_lc),
+            _ => Self::Other {
+                algo: algo_lc,
+                hex: hex_lc,
+            },
+        })
+    }
+
+    /// Deprecated alias for [`Self::try_new`]. The `parse` name
+    /// collided with Rust's `FromStr::parse` convention; new code
+    /// should use `try_new`.
+    #[deprecated(note = "use `PkgChecksum::try_new` for clarity (parse is the FromStr name)")]
+    pub fn parse(algo: &str, hex: &str) -> Result<Self, ChecksumParseError> {
+        Self::try_new(algo, hex)
+    }
 }
 
 /// One package as parsed from primary.xml (and, when filelists are
@@ -288,6 +409,75 @@ mod tests {
         // unreachable arm degrades to the unconstrained form.
         let evr = EVR::new(None, "1.2", "");
         assert_eq!(cap("foo", CapFlags::None, Some(evr)).display(), "foo");
+    }
+
+    #[test]
+    fn pkg_checksum_parse_validates_sha256_length() {
+        // 64 hex chars = canonical SHA-256.
+        let valid = "a".repeat(64);
+        let c = PkgChecksum::try_new("sha256", &valid).unwrap();
+        assert!(matches!(c, PkgChecksum::Sha256(ref h) if h.len() == 64));
+
+        // 63 chars — short by one. Must reject; silently truncating
+        // would make distinct packages collide on lookup.
+        let short = "a".repeat(63);
+        let err = PkgChecksum::try_new("sha256", &short).unwrap_err();
+        match err {
+            ChecksumParseError::BadLength { expected, got, .. } => {
+                assert_eq!(expected, 64);
+                assert_eq!(got, 63);
+            }
+            other => panic!("expected BadLength, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pkg_checksum_parse_rejects_non_hex() {
+        // Non-hex char inside an otherwise length-correct sha256 hex.
+        let mut bad = "a".repeat(63);
+        bad.push('z');
+        let err = PkgChecksum::try_new("sha256", &bad).unwrap_err();
+        assert!(matches!(err, ChecksumParseError::NotHex { .. }));
+    }
+
+    #[test]
+    fn pkg_checksum_parse_normalises_algorithm_case() {
+        // rpm-md primary.xml occasionally ships `SHA256` uppercased.
+        // The validating constructor canonicalises to lowercase and
+        // routes through the strong `Sha256` variant, not `Other`.
+        let valid = "f".repeat(64);
+        let c = PkgChecksum::try_new("SHA256", &valid).unwrap();
+        assert!(matches!(c, PkgChecksum::Sha256(_)));
+    }
+
+    #[test]
+    fn pkg_checksum_parse_preserves_unknown_algorithm_without_length_check() {
+        // Future / vendor-specific algorithms (e.g. ALT's GOST
+        // variants) shouldn't be rejected just because we don't know
+        // their digest length. Lands in `Other` verbatim.
+        let c = PkgChecksum::try_new("gost-stribog-512", "deadbeef").unwrap();
+        assert!(matches!(
+            c,
+            PkgChecksum::Other { ref algo, .. } if algo == "gost-stribog-512"
+        ));
+    }
+
+    #[test]
+    fn pkg_checksum_parse_rejects_empty_algorithm() {
+        let err = PkgChecksum::try_new("", "abc123").unwrap_err();
+        assert!(matches!(err, ChecksumParseError::EmptyAlgorithm));
+    }
+
+    #[test]
+    fn pkg_checksum_parse_sha1_length() {
+        let valid = "1".repeat(40);
+        let c = PkgChecksum::try_new("sha1", &valid).unwrap();
+        assert!(matches!(c, PkgChecksum::Sha1(_)));
+        let short = "1".repeat(39);
+        assert!(matches!(
+            PkgChecksum::try_new("sha1", &short).unwrap_err(),
+            ChecksumParseError::BadLength { expected: 40, got: 39, .. }
+        ));
     }
 
     #[test]

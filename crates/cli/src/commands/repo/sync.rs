@@ -118,19 +118,19 @@ pub fn run(
             let repo_dir = dirs.repo_dir(&interpolated);
             let _lock = locks::acquire(&repo_dir)?;
 
-            // Build a fresh RepoConfig with the interpolated baseurl
-            // for the backend to use.
-            let mut cfg_for_fetch = repo_cfg.clone();
-            cfg_for_fetch.baseurl = Some(interpolated.clone());
-
-            let backend: Box<dyn RepoBackend> = detect_backend(&cfg_for_fetch)?;
+            // `detect_backend` still takes the full RepoConfig because
+            // future auto-sniff variants will inspect the URL too. The
+            // backend trait, however, only needs the resolved
+            // baseurl — that's all the wire protocol cares about, and
+            // it keeps the trait narrow + testable.
+            let backend: Box<dyn RepoBackend> = detect_backend(repo_cfg)?;
             writeln!(
                 stdout,
                 "syncing  profile={profile_name}  repo={repo_id}  kind={}  url={interpolated}",
                 backend.kind().as_str()
             )?;
 
-            let rev = match backend.fetch_revision(&http, &cfg_for_fetch) {
+            let rev = match backend.fetch_revision(&http, &interpolated) {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("error: {profile_name}/{repo_id}: {e}");
@@ -144,7 +144,7 @@ pub fn run(
             // diagnostics attribute findings to a human-friendly name
             // rather than the resolved URL.
             let repo_id_arc: rpm_spec_repo_core::RepoId = Arc::from(repo_id.as_str());
-            let index = match backend.fetch_index(&http, &cfg_for_fetch, &rev, &repo_id_arc) {
+            let index = match backend.fetch_index(&http, &interpolated, &rev, &repo_id_arc) {
                 Ok(i) => i,
                 Err(e) => {
                     eprintln!("error: {profile_name}/{repo_id} index: {e}");

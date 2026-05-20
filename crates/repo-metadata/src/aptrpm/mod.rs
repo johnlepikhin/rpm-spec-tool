@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use time::OffsetDateTime;
 
-use rpm_spec_repo_core::{RepoConfig, RepoError, RepoId, RepoIndex, RepoKind, RepoRevision};
+use rpm_spec_repo_core::{RepoError, RepoId, RepoIndex, RepoKind, RepoRevision};
 
 use crate::backend::RepoBackend;
 use crate::http::HttpCache;
@@ -45,7 +45,7 @@ pub use error::AptRpmParseError;
 /// return parsed [`rpm_spec_repo_core::Package`] values. Exposed so
 /// integration tests and future tooling (e.g. a CLI debug command
 /// that dumps a pkglist's contents) can drive the parser without
-/// going through the full `HttpCache + RepoConfig + fetch_index`
+/// going through the full `HttpCache + baseurl + fetch_index`
 /// stack.
 ///
 /// The backend's [`AptRpmBackend::fetch_index`] uses the same
@@ -120,19 +120,15 @@ impl RepoBackend for AptRpmBackend {
     fn fetch_revision(
         &self,
         http: &HttpCache,
-        repo: &RepoConfig,
+        baseurl: &str,
     ) -> Result<RepoRevision, RepoError> {
-        let baseurl = repo
-            .baseurl
-            .as_ref()
-            .ok_or_else(|| RepoError::Config("repo has no baseurl".into()))?;
         let url = join_url(baseurl, "base/release");
         let bytes = http.fetch(&url)?;
         // Validate as a sanity-check — if the file isn't a real
         // release we fail fast at sync time rather than letting the
         // unparseable header chain detonate later inside fetch_index.
         let text = std::str::from_utf8(&bytes).map_err(|e| {
-            RepoError::Parse(format!("base/release isn't UTF-8: {e}"))
+            RepoError::parse_at_file("base/release", format!("not UTF-8: {e}"))
         })?;
         let _ = release::parse(text)?;
         // Snapshot id = sha256 of the whole release bytes. Same
@@ -149,15 +145,10 @@ impl RepoBackend for AptRpmBackend {
     fn fetch_index(
         &self,
         http: &HttpCache,
-        repo: &RepoConfig,
+        baseurl: &str,
         rev: &RepoRevision,
         repo_id: &RepoId,
     ) -> Result<RepoIndex, RepoError> {
-        let baseurl = repo
-            .baseurl
-            .as_ref()
-            .ok_or_else(|| RepoError::Config("repo has no baseurl".into()))?;
-
         let mut index = RepoIndex {
             repo_id: repo_id.clone(),
             revision: rev.id.clone(),
@@ -193,7 +184,7 @@ impl RepoBackend for AptRpmBackend {
         match http.fetch(&contents_url) {
             Ok(contents_raw) => {
                 let contents_text = std::str::from_utf8(&contents_raw).map_err(|e| {
-                    RepoError::Parse(format!("contents_index isn't UTF-8: {e}"))
+                    RepoError::parse_at_file("contents_index", format!("not UTF-8: {e}"))
                 })?;
                 let file_map = contents::parse(contents_text)?;
                 merge_files(&mut index.packages, &file_map);
@@ -280,7 +271,7 @@ mod tests {
 
     #[test]
     fn merge_files_attaches_paths_by_name() {
-        use rpm_spec_repo_core::{CapFlags, Capability, NEVRA, Package, PkgChecksum};
+        use rpm_spec_repo_core::{Capability, NEVRA, Package, PkgChecksum};
         let mut packages = vec![Package {
             nevra: NEVRA {
                 name: Arc::from("bash"),

@@ -43,10 +43,12 @@ pub mod evr;
 pub mod index;
 pub mod package;
 
-pub use error::{HttpError, RepoError, SolveError};
+pub use error::{ErrorLocation, HttpError, RepoError, SolveError};
 pub use evr::EVR;
 pub use index::{Advisory, AdvisorySeverity, ProviderRef, RepoId, RepoIndex, RepoRevision, RepoUniverse};
-pub use package::{CapFlags, Capability, Dependency, NEVRA, Package, PkgChecksum};
+pub use package::{
+    CapFlags, Capability, ChecksumParseError, Dependency, NEVRA, Package, PkgChecksum,
+};
 
 // Re-exports of config-layer types defined in `rpm-spec-profile`.
 // Repo backends and the resolver consume these without importing
