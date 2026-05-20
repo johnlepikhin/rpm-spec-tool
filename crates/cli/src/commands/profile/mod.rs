@@ -54,8 +54,10 @@ pub(super) const DEFAULT_PROFILE: &str = "generic";
 
 #[derive(Debug, Args)]
 pub struct Cmd {
-    /// Explicit path to `.rpmspec.toml`. Without this flag the nearest
-    /// `.rpmspec.toml` walking upward from the current directory is used.
+    /// Explicit path to a `rpmspec.toml` config file. Without this
+    /// flag the tool checks `$RPM_SPEC_TOOL_CONFIG` then
+    /// `$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml`, falling back to
+    /// built-in defaults.
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
 

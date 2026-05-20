@@ -48,7 +48,7 @@ pub struct Cmd {
 impl Cmd {
     pub fn run(self, color: ColorChoice) -> Result<ExitCode> {
         let sources = io::read_sources(&self.input.paths)?;
-        let mut config_cache = cli_config::ConfigCache::new(self.input.config.clone());
+        let mut config_cache = cli_config::make_config_cache(self.input.config.clone());
 
         // Pretty writes to stdout — TTY detection must look at stdout,
         // not stderr (unlike `human.rs`).

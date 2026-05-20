@@ -1027,6 +1027,7 @@ dependencies = [
 name = "rpm-spec-analyzer"
 version = "0.1.1"
 dependencies = [
+ "directories",
  "rpm-spec",
  "rpm-spec-profile",
  "rpm-spec-repo-core",

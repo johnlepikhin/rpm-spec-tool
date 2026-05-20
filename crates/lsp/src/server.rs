@@ -30,7 +30,7 @@ use lsp_types::{
     TextDocumentSyncKind, Uri, WorkDoneProgressOptions, WorkspaceEdit,
 };
 use rpm_spec_analyzer::config::Config;
-use rpm_spec_analyzer::config_cache::ConfigCache;
+use rpm_spec_analyzer::config_cache::{ConfigCache, default_config_path};
 use rpm_spec_analyzer::error_format::format_error_chain;
 use rpm_spec_analyzer::profile::Profile;
 use rpm_spec_analyzer::{Diagnostic as AnalyzerDiagnostic, analyze_with_profile_at};
@@ -82,7 +82,7 @@ impl Server {
             encoding: PositionEncoding::Utf16,
             documents: HashMap::new(),
             analyses: HashMap::new(),
-            config_cache: ConfigCache::new(None),
+            config_cache: ConfigCache::new(xdg_default_config()),
             profile_cache: HashMap::new(),
         }
     }
@@ -297,7 +297,7 @@ impl Server {
         // Tear down everything keyed by the old config: the cache
         // itself, profile resolutions, and per-document analysis
         // (severities and bridged parser lints may shift).
-        self.config_cache = ConfigCache::new(None);
+        self.config_cache = ConfigCache::new(xdg_default_config());
         self.profile_cache.clear();
         self.analyses.clear();
         // Re-run analysis for every open document so editors see
@@ -641,4 +641,19 @@ where
             None
         }
     }
+}
+
+/// Resolve the XDG-default config path for the LSP server's
+/// [`ConfigCache`]. Returns `Some(path)` only when the file actually
+/// exists — passing a path to a non-existent file would make every
+/// `load_for` call fail loudly; the empty `None` cache degrades to
+/// built-in defaults silently, which is what editors expect when a
+/// project has no `rpmspec.toml`.
+///
+/// Mirrors the CLI's `cli_config::make_config_cache` resolution so a
+/// spec linted in the editor matches what `rpm-spec-tool lint` would
+/// produce from the shell.
+fn xdg_default_config() -> Option<std::path::PathBuf> {
+    let path = default_config_path()?;
+    if path.is_file() { Some(path) } else { None }
 }

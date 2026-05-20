@@ -1,35 +1,51 @@
-//! `.rpmspec.toml` discovery and caching.
+//! `rpmspec.toml` loading and caching.
 //!
-//! Walks upward from a source path looking for the nearest
-//! `.rpmspec.toml`, falling back to [`Config::default`] when nothing
-//! is found. Results are memoized per starting directory so a batch of
-//! sibling files shares the cost of stat'ing common ancestors.
+//! Resolution rules (no walk-up, single source of truth):
 //!
-//! Both the CLI (batch processing) and the LSP server (one cache per
-//! workspace) use this directly.
+//! 1. **Explicit path** — `--config <path>` on the CLI; the LSP
+//!    server's project-specific override. Loaded verbatim.
+//! 2. **XDG default** — `$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml`
+//!    (falls back to `~/.config/rpm-spec-tool/rpmspec.toml` on systems
+//!    where the env var isn't set). Resolved via
+//!    [`directories::ProjectDirs`]; respects the standard XDG cascade.
+//! 3. **Built-in defaults** — when neither the explicit path nor the
+//!    XDG file exists, [`Config::default`] is returned. The tool still
+//!    works against built-in profiles.
+//!
+//! The pre-XDG behaviour walked upward from each spec file looking
+//! for `.rpmspec.toml`, which made config discovery position-dependent
+//! and caused the same spec to be linted with different rules
+//! depending on cwd. XDG-only gives one rule per machine and
+//! eliminates the surprise.
+//!
+//! Both the CLI (batch processing) and the LSP server use this
+//! directly. The CLI typically resolves the XDG path itself (so it
+//! can read `$RPM_SPEC_TOOL_CONFIG` env-var overrides) and feeds the
+//! resolved path into `ConfigCache::new(Some(path))`; the LSP server
+//! calls [`default_config_path`] from this crate so the behaviour
+//! stays in lock-step.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::config::Config;
 
-/// Errors raised while discovering, reading, or parsing a `.rpmspec.toml`.
+/// Errors raised while reading or parsing the resolved `rpmspec.toml`.
 ///
 /// Wraps the underlying [`std::io::Error`] / [`toml::de::Error`] through
 /// `#[source]` so callers can walk the causal chain (e.g. anyhow's `{:#}`
 /// formatter, or a manual loop over [`std::error::Error::source`]).
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigCacheError {
-    /// Failed to read the chosen `.rpmspec.toml` from disk.
+    /// Failed to read the chosen config from disk.
     #[error("failed to read config {path}")]
     Io {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    /// `.rpmspec.toml` was read but didn't deserialize as TOML.
+    /// Config was read but didn't deserialize as TOML.
     #[error("failed to parse config {path}")]
     Parse {
         path: PathBuf,
@@ -38,35 +54,53 @@ pub enum ConfigCacheError {
     },
 }
 
-/// Caches loaded configs by the directory they were discovered in. Avoids
-/// re-walking and re-parsing `.rpmspec.toml` for every file when many specs
-/// share a config.
+/// The canonical XDG config file location.
 ///
-/// Two levels of memoization:
-/// 1. `by_dir` — canonicalized starting directory → resolved config.
-/// 2. `discover_cache` — canonicalized directory → result of walking up to
-///    the nearest `.rpmspec.toml`. Lets a batch of files in sibling
-///    directories share the cost of stat'ing common ancestors.
+/// Returns `$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml`, falling
+/// back to `~/.config/rpm-spec-tool/rpmspec.toml` per the XDG Base
+/// Directory Specification. `None` is only possible on platforms
+/// where the user's home directory can't be determined — extremely
+/// rare on Linux, but the tool's `compile_error!` already restricts
+/// us to Linux.
+///
+/// The returned path is NOT checked for existence; callers decide
+/// whether a missing file is a hard error or a soft fall-back to
+/// defaults.
+#[must_use]
+pub fn default_config_path() -> Option<PathBuf> {
+    let dirs = directories::ProjectDirs::from("io", "rpm-spec-tool", "rpm-spec-tool")?;
+    Some(dirs.config_dir().join("rpmspec.toml"))
+}
+
+/// Caches a single loaded config (either explicit `--config` or the
+/// XDG default). Two-level memoization the pre-XDG version needed
+/// (per-directory walk-up memo) is gone — the config is now
+/// position-independent so a single `Arc<Config>` covers every spec.
+///
+/// Construction modes:
+/// * `ConfigCache::new(Some(path))` — load `path` once on first use.
+/// * `ConfigCache::new(None)` — return [`Config::default`] for every
+///   query. Callers that want the XDG default file should resolve it
+///   via [`default_config_path`] and check existence themselves
+///   before passing `Some(...)`.
 pub struct ConfigCache {
+    /// Explicit path supplied to `new`. `None` means "always default".
     explicit: Option<PathBuf>,
-    explicit_cache: Option<Arc<Config>>,
-    /// Directory the explicit config lives in — used as base for
-    /// relative paths in the config itself (e.g. `showrc-file`).
-    explicit_base_dir: Option<PathBuf>,
-    by_dir: HashMap<PathBuf, (Arc<Config>, PathBuf)>,
-    discover_cache: HashMap<PathBuf, Option<PathBuf>>,
+    /// Memoized config — populated on first successful load.
+    cached: Option<Arc<Config>>,
+    /// Base directory associated with the loaded config (`path.parent()`).
+    /// Used as the anchor for relative `showrc-file` references inside
+    /// the config itself. For the default-config case, this is `cwd`.
+    base_dir: Option<PathBuf>,
+    /// Lazily-populated default config for the no-explicit-path branch.
     default: Arc<Config>,
-    /// Base directory associated with the default (no-config) case.
-    /// Set once on first use of [`Self::load_for`].
-    default_base_dir: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for ConfigCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConfigCache")
             .field("explicit", &self.explicit)
-            .field("cached_dirs", &self.by_dir.len())
-            .field("discover_entries", &self.discover_cache.len())
+            .field("loaded", &self.cached.is_some())
             .finish()
     }
 }
@@ -74,50 +108,46 @@ impl std::fmt::Debug for ConfigCache {
 impl ConfigCache {
     /// Build a fresh cache.
     ///
-    /// `Some(path)` forces the given config for every lookup
-    /// (`--config` mode). `None` triggers upward `.rpmspec.toml`
-    /// discovery from each source's directory, falling back to
-    /// [`Config::default`] if nothing is found.
+    /// `Some(path)` forces the given file for every lookup
+    /// (`--config` mode, or CLI-resolved XDG default). `None` means
+    /// "use built-in defaults" — equivalent to the user not having
+    /// any config at all.
     pub fn new(explicit: Option<PathBuf>) -> Self {
         Self {
             explicit,
-            explicit_cache: None,
-            explicit_base_dir: None,
-            by_dir: HashMap::new(),
-            discover_cache: HashMap::new(),
+            cached: None,
+            base_dir: None,
             default: Arc::new(Config::default()),
-            default_base_dir: None,
         }
     }
 
-    /// Resolve the config for `source_path`. The same explicit `--config` is
-    /// reused for every call; otherwise the nearest `.rpmspec.toml` walking
-    /// upward from the source is looked up once per starting directory.
-    ///
-    /// Note: directory paths are resolved through symlinks
-    /// (`fs::canonicalize`) before being used as cache keys, so two
-    /// invocations referring to the same target through different links
-    /// share results.
+    /// Resolve the config for `source_path`. The `source_path`
+    /// parameter is kept on the signature for back-compat with the
+    /// pre-XDG ConfigCache (which used it for walk-up discovery) but
+    /// is now ignored — the same config applies to every spec.
     ///
     /// # Errors
     ///
-    /// Returns an error if the chosen `.rpmspec.toml` can't be read or
-    /// doesn't deserialize.
+    /// Returns an error if the explicit config can't be read or
+    /// doesn't deserialize. Default-only mode never errors.
     pub fn load_for(&mut self, source_path: &Path) -> Result<Arc<Config>, ConfigCacheError> {
         self.load_for_with_base_dir(source_path).map(|(c, _)| c)
     }
 
     /// Variant of [`Self::load_for`] returning both the config and the
-    /// directory it was found in (or the discovery starting directory
-    /// when the default config is used). Callers needing to interpret
-    /// paths *inside* the config (e.g. `showrc-file = "vendor/..."`)
-    /// use this to anchor those paths correctly.
+    /// directory it was loaded from (or cwd for the default case).
+    /// Callers needing to interpret paths *inside* the config (e.g.
+    /// `showrc-file = "vendor/..."`) use this to anchor those paths.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::load_for`].
     pub fn load_for_with_base_dir(
         &mut self,
-        source_path: &Path,
+        _source_path: &Path,
     ) -> Result<(Arc<Config>, PathBuf), ConfigCacheError> {
         if let Some(path) = self.explicit.clone() {
-            if let (Some(cached), Some(base)) = (&self.explicit_cache, &self.explicit_base_dir) {
+            if let (Some(cached), Some(base)) = (&self.cached, &self.base_dir) {
                 return Ok((Arc::clone(cached), base.clone()));
             }
             let cfg = Arc::new(load_from(&path)?);
@@ -125,119 +155,19 @@ impl ConfigCache {
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
-            self.explicit_cache = Some(Arc::clone(&cfg));
-            self.explicit_base_dir = Some(base.clone());
+            self.cached = Some(Arc::clone(&cfg));
+            self.base_dir = Some(base.clone());
             return Ok((cfg, base));
         }
 
-        let start_dir = canonicalize_or_keep(&start_dir_for(source_path));
-        if let Some((cfg, base)) = self.by_dir.get(&start_dir) {
-            return Ok((Arc::clone(cfg), base.clone()));
-        }
-        let found = self.discover_with_memo(&start_dir);
-        let (cfg, base) = match found {
-            Some(ref path) => {
-                let cfg = Arc::new(load_from(path)?);
-                let base = path
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| start_dir.clone());
-                (cfg, base)
-            }
-            None => {
-                let base = self
-                    .default_base_dir
-                    .get_or_insert_with(|| start_dir.clone())
-                    .clone();
-                (Arc::clone(&self.default), base)
-            }
-        };
-        self.by_dir
-            .insert(start_dir, (Arc::clone(&cfg), base.clone()));
-        Ok((cfg, base))
-    }
-
-    /// Walk upward from `start`, memoizing the answer for every directory
-    /// visited. Sibling directories share ancestor lookups.
-    fn discover_with_memo(&mut self, start: &Path) -> Option<PathBuf> {
-        let mut visited: Vec<PathBuf> = Vec::new();
-        let mut dir = start.to_path_buf();
-        let answer = loop {
-            if let Some(cached) = self.discover_cache.get(&dir) {
-                break cached.clone();
-            }
-            visited.push(dir.clone());
-            let candidate = dir.join(".rpmspec.toml");
-            if candidate.is_file() {
-                break Some(candidate);
-            }
-            if !dir.pop() {
-                break None;
-            }
-        };
-        for v in visited {
-            self.discover_cache.insert(v, answer.clone());
-        }
-        answer
-    }
-}
-
-/// Resolve `p` through symlinks to an absolute path when possible.
-/// Returns the input unchanged if canonicalization fails — typically
-/// because the path doesn't exist yet, which is fine: the cache key is
-/// still stable for a given run.
-fn canonicalize_or_keep(p: &Path) -> PathBuf {
-    match fs::canonicalize(p) {
-        Ok(c) => c,
-        Err(e) => {
-            // `NotFound` is expected (stdin pseudo-path "-" hasn't been
-            // mapped, file just deleted, etc.) — debug. Anything else
-            // (permissions, ELOOP, EIO) hints at a real problem the user
-            // probably wants to know about, so we warn.
-            if e.kind() == std::io::ErrorKind::NotFound {
-                tracing::debug!(
-                    path = %p.display(),
-                    err = %e,
-                    "canonicalize failed (not found); using path as-is"
-                );
-            } else {
-                tracing::warn!(
-                    path = %p.display(),
-                    err = %e,
-                    "canonicalize failed; cache key may be inconsistent across formats"
-                );
-            }
-            p.to_path_buf()
-        }
-    }
-}
-
-/// Pick the directory to start the `.rpmspec.toml` walk from. `-` (stdin)
-/// uses the current working directory. Existing files use their parent.
-/// Anything else (non-existent path, directory, etc.) is treated as a
-/// directory itself — the walker either finds a config above or falls
-/// back to defaults.
-fn start_dir_for(source_path: &Path) -> PathBuf {
-    if source_path.as_os_str() == "-" {
-        return PathBuf::from(".");
-    }
-    match fs::metadata(source_path) {
-        Ok(meta) if meta.is_file() => source_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(".")),
-        Ok(_) => source_path.to_path_buf(),
-        Err(e) => {
-            tracing::debug!(
-                path = %source_path.display(),
-                err = %e,
-                "could not stat source; using parent directory for config discovery"
-            );
-            source_path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."))
-        }
+        // Default mode: anchor at cwd. cwd may fail to read on
+        // detached processes; degrade to "." so the config-internal
+        // relative-path resolution still has something to work with.
+        let base = self
+            .base_dir
+            .get_or_insert_with(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+            .clone();
+        Ok((Arc::clone(&self.default), base))
     }
 }
 
@@ -275,29 +205,7 @@ missing-changelog = "deny"
     }
 
     #[test]
-    fn discovery_hits_cache_for_same_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        fs::write(
-            tmp.path().join(".rpmspec.toml"),
-            r#"[format]
-preamble-align-column = 12
-"#,
-        )
-        .unwrap();
-        let s1 = tmp.path().join("a.spec");
-        let s2 = tmp.path().join("b.spec");
-        fs::write(&s1, "").unwrap();
-        fs::write(&s2, "").unwrap();
-
-        let mut cache = ConfigCache::new(None);
-        let c1 = cache.load_for(&s1).unwrap();
-        let c2 = cache.load_for(&s2).unwrap();
-        assert!(Arc::ptr_eq(&c1, &c2), "sibling files should share cache");
-        assert_eq!(c1.format.preamble_align_column, 12);
-    }
-
-    #[test]
-    fn missing_config_returns_default() {
+    fn no_explicit_returns_default() {
         let tmp = tempfile::tempdir().unwrap();
         let s = tmp.path().join("a.spec");
         fs::write(&s, "").unwrap();
@@ -306,6 +214,19 @@ preamble-align-column = 12
         assert_eq!(
             cfg.format.preamble_align_column,
             crate::config::FormatConfig::default().preamble_align_column
+        );
+    }
+
+    #[test]
+    fn default_path_is_under_rpm_spec_tool() {
+        // The resolved path varies with $HOME / $XDG_CONFIG_HOME, but
+        // the suffix is stable — anchor on it so a future ProjectDirs
+        // version that flips the directory name gets caught.
+        let path = default_config_path().expect("home dir resolvable in test env");
+        let p = path.to_string_lossy();
+        assert!(
+            p.ends_with("rpm-spec-tool/rpmspec.toml"),
+            "expected XDG-shaped path, got: {p}"
         );
     }
 
@@ -347,18 +268,12 @@ preamble-align-column = 12
             chained.contains("failed to read config"),
             "missing top-level message in chain: {chained}"
         );
-        // Don't assert on a specific OS string (locale-dependent), but
-        // the chain must extend beyond the top-level message — i.e. the
-        // `#[source]` is wired up.
         let top = err.to_string();
         assert!(
             chained.len() > top.len(),
             "chain ({chained:?}) was no longer than the top-level message ({top:?}); \
              #[source] is not being walked"
         );
-        // And the inner io::Error's text must appear after the colon
-        // separator so callers using `{:#}`-style chaining see the OS
-        // cause.
         let suffix = &chained[top.len()..];
         assert!(
             suffix.starts_with(": "),

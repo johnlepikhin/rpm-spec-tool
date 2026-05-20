@@ -6,9 +6,9 @@
 //!   line with its default severity (commented out so the file
 //!   round-trips through deserialization without change in behaviour).
 //! * `config validate` — load and parse the named file (or the
-//!   nearest `.rpmspec.toml` walking upward), report the first
-//!   deserialization error with file:line pointing at the offending
-//!   span.
+//!   `$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml` default), report
+//!   the first deserialization error with file:line pointing at the
+//!   offending span.
 
 use std::process::ExitCode;
 

@@ -62,6 +62,52 @@ pub fn default_cache_root() -> Result<PathBuf, RepoError> {
     Ok(p)
 }
 
+/// Locate the data root for non-disposable artifacts, defaulting to
+/// `$XDG_DATA_HOME/rpm-spec-tool/` (typically
+/// `~/.local/share/rpm-spec-tool/`). Override with
+/// `RPM_SPEC_TOOL_DATA_DIR`.
+///
+/// The distinction from [`default_cache_root`] is the XDG semantic:
+/// `CACHE_HOME` is "user can `rm -rf` at any moment", `DATA_HOME` is
+/// "important persistent state — losing this is data loss". The
+/// resolved lockfile (per-target-set pinned NEVRA closure) belongs
+/// in DATA because regenerating it requires re-running `repo sync +
+/// solve` against potentially-shifted upstream repos — that's lossy
+/// reproducibility.
+///
+/// # Errors
+///
+/// Returns an error when the user's home directory can't be
+/// resolved, or when the resolved path can't be created.
+pub fn default_data_root() -> Result<PathBuf, RepoError> {
+    if let Ok(v) = std::env::var("RPM_SPEC_TOOL_DATA_DIR") {
+        let p = PathBuf::from(v);
+        fs::create_dir_all(&p)?;
+        return Ok(p);
+    }
+    let dirs = directories::ProjectDirs::from("io", "rpm-spec-tool", "rpm-spec-tool")
+        .ok_or_else(|| RepoError::Config("could not determine project data directory".into()))?;
+    let p = dirs.data_dir().to_path_buf();
+    fs::create_dir_all(&p)?;
+    Ok(p)
+}
+
+/// Default lockfile directory: `<DATA_ROOT>/lockfiles/`. One TOML
+/// file per pinned target-set / closure lives here; the upcoming
+/// `repo lock create/update/verify/pin-closure/status` commands
+/// (M2 PR5) write atomically via `tempfile::NamedTempFile::rename`.
+///
+/// # Errors
+///
+/// Same as [`default_data_root`], plus failures to create the
+/// `lockfiles/` subdirectory.
+pub fn default_lockfile_dir() -> Result<PathBuf, RepoError> {
+    let root = default_data_root()?;
+    let p = root.join("lockfiles");
+    fs::create_dir_all(&p)?;
+    Ok(p)
+}
+
 /// Canonical key for a repo on disk: sha256 of the canonicalised
 /// baseurl. Different profiles pointing at the same URL share one
 /// snapshot directory (auto-dedup per the design).
@@ -108,6 +154,13 @@ pub struct CacheDirs {
     pub root: PathBuf,
     pub repos: PathBuf,
     pub tmp: PathBuf,
+    /// JSON pin-registry that tracks which lockfiles reference which
+    /// snapshot directories — used by `repo cache gc` (when it lands)
+    /// to skip evicting pinned snapshots. The actual lockfile *bodies*
+    /// live under [`default_lockfile_dir`] (XDG DATA), not here; this
+    /// JSON is a cache-side index pointing at them. Keeping the index
+    /// in CACHE is fine because it can be rebuilt by walking
+    /// `default_lockfile_dir()` if the cache is wiped.
     pub lockfiles_registry: PathBuf,
 }
 

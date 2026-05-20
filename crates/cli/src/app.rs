@@ -17,10 +17,12 @@ pub struct Application {
     #[arg(long, global = true, default_value_t = ColorChoice::Auto, value_enum)]
     pub color: ColorChoice,
 
-    /// Explicit path to `.rpmspec.toml`. Without this flag the nearest
-    /// `.rpmspec.toml` walking upward from each file (or CWD for
-    /// commands without input files) is used. Global flag — accepted
-    /// at any position, including before the subcommand.
+    /// Explicit path to a `rpmspec.toml` config file. Without this
+    /// flag the tool checks `$RPM_SPEC_TOOL_CONFIG`, then
+    /// `$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml` (defaults to
+    /// `~/.config/rpm-spec-tool/rpmspec.toml`), then falls back to
+    /// built-in defaults. Global flag — accepted at any position,
+    /// including before the subcommand.
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
 }
@@ -69,8 +71,10 @@ pub struct CommonInput {
     /// Spec files to process. Use `-` (or omit) to read from stdin.
     pub paths: Vec<PathBuf>,
 
-    /// Explicit path to `.rpmspec.toml`. Without this flag the nearest
-    /// `.rpmspec.toml` walking upward from each file is used.
+    /// Explicit path to a `rpmspec.toml` config file. Without this
+    /// flag the tool checks `$RPM_SPEC_TOOL_CONFIG` then
+    /// `$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml`, falling back to
+    /// built-in defaults if neither exists.
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
 }

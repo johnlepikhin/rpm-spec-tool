@@ -85,7 +85,7 @@ impl Cmd {
         }
 
         let sources = io::read_sources(&self.input.paths)?;
-        let mut config_cache = cli_config::ConfigCache::new(self.input.config.clone());
+        let mut config_cache = cli_config::make_config_cache(self.input.config.clone());
 
         let mut any_deny = false;
         let mut any_io_error = false;

@@ -25,6 +25,11 @@ thiserror.workspace  = true
 toml.workspace       = true
 tracing.workspace    = true
 time.workspace       = true
+# Used by `config_cache::default_config_path` to resolve the XDG
+# config dir (~/.config/rpm-spec-tool/rpmspec.toml). Version pinned
+# to match `rpm-spec-repo-metadata`'s use so cargo doesn't pull two
+# copies of `directories`.
+directories = "5"
 
 [dev-dependencies]
 tempfile = "3"
