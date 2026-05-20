@@ -30,6 +30,7 @@ pub mod explain;
 pub mod impact;
 pub mod portability;
 pub(crate) mod universe;
+pub mod upgrade_sim;
 pub mod verify_contract;
 
 pub use check::{AD_HOC_TARGET_SET_ID, CheckOpts};
@@ -332,6 +333,20 @@ pub enum Action {
     /// closure a spec would install into for each member of a
     /// target set.
     Buildroot(BuildrootCmd),
+    /// Compare the spec's proposed NEVR against what's currently
+    /// published in the configured repos for each profile.
+    ///
+    /// Per (spec × profile) the command looks up the highest-EVR
+    /// binary built from the same source RPM (arch-filtered by the
+    /// profile's `build_arch` plus `noarch`) and renders one of
+    /// `UPGRADE` / `SAME` / `REGRESS` / `NEW` / `SKIPPED`.
+    ///
+    /// Mirrors RPM-REPO-030 (EVR-not-greater) and RPM-REPO-031
+    /// (epoch-dropped) but per-profile, with structured JSON suitable
+    /// for CI gating. `--fail-on regress` returns 1 if any row's
+    /// verdict is `REGRESS`.
+    #[command(name = "upgrade-sim")]
+    UpgradeSim(upgrade_sim::UpgradeSimOpts),
 }
 
 #[derive(Debug, Args)]
@@ -409,6 +424,7 @@ impl Cmd {
                     buildroot::run(opts, self.config.as_deref(), color)
                 }
             },
+            Action::UpgradeSim(opts) => upgrade_sim::run(opts, self.config.as_deref(), color),
         }
     }
 }

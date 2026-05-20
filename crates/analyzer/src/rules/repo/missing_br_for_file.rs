@@ -23,19 +23,16 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use rpm_spec::ast::{
-    BuildScriptKind, Conditional, Section, ShellBody, Span, SpecFile, SpecItem, Tag,
-};
+use rpm_spec::ast::{BuildScriptKind, ShellBody, Span, SpecFile, Tag};
 use rpm_spec_profile::{MacroRegistry, Profile};
 use rpm_spec_repo_core::RepoUniverse;
 
 use crate::bcond::{BcondMap, BcondOverrides};
-use crate::branch_coverage::evaluate_branch;
 use crate::diagnostic::{Diagnostic, LintCategory, RepoContext, Severity};
 use crate::lint::{Lint, LintMetadata};
 use crate::visit::Visit;
 
-use super::shared::RepoRule;
+use super::shared::{self, MACRO_EXPAND_DEPTH, RepoRule};
 
 pub static METADATA: LintMetadata = LintMetadata {
     id: "RPM-REPO-011",
@@ -47,10 +44,6 @@ pub static METADATA: LintMetadata = LintMetadata {
     default_severity: Severity::Warn,
     category: LintCategory::Correctness,
 };
-
-/// Macro expansion depth for path tokens — mirrors the other RPM-REPO-*
-/// rules and the analyzer-wide convention.
-const MACRO_EXPAND_DEPTH: u8 = 8;
 
 /// Paths universally available in the build chroot. Profiles may carry
 /// their own `implicit_buildrequires` in a future milestone; until
@@ -118,8 +111,8 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForFile {
         .collect();
 
         // Walk every active build-script section.
-        let mut sections: Vec<(BuildScriptKind, &ShellBody<Span>, Span)> = Vec::new();
-        collect_active_build_scripts(&spec.items, profile, &bcond, &mut sections);
+        let sections: Vec<(BuildScriptKind, &ShellBody<Span>, Span)> =
+            shared::collect_active_build_scripts(&spec.items, profile, &bcond);
 
         // Per-spec dedup: don't emit the same (path, owner) pair
         // twice if it appears in `%build` AND `%install`.
@@ -132,7 +125,7 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForFile {
             // inside a branch the active profile won't execute (same
             // policy as `project_deps`: indeterminate → skip the
             // branch but don't take `%else` either).
-            let inactive_ranges = inactive_line_ranges(body, profile, &bcond);
+            let inactive_ranges = shared::inactive_line_ranges(body, profile, &bcond);
             let section_start = section_span.start_line;
             for (idx, line) in body.lines.iter().enumerate() {
                 // Parser pushes one physical line per `body.lines`
@@ -165,8 +158,8 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForFile {
                         Ok(None) => continue,
                         Err(e) => {
                             tracing::warn!(
-                                error = %e,
-                                path = %path,
+                                error = ?e,
+                                path = ?path,
                                 "file_owner lookup failed; skipping token",
                             );
                             continue;
@@ -177,8 +170,8 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForFile {
                         Ok(None) => continue,
                         Err(e) => {
                             tracing::warn!(
-                                error = %e,
-                                path = %path,
+                                error = ?e,
+                                path = ?path,
                                 "resolve_nevra failed; skipping token",
                             );
                             continue;
@@ -224,116 +217,6 @@ impl Lint for MissingBuildRequiresForFile {
     fn set_repo_universe(&mut self, universe: Option<Arc<RepoUniverse>>) {
         self.base.set_repo_universe(universe);
     }
-}
-
-/// Walk the top-level items, following only the active branch of each
-/// `Conditional` (same policy as `project_deps`), and collect every
-/// build-script section's (kind, body, span) triple.
-fn collect_active_build_scripts<'a>(
-    items: &'a [SpecItem<Span>],
-    profile: &Profile,
-    bcond: &BcondMap,
-    out: &mut Vec<(BuildScriptKind, &'a ShellBody<Span>, Span)>,
-) {
-    for item in items {
-        match item {
-            SpecItem::Section(boxed) => {
-                if let Section::BuildScript { kind, body, data } = boxed.as_ref() {
-                    out.push((*kind, body, *data));
-                }
-            }
-            SpecItem::Conditional(cond) => {
-                walk_conditional(cond, profile, bcond, out);
-            }
-            _ => {}
-        }
-    }
-}
-
-fn walk_conditional<'a>(
-    cond: &'a Conditional<Span, SpecItem<Span>>,
-    profile: &Profile,
-    bcond: &BcondMap,
-    out: &mut Vec<(BuildScriptKind, &'a ShellBody<Span>, Span)>,
-) {
-    let all_preceding_false = true;
-    for branch in &cond.branches {
-        match evaluate_branch(branch.kind, &branch.expr, profile, bcond) {
-            Ok(true) if all_preceding_false => {
-                collect_active_build_scripts(&branch.body, profile, bcond, out);
-                return;
-            }
-            Ok(true) => return,
-            Ok(false) => continue,
-            Err(_) => return,
-        }
-    }
-    if all_preceding_false
-        && let Some(els) = &cond.otherwise
-    {
-        collect_active_build_scripts(els, profile, bcond, out);
-    }
-}
-
-/// Compute the inclusive source-line ranges inside `body` that the
-/// active profile will NOT execute. Used to drop tool-path scans that
-/// live inside an inactive `%if` arm within a build-script section
-/// (the shell-body conditional is recorded structurally on
-/// `ShellBody::conditionals`, but the lines themselves are flat).
-///
-/// Mirrors the conditional-gating policy used elsewhere in
-/// RPM-REPO-*: indeterminate branches are NOT marked inactive (we
-/// can't prove they don't fire), and `%else` is inactive only when
-/// some sibling branch is provably active.
-fn inactive_line_ranges(
-    body: &ShellBody<Span>,
-    profile: &Profile,
-    bcond: &BcondMap,
-) -> Vec<(u32, u32)> {
-    let mut out = Vec::new();
-    for cond in &body.conditionals {
-        // Mirror the policy `shared::project_deps` uses for top-level
-        // conditionals: indeterminate branches are conservatively
-        // SKIPPED (treated as inactive), and indeterminacy also
-        // shadows everything after it — `%else` can't fire when we
-        // can't prove every preceding guard is decisively false.
-        // Trade-off: prefer false-negative (skipping a possibly-live
-        // call site) over false-positive (warning about a tool that
-        // wouldn't actually run). Operators can add the missing macro
-        // to the profile to bring the lint back online.
-        let mut active_branch_idx: Option<usize> = None;
-        let mut indeterminate_seen = false;
-        let verdicts: Vec<Option<bool>> = cond
-            .branches
-            .iter()
-            .map(|b| evaluate_branch(b.kind, &b.expr, profile, bcond).ok())
-            .collect();
-        for (i, verdict) in verdicts.iter().enumerate() {
-            match verdict {
-                Some(true) if !indeterminate_seen && active_branch_idx.is_none() => {
-                    active_branch_idx = Some(i);
-                }
-                Some(true) => {}
-                Some(false) => {}
-                None => indeterminate_seen = true,
-            }
-        }
-        for (i, branch) in cond.branches.iter().enumerate() {
-            if Some(i) != active_branch_idx {
-                let span = branch.data;
-                out.push((span.start_line, span.end_line));
-            }
-        }
-        // `%else` fires iff every preceding guard was decisively
-        // false. Active branch present OR any indeterminate present
-        // → `%else` cannot fire, treat as inactive.
-        if let Some(els) = &cond.otherwise
-            && (active_branch_idx.is_some() || indeterminate_seen)
-        {
-            out.push((els.data.start_line, els.data.end_line));
-        }
-    }
-    out
 }
 
 /// Yield every whitespace-separated token in `line` that starts with

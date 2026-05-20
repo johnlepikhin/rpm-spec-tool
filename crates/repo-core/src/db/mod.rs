@@ -269,9 +269,9 @@ impl RepoDb {
         {
             let mut insert_pkg = tx.prepare(
                 "INSERT INTO packages \
-                 (name, epoch, version, release, arch, source_rpm, summary, \
+                 (name, epoch, version, release, arch, source_rpm, source_name, summary, \
                   size_installed, checksum_alg, checksum_hex, location) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             )?;
             let mut insert_cap = tx.prepare(
                 "INSERT INTO caps \
@@ -282,6 +282,8 @@ impl RepoDb {
 
             for pkg in packages {
                 let (alg, hex) = convert::checksum_columns(&pkg.checksum);
+                let source_name =
+                    pkg.source_rpm.as_deref().and_then(convert::source_rpm_name);
                 insert_pkg.execute(params![
                     pkg.nevra.name.as_ref(),
                     pkg.nevra.epoch,
@@ -289,6 +291,7 @@ impl RepoDb {
                     pkg.nevra.release.as_ref(),
                     pkg.nevra.arch.as_ref(),
                     pkg.source_rpm.as_deref(),
+                    source_name,
                     pkg.summary.as_ref(),
                     pkg.size_installed as i64,
                     alg,
@@ -345,6 +348,30 @@ impl RepoDb {
              FROM packages WHERE name = ?1",
         )?;
         let rows = stmt.query_map(params![name], read_pkg_nevra_row)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Every binary package built from the source RPM with this
+    /// `source_name` — i.e. every subpackage a given spec produced.
+    ///
+    /// `source_name` is the pre-parsed source-package identity stored
+    /// in `packages.source_name` (`foo` from `foo-1.2-3.src.rpm`).
+    /// `matrix upgrade-sim` and the RPM-REPO-030/031 lints use this
+    /// to find the current published NEVRA for a spec's `Name:`.
+    pub fn pkg_briefs_by_source_name(
+        &self,
+        source_name: &str,
+    ) -> Result<Vec<(i64, NEVRA)>, RepoError> {
+        let guard = self.lock();
+        let mut stmt = guard.prepare_cached(
+            "SELECT pkg_id, name, epoch, version, release, arch \
+             FROM packages WHERE source_name = ?1",
+        )?;
+        let rows = stmt.query_map(params![source_name], read_pkg_nevra_row)?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);

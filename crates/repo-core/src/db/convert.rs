@@ -107,3 +107,72 @@ pub fn checksum_from_columns(algo: &str, hex: &str) -> PkgChecksum {
         },
     }
 }
+
+/// Extract the source-package name from an `<rpm:sourcerpm>` value
+/// like `foo-1.2.3-4.el9.src.rpm` → `Some("foo")`.
+///
+/// rpm encodes the source name as `NAME-VERSION-RELEASE.src.rpm` so
+/// the algorithm walks back from the `.src.rpm` suffix, drops the two
+/// rightmost `-`-segments (release, version), and keeps everything
+/// before that as the name. Names with embedded dashes (e.g.
+/// `foo-bar-1.2.3-4.src.rpm` → `foo-bar`) are handled correctly
+/// because we count from the right.
+///
+/// Returns `None` when the input doesn't end in `.src.rpm`, lacks the
+/// minimum two `-` separators, or has empty version/release segments
+/// — all signs the manifest is malformed, in which case the caller
+/// keeps the raw `source_rpm` and skips the indexed lookup path.
+#[must_use]
+pub fn source_rpm_name(s: &str) -> Option<String> {
+    // Tolerate the alternative `.nosrc.rpm` extension (used when a
+    // SourceN: cannot be redistributed); the name shape is identical.
+    let stem = s
+        .strip_suffix(".src.rpm")
+        .or_else(|| s.strip_suffix(".nosrc.rpm"))?;
+    let (head, release) = stem.rsplit_once('-')?;
+    if release.is_empty() {
+        return None;
+    }
+    let (name, version) = head.rsplit_once('-')?;
+    if name.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_rpm_name_simple() {
+        assert_eq!(source_rpm_name("foo-1.2.3-4.el9.src.rpm").as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn source_rpm_name_with_dashes_in_name() {
+        // The name itself contains `-` — splitting right-to-left
+        // correctly keeps the dashes inside the name segment.
+        assert_eq!(
+            source_rpm_name("foo-bar-baz-1.2.3-4.src.rpm").as_deref(),
+            Some("foo-bar-baz")
+        );
+    }
+
+    #[test]
+    fn source_rpm_name_handles_nosrc() {
+        assert_eq!(
+            source_rpm_name("foo-1.2-3.el9.nosrc.rpm").as_deref(),
+            Some("foo")
+        );
+    }
+
+    #[test]
+    fn source_rpm_name_rejects_malformed() {
+        assert_eq!(source_rpm_name(""), None);
+        assert_eq!(source_rpm_name("nodashes.src.rpm"), None);
+        assert_eq!(source_rpm_name("only-one-dash"), None);
+        assert_eq!(source_rpm_name("foo-1.2-3.el9.x86_64.rpm"), None);
+        assert_eq!(source_rpm_name("-1.2-3.src.rpm"), None);
+    }
+}

@@ -169,7 +169,12 @@ impl MacroRegistry {
     /// (`%[...]`), and any other macro token returns `None` — those
     /// forms need runtime expansion semantics not available at lint
     /// time. `%%` is preserved as a literal `%` in the output.
-    fn expand_body(&self, body: &str, depth: u8) -> Option<String> {
+    ///
+    /// Public so the RPM-REPO-* lints can expand mixed strings like
+    /// `Name: %{prog_name}-%{edition}` — `expand_to_literal` only
+    /// handles pure-macro names, which is useless for real-world
+    /// `Version:` / `Release:` declarations.
+    pub fn expand_body(&self, body: &str, depth: u8) -> Option<String> {
         use crate::macro_lexer::{MacroKind, scan_macro_ref};
 
         if body.len() > MAX_EXPAND_BODY {

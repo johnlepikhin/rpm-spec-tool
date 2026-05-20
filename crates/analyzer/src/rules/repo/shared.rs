@@ -9,8 +9,8 @@
 use std::sync::Arc;
 
 use rpm_spec::ast::{
-    BoolDep, Conditional, DepAtom, DepExpr, PreambleContent, PreambleItem, Section, Span, SpecFile,
-    SpecItem, Tag, TagValue, VerOp,
+    BoolDep, BuildScriptKind, Conditional, DepAtom, DepExpr, PreambleContent, PreambleItem,
+    Section, ShellBody, Span, SpecFile, SpecItem, Tag, TagValue, VerOp,
 };
 use rpm_spec_profile::{MacroRegistry, Profile};
 use rpm_spec_repo_core::{CapFlags, Capability, EVR, RepoUniverse};
@@ -23,7 +23,10 @@ use crate::diagnostic::Diagnostic;
 /// convention used by `branch_coverage`, `files::classifier` and other
 /// analyzer modules — chains like `%{python3_pkgversion} →
 /// %{__python3_pkgversion} → "3.11"` resolve well within 8 hops.
-const MACRO_EXPAND_DEPTH: u8 = 8;
+///
+/// Public so RPM-REPO-* siblings (e.g. `upgrade_check.rs`) share one
+/// budget rather than each carrying a private copy that can drift.
+pub const MACRO_EXPAND_DEPTH: u8 = 8;
 
 /// Bundle of state every RPM-REPO-* rule needs. Previously also
 /// cached a priority map; with the SQLite-backed universe, priority
@@ -215,33 +218,21 @@ fn walk_spec_conditional<'a>(
     bcond: &BcondMap,
     out: &mut Vec<&'a PreambleItem<Span>>,
 ) {
-    let all_preceding_false = true;
+    // First `Ok(true)` arm is the active one — return immediately.
+    // `Err(_)` indeterminate aborts the whole conditional (we can't
+    // prove subsequent branches' antecedents are decisively false,
+    // and `%else` requires that proof too). `Ok(false)` advances.
     for branch in &cond.branches {
         match evaluate_branch(branch.kind, &branch.expr, profile, bcond) {
-            Ok(true) if all_preceding_false => {
+            Ok(true) => {
                 collect_active_spec_items(&branch.body, profile, bcond, out);
                 return;
             }
-            Ok(true) => {
-                // A preceding branch was indeterminate; we can't
-                // prove this branch fires (the preceding ones might
-                // have been the active arm). Bail out — neither this
-                // branch nor `%else` can be safely included.
-                return;
-            }
             Ok(false) => continue,
-            Err(_) => {
-                // Indeterminate condition: skip this branch AND
-                // bail on the rest (we can't prove subsequent
-                // guards' antecedents, and `%else` requires every
-                // preceding to be decisively false).
-                return;
-            }
+            Err(_) => return,
         }
     }
-    if all_preceding_false
-        && let Some(els) = &cond.otherwise
-    {
+    if let Some(els) = &cond.otherwise {
         collect_active_spec_items(els, profile, bcond, out);
     }
 }
@@ -269,21 +260,19 @@ fn walk_preamble_conditional<'a>(
     bcond: &BcondMap,
     out: &mut Vec<&'a PreambleItem<Span>>,
 ) {
-    let all_preceding_false = true;
+    // Same policy as `walk_spec_conditional`: first decisive `true`
+    // wins, indeterminate aborts the whole conditional.
     for branch in &cond.branches {
         match evaluate_branch(branch.kind, &branch.expr, profile, bcond) {
-            Ok(true) if all_preceding_false => {
+            Ok(true) => {
                 collect_active_preamble_contents(&branch.body, profile, bcond, out);
                 return;
             }
-            Ok(true) => return,
             Ok(false) => continue,
             Err(_) => return,
         }
     }
-    if all_preceding_false
-        && let Some(els) = &cond.otherwise
-    {
+    if let Some(els) = &cond.otherwise {
         collect_active_preamble_contents(els, profile, bcond, out);
     }
 }
@@ -459,6 +448,111 @@ fn resolve_text(text: &str, macros: &MacroRegistry) -> Option<String> {
         text.trim_start_matches('%').trim_start_matches('{'),
         MACRO_EXPAND_DEPTH,
     )
+}
+
+/// Collect every active build-script section's `(kind, body, span)`
+/// triple under `Conditional` gating. Shared between RPM-REPO-010
+/// and RPM-REPO-011 so the section-list and conditional policy stay
+/// in sync. Indeterminate or non-first-active branches are skipped
+/// — same false-negative-over-false-positive trade-off the other
+/// repo lints use.
+pub fn collect_active_build_scripts<'a>(
+    items: &'a [SpecItem<Span>],
+    profile: &Profile,
+    bcond: &BcondMap,
+) -> Vec<(BuildScriptKind, &'a ShellBody<Span>, Span)> {
+    let mut out = Vec::new();
+    collect_active_build_scripts_inner(items, profile, bcond, &mut out);
+    out
+}
+
+fn collect_active_build_scripts_inner<'a>(
+    items: &'a [SpecItem<Span>],
+    profile: &Profile,
+    bcond: &BcondMap,
+    out: &mut Vec<(BuildScriptKind, &'a ShellBody<Span>, Span)>,
+) {
+    for item in items {
+        match item {
+            SpecItem::Section(boxed) => {
+                if let Section::BuildScript { kind, body, data } = boxed.as_ref() {
+                    out.push((*kind, body, *data));
+                }
+            }
+            SpecItem::Conditional(cond) => {
+                walk_build_script_conditional(cond, profile, bcond, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn walk_build_script_conditional<'a>(
+    cond: &'a Conditional<Span, SpecItem<Span>>,
+    profile: &Profile,
+    bcond: &BcondMap,
+    out: &mut Vec<(BuildScriptKind, &'a ShellBody<Span>, Span)>,
+) {
+    // Walk branches in order; the first `Ok(true)` arm is the active
+    // one and stops the walk. `Ok(false)` lets us continue (preceding
+    // arms decisively didn't fire); `Err(_)` is indeterminate, and
+    // policy is to bail conservatively (we can't prove `%else`'s
+    // antecedents are decisively false either).
+    for branch in &cond.branches {
+        match evaluate_branch(branch.kind, &branch.expr, profile, bcond) {
+            Ok(true) => {
+                collect_active_build_scripts_inner(&branch.body, profile, bcond, out);
+                return;
+            }
+            Ok(false) => continue,
+            Err(_) => return,
+        }
+    }
+    // `%else` fires only when every `%if`/`%elif` was decisively
+    // false (the `Ok(false) => continue` arm above is what carries
+    // us here from a fully-falsified chain).
+    if let Some(els) = &cond.otherwise {
+        collect_active_build_scripts_inner(els, profile, bcond, out);
+    }
+}
+
+/// Compute the inclusive source-line ranges inside `body` that the
+/// active profile will NOT execute. Used by RPM-REPO-010/011 to skip
+/// tool-path / command scans inside inactive `%if` arms within a
+/// build-script section. Indeterminate branches are conservatively
+/// inactive; `%else` is inactive whenever any sibling is active OR
+/// indeterminate.
+pub fn inactive_line_ranges(
+    body: &ShellBody<Span>,
+    profile: &Profile,
+    bcond: &BcondMap,
+) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    for cond in &body.conditionals {
+        let mut active_branch_idx: Option<usize> = None;
+        let mut indeterminate_seen = false;
+        for (i, branch) in cond.branches.iter().enumerate() {
+            match evaluate_branch(branch.kind, &branch.expr, profile, bcond) {
+                Ok(true) if !indeterminate_seen && active_branch_idx.is_none() => {
+                    active_branch_idx = Some(i);
+                }
+                Ok(true) | Ok(false) => {}
+                Err(_) => indeterminate_seen = true,
+            }
+        }
+        for (i, branch) in cond.branches.iter().enumerate() {
+            if Some(i) != active_branch_idx {
+                let span = branch.data;
+                out.push((span.start_line, span.end_line));
+            }
+        }
+        if let Some(els) = &cond.otherwise
+            && (active_branch_idx.is_some() || indeterminate_seen)
+        {
+            out.push((els.data.start_line, els.data.end_line));
+        }
+    }
+    out
 }
 
 #[cfg(all(test, feature = "test-fixtures"))]

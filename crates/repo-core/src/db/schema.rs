@@ -1,4 +1,4 @@
-//! Per-repo SQLite schema (v1).
+//! Per-repo SQLite schema (v3).
 //!
 //! One database file per (repo, snapshot revision). The cache layout
 //! pins each `repo.db` under `~/.cache/rpm-spec-tool/repos/<sha-baseurl>/
@@ -29,7 +29,16 @@
 /// Current schema version. Bumped when the DDL below changes in any
 /// non-additive way; older databases are evicted by the cache layer
 /// and re-built from XML.
-pub const SCHEMA_VERSION: u32 = 2;
+///
+/// History:
+/// - v1: initial layout (packages + caps + files + advisories).
+/// - v2: added `idx_caps_pkg_kind` for the resolver hot path.
+/// - v3: added `source_name TEXT` column to packages + index
+///   `idx_packages_source_name`. Lets `matrix upgrade-sim` and the
+///   RPM-REPO-030/031 lints map a spec's `Name:` to its existing
+///   binary publications in one indexed query (was: full table scan
+///   parsing `source_rpm` strings).
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Full DDL applied to a freshly created database.
 pub const CREATE_SQL: &str = r"
@@ -46,13 +55,17 @@ CREATE TABLE packages (
     release         TEXT    NOT NULL,
     arch            TEXT    NOT NULL,
     source_rpm      TEXT,
+    -- Pre-parsed source-package name (the `foo` in `foo-1.2-3.el9.src.rpm`).
+    -- Indexed below for spec→binary lookups by the upgrade-sim path.
+    source_name     TEXT,
     summary         TEXT    NOT NULL DEFAULT '',
     size_installed  INTEGER NOT NULL DEFAULT 0,
     checksum_alg    TEXT    NOT NULL,
     checksum_hex    TEXT    NOT NULL,
     location        TEXT    NOT NULL DEFAULT ''
 );
-CREATE INDEX idx_packages_name ON packages(name);
+CREATE INDEX idx_packages_name        ON packages(name);
+CREATE INDEX idx_packages_source_name ON packages(source_name);
 
 CREATE TABLE caps (
     pkg_id  INTEGER NOT NULL REFERENCES packages(pkg_id),

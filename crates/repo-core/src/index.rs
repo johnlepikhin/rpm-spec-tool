@@ -278,6 +278,36 @@ impl RepoUniverse {
         Ok(out)
     }
 
+    /// Every binary `(ProviderRef, NEVRA)` whose source RPM matches
+    /// `source_name` across every cached repo in this universe. Drives
+    /// `matrix upgrade-sim` and the RPM-REPO-030/031 lints — they ask
+    /// "what's currently published for the source named X?" and pick
+    /// the highest EVR per (subpackage name, arch).
+    ///
+    /// Returned order: insertion order across repos (priority unsorted
+    /// — callers reduce as they see fit). Dedup is by `ProviderRef`.
+    pub fn binaries_built_from(
+        &self,
+        source_name: &str,
+    ) -> Result<Vec<(ProviderRef, NEVRA)>, RepoError> {
+        use std::collections::HashSet;
+        let mut seen: HashSet<ProviderRef> = HashSet::new();
+        let mut out: Vec<(ProviderRef, NEVRA)> = Vec::new();
+        for db in &self.dbs {
+            let repo_id = db.repo_id()?;
+            for (pkg_id, nevra) in db.pkg_briefs_by_source_name(source_name)? {
+                let pref = ProviderRef {
+                    repo_id: repo_id.clone(),
+                    pkg_id,
+                };
+                if seen.insert(pref.clone()) {
+                    out.push((pref, nevra));
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Hot-path "does `pref` satisfy `req`?" check. Routes to
     /// [`crate::db::RepoDb::package_satisfies`] without
     /// materialising the full `Package`.
