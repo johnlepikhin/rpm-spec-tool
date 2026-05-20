@@ -1,0 +1,7 @@
+Archive: ALT Linux p10
+Component: checkinstall
+Version: 1779090488
+Origin: ALT Linux Team
+Label: p10
+Architecture: x86_64
+NotAutomatic: false

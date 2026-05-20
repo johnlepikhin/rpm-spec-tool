@@ -26,7 +26,15 @@ pub fn decompress(name: &str, bytes: &[u8]) -> Result<Vec<u8>, RepoError> {
         return read_capped(name, dec);
     }
     if name.ends_with(".xz") {
-        return read_capped(name, xz2::read::XzDecoder::new(bytes));
+        // ALT Linux's `pkglist.classic.xz` is concatenated
+        // multi-stream xz (each apt-rpm component produces its own
+        // stream, then they're catted together). Single-stream
+        // `XzDecoder::new` stops at the first stream boundary and
+        // emits "corrupt xz stream" on what's actually a valid file.
+        // `new_multi_decoder` walks the whole chain. Multi-stream
+        // also handles the trivial single-stream case (rpm-md
+        // primary.xml.xz, etc.), so we use it unconditionally.
+        return read_capped(name, xz2::read::XzDecoder::new_multi_decoder(bytes));
     }
     if name.ends_with(".bz2") {
         // bz2 is rare in modern rpm-md; the rare time we see it on a

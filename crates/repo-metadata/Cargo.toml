@@ -12,9 +12,9 @@ repository.workspace   = true
 name = "rpm_spec_repo_metadata"
 
 [features]
-default  = ["rpm-md"]
+default  = ["rpm-md", "apt-rpm"]
 rpm-md   = []
-apt-rpm  = []  # ALT Linux backend (stub in M1, full impl in M3)
+apt-rpm  = []  # ALT Linux backend (full impl as of M3 PR6)
 # Optional, off by default until the real verifier ships (see `gpg.rs`).
 gpg      = []  # warn-only stub; real verifier deferred
 
