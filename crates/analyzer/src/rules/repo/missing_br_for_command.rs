@@ -528,7 +528,7 @@ mod tests {
     use crate::rules::repo::test_fixtures::redos_profile;
     use crate::rules::test_support::run_repo_lint;
     use rpm_spec_repo_core::{
-        CapFlags, Capability, NEVRA, Package, PkgChecksum, RepoIndex, RepoUniverse,
+        Capability, NEVRA, Package, PkgChecksum, RepoIndex, RepoUniverse,
     };
     use time::OffsetDateTime;
 
@@ -542,11 +542,7 @@ mod tests {
                 arch: Arc::from("x86_64"),
             },
             repo_id: Arc::from("baseos"),
-            provides: vec![Capability {
-                name: Arc::from(name),
-                flags: CapFlags::None,
-                evr: None,
-            }],
+            provides: vec![Capability::unversioned(Arc::from(name))],
             requires: Vec::new(),
             conflicts: Vec::new(),
             obsoletes: Vec::new(),

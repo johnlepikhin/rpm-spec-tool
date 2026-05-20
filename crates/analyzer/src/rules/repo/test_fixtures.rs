@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use rpm_spec_profile::Profile;
 use rpm_spec_repo_core::{
-    CapFlags, Capability, NEVRA, Package, PkgChecksum, RepoIndex, RepoUniverse,
+    Capability, NEVRA, Package, PkgChecksum, RepoIndex, RepoUniverse,
 };
 use time::OffsetDateTime;
 
@@ -41,11 +41,7 @@ pub fn tiny_universe() -> Arc<RepoUniverse> {
             repo_id: Arc::from("baseos"),
             provides: provides
                 .into_iter()
-                .map(|p| Capability {
-                    name: Arc::from(p),
-                    flags: CapFlags::None,
-                    evr: None,
-                })
+                .map(Capability::unversioned)
                 .collect(),
             requires: Vec::new(),
             conflicts: Vec::new(),

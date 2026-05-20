@@ -417,7 +417,6 @@ impl RepoDb {
         pkg_id: i64,
         req: &crate::package::Capability,
     ) -> Result<bool, RepoError> {
-        use crate::package::CapFlags;
         let guard = self.lock();
         let nevra = guard
             .prepare_cached(
@@ -442,13 +441,17 @@ impl RepoDb {
         let Some(nevra) = nevra else {
             return Ok(false);
         };
+        // Name match against the package's primary NEVRA — Unversioned
+        // requires accept any provider; versioned ones check via
+        // `CapVersion::matches(compare_rpm)`. The new enum collapses
+        // the old `flags == None` / `evr.is_some()` two-step into one.
         if nevra.name.as_ref() == req.name.as_ref() {
-            if req.flags == CapFlags::None {
+            if req.version.is_unversioned() {
                 return Ok(true);
             }
-            if let Some(req_evr) = req.evr.as_ref() {
+            if let Some(req_evr) = req.version.evr() {
                 let prov_evr = nevra.evr();
-                if req.flags.matches(prov_evr.compare_rpm(req_evr)) {
+                if req.version.matches(prov_evr.compare_rpm(req_evr)) {
                     return Ok(true);
                 }
             }
@@ -465,17 +468,17 @@ impl RepoDb {
         })?;
         for r in rows {
             let (epoch, version, release) = r?;
-            if req.flags == CapFlags::None {
+            if req.version.is_unversioned() {
                 return Ok(true);
             }
-            let Some(req_evr) = req.evr.as_ref() else {
+            let Some(req_evr) = req.version.evr() else {
                 continue;
             };
             let (Some(v), Some(r)) = (version.as_deref(), release.as_deref()) else {
                 continue;
             };
             let prov_evr = crate::evr::EVR::new(epoch, v, r);
-            if req.flags.matches(prov_evr.compare_rpm(req_evr)) {
+            if req.version.matches(prov_evr.compare_rpm(req_evr)) {
                 return Ok(true);
             }
         }
@@ -1103,7 +1106,7 @@ fn insert_cap_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::{CapFlags, PkgChecksum};
+    use crate::package::{CapVersion, PkgChecksum};
 
     fn sample_pkg(name: &str, version: &str) -> Package {
         Package {
@@ -1115,16 +1118,11 @@ mod tests {
                 arch: Arc::from("x86_64"),
             },
             repo_id: Arc::from("test"),
-            provides: vec![Capability {
-                name: Arc::from(name),
-                flags: CapFlags::None,
-                evr: None,
-            }],
-            requires: vec![Capability {
-                name: Arc::from("glibc"),
-                flags: CapFlags::GE,
-                evr: Some(crate::EVR::new(Some(0), "2.28", "0")),
-            }],
+            provides: vec![Capability::unversioned(Arc::from(name))],
+            requires: vec![Capability::ge(
+                "glibc",
+                crate::EVR::new(Some(0), "2.28", "0"),
+            )],
             conflicts: Vec::new(),
             obsoletes: Vec::new(),
             recommends: Vec::new(),
@@ -1199,11 +1197,7 @@ mod tests {
         )
         .unwrap();
         let mut pkg = sample_pkg("systemd-devel", "252");
-        pkg.provides.push(Capability {
-            name: Arc::from("pkgconfig(libsystemd)"),
-            flags: CapFlags::None,
-            evr: None,
-        });
+        pkg.provides.push(Capability::unversioned(Arc::from("pkgconfig(libsystemd)")));
         db.ingest_packages(&[pkg]).unwrap();
 
         let providers = db.pkg_ids_providing("pkgconfig(libsystemd)").unwrap();
@@ -1308,33 +1302,21 @@ mod tests {
     #[test]
     fn package_satisfies_via_name_no_version() {
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides("bash", "5.1.8", vec![])]);
-        let req = Capability {
-            name: Arc::from("bash"),
-            flags: CapFlags::None,
-            evr: None,
-        };
+        let req = Capability::unversioned(Arc::from("bash"));
         assert!(db.package_satisfies(ids[0], &req).unwrap());
     }
 
     #[test]
     fn package_satisfies_via_name_ge_pass() {
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides("bash", "5.1.8", vec![])]);
-        let req = Capability {
-            name: Arc::from("bash"),
-            flags: CapFlags::GE,
-            evr: Some(crate::EVR::new(Some(0), "5.0.0", "1.el9")),
-        };
+        let req = Capability::ge("bash", crate::EVR::new(Some(0), "5.0.0", "1.el9"));
         assert!(db.package_satisfies(ids[0], &req).unwrap());
     }
 
     #[test]
     fn package_satisfies_via_name_ge_fail() {
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides("bash", "5.1.8", vec![])]);
-        let req = Capability {
-            name: Arc::from("bash"),
-            flags: CapFlags::GE,
-            evr: Some(crate::EVR::new(Some(0), "6.0.0", "1.el9")),
-        };
+        let req = Capability::ge("bash", crate::EVR::new(Some(0), "6.0.0", "1.el9"));
         assert!(!db.package_satisfies(ids[0], &req).unwrap());
     }
 
@@ -1346,17 +1328,9 @@ mod tests {
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides(
             "systemd-devel",
             "252",
-            vec![Capability {
-                name: Arc::from("pkgconfig(libsystemd)"),
-                flags: CapFlags::None,
-                evr: None,
-            }],
+            vec![Capability::unversioned(Arc::from("pkgconfig(libsystemd)"))],
         )]);
-        let req = Capability {
-            name: Arc::from("pkgconfig(libsystemd)"),
-            flags: CapFlags::None,
-            evr: None,
-        };
+        let req = Capability::unversioned(Arc::from("pkgconfig(libsystemd)"));
         assert!(db.package_satisfies(ids[0], &req).unwrap());
     }
 
@@ -1369,17 +1343,9 @@ mod tests {
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides(
             "libfoo",
             "1.2",
-            vec![Capability {
-                name: Arc::from("foo"),
-                flags: CapFlags::EQ,
-                evr: Some(crate::EVR::new(Some(0), "1.2", "3")),
-            }],
+            vec![Capability::eq("foo", crate::EVR::new(Some(0), "1.2", "3"))],
         )]);
-        let req = Capability {
-            name: Arc::from("foo"),
-            flags: CapFlags::GE,
-            evr: Some(crate::EVR::new(Some(0), "1.0", "1")),
-        };
+        let req = Capability::ge("foo", crate::EVR::new(Some(0), "1.0", "1"));
         assert!(db.package_satisfies(ids[0], &req).unwrap());
     }
 
@@ -1391,28 +1357,16 @@ mod tests {
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides(
             "libfoo",
             "1.2",
-            vec![Capability {
-                name: Arc::from("foo"),
-                flags: CapFlags::None,
-                evr: None,
-            }],
+            vec![Capability::unversioned(Arc::from("foo"))],
         )]);
-        let req = Capability {
-            name: Arc::from("foo"),
-            flags: CapFlags::GE,
-            evr: Some(crate::EVR::new(Some(0), "1.0", "1")),
-        };
+        let req = Capability::ge("foo", crate::EVR::new(Some(0), "1.0", "1"));
         assert!(!db.package_satisfies(ids[0], &req).unwrap());
     }
 
     #[test]
     fn package_satisfies_eq_exact() {
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides("bash", "5.1.8", vec![])]);
-        let req = Capability {
-            name: Arc::from("bash"),
-            flags: CapFlags::EQ,
-            evr: Some(crate::EVR::new(Some(0), "5.1.8", "1.el9")),
-        };
+        let req = Capability::eq("bash", crate::EVR::new(Some(0), "5.1.8", "1.el9"));
         assert!(db.package_satisfies(ids[0], &req).unwrap());
     }
 
@@ -1421,11 +1375,7 @@ mod tests {
         // Package name = "bash", no virtual provides. A request for
         // "glibc" must not be satisfied.
         let (db, ids) = satisfies_fixture(vec![pkg_with_provides("bash", "5.1.8", vec![])]);
-        let req = Capability {
-            name: Arc::from("glibc"),
-            flags: CapFlags::None,
-            evr: None,
-        };
+        let req = Capability::unversioned(Arc::from("glibc"));
         assert!(!db.package_satisfies(ids[0], &req).unwrap());
     }
 

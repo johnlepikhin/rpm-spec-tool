@@ -17,13 +17,14 @@
 //! resolver wiring.
 
 use std::collections::HashSet;
+#[cfg(test)]
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
 use rpm_spec_analyzer::profile::Profile;
 use rpm_spec_analyzer::session::parse;
-use rpm_spec_repo_core::{CapFlags, Capability, NEVRA, RepoUniverse};
+use rpm_spec_repo_core::{Capability, NEVRA, RepoUniverse};
 use rpm_spec_repo_resolver::{ConflictChain, SolveRequest, Solution, UnsatCore, solve};
 use serde::Serialize;
 
@@ -74,14 +75,7 @@ pub fn solve_for(
 /// itself does the EVR work.
 #[must_use]
 pub fn literal_capabilities(names: &[String]) -> Vec<Capability> {
-    names
-        .iter()
-        .map(|n| Capability {
-            name: Arc::from(n.as_str()),
-            flags: CapFlags::None,
-            evr: None,
-        })
-        .collect()
+    names.iter().map(|n| Capability::unversioned(n.as_str())).collect()
 }
 
 /// Convert the resolver's raw `UnsatCore` into the dedup'd shape
@@ -201,8 +195,7 @@ mod tests {
         let caps = literal_capabilities(&["bash".into(), "make".into()]);
         assert_eq!(caps.len(), 2);
         assert_eq!(caps[0].name.as_ref(), "bash");
-        assert!(matches!(caps[0].flags, CapFlags::None));
-        assert!(caps[0].evr.is_none());
+        assert!(caps[0].version.is_unversioned());
     }
 
     #[test]
@@ -217,11 +210,7 @@ mod tests {
     fn dedup_collapses_repeated_unmet_atoms() {
         use rpm_spec_repo_core::Dependency;
         use rpm_spec_repo_resolver::{DepProvenance, UnsatItem};
-        let dep = Dependency {
-            name: Arc::from("foo"),
-            flags: CapFlags::None,
-            evr: None,
-        };
+        let dep = Dependency::unversioned("foo");
         let mut core = UnsatCore {
             unsatisfied: vec![
                 UnsatItem {

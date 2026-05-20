@@ -8,50 +8,55 @@ use std::sync::Arc;
 
 use crate::error::RepoError;
 use crate::evr::EVR;
-use crate::package::{CapFlags, Capability, PkgChecksum};
+use crate::package::{CapVersion, Capability, PkgChecksum};
 
-/// Map [`CapFlags`] to the stable on-disk discriminator.
+// SQL discriminator strings for [`crate::package::CapVersion`].
+// **Stable across releases** — changing any of these constants is an
+// on-disk-cache schema break and MUST be paired with a
+// [`super::schema::SCHEMA_VERSION`] bump + cache-eviction note in the
+// release log. The strings live here (alongside the column read/write
+// helpers) rather than on the enum itself so the domain type stays
+// free of persistence concerns.
+const TAG_UNVERSIONED: &str = "NONE";
+const TAG_EQ: &str = "EQ";
+const TAG_LT: &str = "LT";
+const TAG_LE: &str = "LE";
+const TAG_GT: &str = "GT";
+const TAG_GE: &str = "GE";
+
+/// Map a [`CapVersion`] to the stable on-disk discriminator string
+/// used in the `caps.flags` SQL column.
 #[must_use]
-pub fn cap_flags_to_str(f: CapFlags) -> &'static str {
-    match f {
-        CapFlags::None => "NONE",
-        CapFlags::EQ => "EQ",
-        CapFlags::LT => "LT",
-        CapFlags::LE => "LE",
-        CapFlags::GT => "GT",
-        CapFlags::GE => "GE",
-    }
-}
-
-/// Reverse of [`cap_flags_to_str`]. Unknown strings → `Err` because
-/// silently coercing to `None` would mask a corrupt cache.
-pub fn cap_flags_from_str(s: &str) -> Result<CapFlags, RepoError> {
-    match s {
-        "NONE" => Ok(CapFlags::None),
-        "EQ" => Ok(CapFlags::EQ),
-        "LT" => Ok(CapFlags::LT),
-        "LE" => Ok(CapFlags::LE),
-        "GT" => Ok(CapFlags::GT),
-        "GE" => Ok(CapFlags::GE),
-        other => Err(RepoError::Cache(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("unknown cap flags discriminator: {other}"),
-        ))),
+fn cap_version_to_db_tag(v: &CapVersion) -> &'static str {
+    match v {
+        CapVersion::Unversioned => TAG_UNVERSIONED,
+        CapVersion::Eq(_) => TAG_EQ,
+        CapVersion::Lt(_) => TAG_LT,
+        CapVersion::Le(_) => TAG_LE,
+        CapVersion::Gt(_) => TAG_GT,
+        CapVersion::Ge(_) => TAG_GE,
     }
 }
 
 /// Decompose a [`Capability`] into the column tuple used by `caps`.
+/// The `flags` column uses the stable [`cap_version_to_db_tag`] form;
+/// `epoch`/`version`/`release` are `NULL` for `Unversioned` and
+/// populated for every variant carrying an EVR.
 #[must_use]
 pub fn capability_columns(
     cap: &Capability,
 ) -> (&str, &'static str, Option<u32>, Option<&str>, Option<&str>) {
-    let (epoch, version, release) = match &cap.evr {
-        Some(evr) => (Some(evr.epoch), Some(evr.version.as_str()), Some(evr.release.as_str())),
+    let (epoch, version, release) = match cap.version.evr() {
+        Some(evr) => (
+            Some(evr.epoch),
+            Some(evr.version.as_str()),
+            Some(evr.release.as_str()),
+        ),
         None => (None, None, None),
     };
     (
         cap.name.as_ref(),
-        cap_flags_to_str(cap.flags),
+        cap_version_to_db_tag(&cap.version),
         epoch,
         version,
         release,
@@ -59,7 +64,12 @@ pub fn capability_columns(
 }
 
 /// Build a [`Capability`] from raw column values. Returns `Err` if the
-/// flag string is unknown.
+/// flag discriminator is unknown.
+///
+/// Defensive recovery: a row that claims a versioned operator but has
+/// `NULL` for any EVR column degrades to `CapVersion::Unversioned`
+/// rather than failing the whole load. The lookup then treats it as
+/// name-only — user sees a degraded result, not a hard cache wipe.
 pub fn capability_from_columns(
     name: &str,
     flags_str: &str,
@@ -67,19 +77,42 @@ pub fn capability_from_columns(
     version: Option<&str>,
     release: Option<&str>,
 ) -> Result<Capability, RepoError> {
-    let flags = cap_flags_from_str(flags_str)?;
-    let evr = match (version, release) {
+    let evr_opt = match (version, release) {
         (Some(v), Some(r)) => Some(EVR::new(epoch, v, r)),
-        // Defensive: NULL in just one column is a corruption signal,
-        // but we don't fail the whole load — emit `None` so the lookup
-        // treats it as versionless and the user only sees a degraded
-        // result, not a hard cache wipe.
         _ => None,
+    };
+    let cap_version = match (flags_str, evr_opt) {
+        (s, _) if s == TAG_UNVERSIONED => CapVersion::Unversioned,
+        (s, Some(e)) if s == TAG_EQ => CapVersion::Eq(e),
+        (s, Some(e)) if s == TAG_LT => CapVersion::Lt(e),
+        (s, Some(e)) if s == TAG_LE => CapVersion::Le(e),
+        (s, Some(e)) if s == TAG_GT => CapVersion::Gt(e),
+        (s, Some(e)) if s == TAG_GE => CapVersion::Ge(e),
+        (s, None)
+            if s == TAG_EQ || s == TAG_LT || s == TAG_LE || s == TAG_GT || s == TAG_GE =>
+        {
+            // Partial-row corruption: versioned tag but NULL EVR. Log
+            // so operators with structured-log pipelines can detect
+            // cache-on-disk damage, then degrade gracefully (see fn
+            // doc) rather than failing the whole load.
+            tracing::warn!(
+                target: "rpm_spec_repo_core::db",
+                name = name,
+                flags = flags_str,
+                "cache row has versioned operator but NULL EVR — degrading to Unversioned",
+            );
+            CapVersion::Unversioned
+        }
+        (other, _) => {
+            return Err(RepoError::Cache(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unknown cap flags discriminator: {other}"),
+            )));
+        }
     };
     Ok(Capability {
         name: Arc::from(name),
-        flags,
-        evr,
+        version: cap_version,
     })
 }
 
@@ -153,6 +186,81 @@ pub fn source_rpm_name(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn evr() -> EVR {
+        EVR::new(Some(0), "1.0", "1")
+    }
+
+    #[test]
+    fn capability_columns_uses_canonical_tags() {
+        // Lock the wire-stable strings. Any change here MUST come with
+        // a `SCHEMA_VERSION` bump in `db::schema`.
+        let cases: &[(CapVersion, &str)] = &[
+            (CapVersion::Unversioned, "NONE"),
+            (CapVersion::Eq(evr()), "EQ"),
+            (CapVersion::Lt(evr()), "LT"),
+            (CapVersion::Le(evr()), "LE"),
+            (CapVersion::Gt(evr()), "GT"),
+            (CapVersion::Ge(evr()), "GE"),
+        ];
+        for (version, expected_tag) in cases {
+            let cap = Capability {
+                name: Arc::from("foo"),
+                version: version.clone(),
+            };
+            let (_, tag, _, _, _) = capability_columns(&cap);
+            assert_eq!(tag, *expected_tag, "wrong tag for {version:?}");
+        }
+    }
+
+    #[test]
+    fn capability_round_trip_through_columns() {
+        // Write → read → re-write must be a fixed point for every
+        // variant. Guards against silent serialization drift if either
+        // half of the encode/decode is tweaked in isolation.
+        let original = vec![
+            Capability::unversioned("bash"),
+            Capability::ge("glibc", EVR::new(Some(0), "2.34", "1")),
+            Capability::eq("cmake", EVR::new(Some(1), "3.26.5", "2.el9")),
+            Capability::lt("openssl", EVR::new(None, "4.0", "0")),
+        ];
+        for cap in original {
+            let (name, flags, epoch, ver, rel) = capability_columns(&cap);
+            let recovered = capability_from_columns(name, flags, epoch, ver, rel)
+                .expect("round-trip must succeed");
+            assert_eq!(recovered.name, cap.name);
+            assert_eq!(recovered.version, cap.version, "for {cap:?}");
+        }
+    }
+
+    #[test]
+    fn capability_from_columns_degrades_versioned_with_null_evr() {
+        // Partial-row corruption — a versioned tag (e.g. `GE`) with
+        // NULL EVR columns must degrade to `Unversioned` instead of
+        // failing the whole load.
+        for tag in ["EQ", "LT", "LE", "GT", "GE"] {
+            let cap = capability_from_columns("foo", tag, None, None, None)
+                .unwrap_or_else(|e| panic!("degradation must not error for {tag}: {e}"));
+            assert!(
+                matches!(cap.version, CapVersion::Unversioned),
+                "tag {tag} with NULL EVR should degrade to Unversioned, got {cap:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn capability_from_columns_unknown_tag_errors() {
+        let err = capability_from_columns("foo", "WAT", None, None, None).unwrap_err();
+        match err {
+            RepoError::Cache(io_err) => {
+                assert!(
+                    io_err.to_string().contains("unknown cap flags discriminator"),
+                    "unexpected: {io_err}"
+                );
+            }
+            other => panic!("expected Cache error, got {other:?}"),
+        }
+    }
 
     #[test]
     fn source_rpm_name_simple() {

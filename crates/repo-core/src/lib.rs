@@ -47,7 +47,7 @@ pub use error::{ErrorLocation, HttpError, RepoError, SolveError};
 pub use evr::EVR;
 pub use index::{Advisory, AdvisorySeverity, ProviderRef, RepoId, RepoIndex, RepoRevision, RepoUniverse};
 pub use package::{
-    CapFlags, Capability, ChecksumParseError, Dependency, NEVRA, Package, PkgChecksum,
+    CapVersion, Capability, ChecksumParseError, Dependency, NEVRA, Package, PkgChecksum,
 };
 
 // Re-exports of config-layer types defined in `rpm-spec-profile`.

@@ -59,37 +59,96 @@ impl std::fmt::Display for NEVRA {
     }
 }
 
-/// Sense flags on a [`Capability`]. The wire format from primary.xml
-/// uses string tokens; this enum keeps them packed.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum CapFlags {
-    /// No version constraint — `Requires: foo` form.
-    None,
-    EQ,
-    LT,
-    LE,
-    GT,
-    GE,
+/// Version constraint on a [`Capability`] — parse-don't-validate
+/// replacement for the old `flags: CapFlags + evr: Option<EVR>` pair.
+///
+/// The old shape allowed `CapFlags::None + Some(evr)` and
+/// `CapFlags::EQ + None`; both were parser bugs but cost a runtime
+/// `debug_assert!` to catch. With the enum, those states cease to
+/// exist at the type level.
+///
+/// Variants carry the EVR by value. There's no `Box`-wrapping
+/// because `EVR` is ~64 bytes (three `String` + `u32`), comparable
+/// to `Option<EVR>` after niche optimisation — the enum is no larger
+/// than the struct it replaces.
+///
+/// Serde format mirrors the JSON shape downstream tools expect: a
+/// `tag = "op"` discriminant with the EVR fields inlined. Backward
+/// compat with the iter4 wire format is **not** preserved (no
+/// downstream consumer exists yet); the SQLite layer in
+/// `crate::db::convert` translates explicitly between this enum and
+/// the historical `flags TEXT + epoch/version/release` columns so
+/// existing on-disk snapshots load unchanged.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CapVersion {
+    /// `Requires: foo` — name match only, no EVR constraint.
+    Unversioned,
+    /// `Requires: foo = E:V-R`.
+    Eq(EVR),
+    /// `Requires: foo < E:V-R`.
+    Lt(EVR),
+    /// `Requires: foo <= E:V-R`.
+    Le(EVR),
+    /// `Requires: foo > E:V-R`.
+    Gt(EVR),
+    /// `Requires: foo >= E:V-R`.
+    Ge(EVR),
 }
 
-impl CapFlags {
-    /// Map a three-way comparison (`provider_evr.cmp(required_evr)`)
-    /// onto a `CapFlags` predicate. The single source of truth for
-    /// EVR-vs-flag matching — both [`crate::db::RepoDb`] (SQLite
-    /// satisfies path) and `repo-resolver` (lookup / solver) call
-    /// through here so the contract can't drift.
+impl CapVersion {
+    /// Borrow the constraint's EVR, if any. `Unversioned` returns
+    /// `None`; every other variant returns `Some`.
     #[must_use]
-    pub fn matches(self, cmp: std::cmp::Ordering) -> bool {
+    pub fn evr(&self) -> Option<&EVR> {
+        match self {
+            Self::Unversioned => None,
+            Self::Eq(e) | Self::Lt(e) | Self::Le(e) | Self::Gt(e) | Self::Ge(e) => Some(e),
+        }
+    }
+
+    /// Operator string the user types (`=`, `<=`, `>=`, etc.).
+    /// `Unversioned` returns `None`. Display helpers use this; the
+    /// resolver doesn't need it.
+    #[must_use]
+    pub fn op_str(&self) -> Option<&'static str> {
+        match self {
+            Self::Unversioned => None,
+            Self::Eq(_) => Some("="),
+            Self::Lt(_) => Some("<"),
+            Self::Le(_) => Some("<="),
+            Self::Gt(_) => Some(">"),
+            Self::Ge(_) => Some(">="),
+        }
+    }
+
+    /// `true` iff a provider whose EVR compares to this constraint's
+    /// EVR with `cmp` satisfies the constraint.
+    ///
+    /// Single source of truth for "does provider EVR X satisfy
+    /// require X op Y" — both `crate::db::RepoDb` (SQLite satisfies
+    /// path) and `repo-resolver` (lookup / solver) route through
+    /// here. `Unversioned` matches any provider unconditionally.
+    #[must_use]
+    pub fn matches(&self, cmp: std::cmp::Ordering) -> bool {
         use std::cmp::Ordering::{Equal, Greater, Less};
         match self {
-            CapFlags::None => true,
-            CapFlags::EQ => cmp == Equal,
-            CapFlags::LT => cmp == Less,
-            CapFlags::LE => cmp != Greater,
-            CapFlags::GT => cmp == Greater,
-            CapFlags::GE => cmp != Less,
+            Self::Unversioned => true,
+            Self::Eq(_) => cmp == Equal,
+            Self::Lt(_) => cmp == Less,
+            Self::Le(_) => cmp != Greater,
+            Self::Gt(_) => cmp == Greater,
+            Self::Ge(_) => cmp != Less,
         }
+    }
+
+    /// `true` when this is `Unversioned` — convenience for the
+    /// "is this an EVR-less name match" predicate that appears in
+    /// every solver/lookup hot path.
+    #[must_use]
+    pub fn is_unversioned(&self) -> bool {
+        matches!(self, Self::Unversioned)
     }
 }
 
@@ -97,12 +156,12 @@ impl CapFlags {
 /// a `Requires:` / `Conflicts:` / `Obsoletes:` entry. The same shape
 /// covers both directions; the discriminator is which Vec the value
 /// lives in on [`Package`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Capability {
     pub name: Arc<str>,
-    pub flags: CapFlags,
-    /// `None` when [`CapFlags::None`]. Otherwise the constraint EVR.
-    pub evr: Option<EVR>,
+    /// Version constraint. `Unversioned` for unconstrained
+    /// `Requires: foo` form; otherwise a variant carrying the EVR.
+    pub version: CapVersion,
 }
 
 /// `Requires`/`Conflicts`/`Obsoletes` entries share Capability's shape.
@@ -110,6 +169,45 @@ pub struct Capability {
 pub type Dependency = Capability;
 
 impl Capability {
+    /// Constructor for the unversioned form. Shorthand for tests and
+    /// the common `Requires: foo` projection.
+    #[must_use]
+    pub fn unversioned(name: impl Into<Arc<str>>) -> Self {
+        Self {
+            name: name.into(),
+            version: CapVersion::Unversioned,
+        }
+    }
+
+    /// Constructor for `name = E:V-R`. The five `eq`/`lt`/`le`/`gt`/`ge`
+    /// helpers mirror the [`CapVersion`] variant set so callers don't
+    /// repeat the `Capability { name, version: CapVersion::Eq(evr) }`
+    /// struct-literal boilerplate at every test or builder site.
+    #[must_use]
+    pub fn eq(name: impl Into<Arc<str>>, evr: EVR) -> Self {
+        Self { name: name.into(), version: CapVersion::Eq(evr) }
+    }
+    /// Constructor for `name < E:V-R`. See [`Self::eq`].
+    #[must_use]
+    pub fn lt(name: impl Into<Arc<str>>, evr: EVR) -> Self {
+        Self { name: name.into(), version: CapVersion::Lt(evr) }
+    }
+    /// Constructor for `name <= E:V-R`. See [`Self::eq`].
+    #[must_use]
+    pub fn le(name: impl Into<Arc<str>>, evr: EVR) -> Self {
+        Self { name: name.into(), version: CapVersion::Le(evr) }
+    }
+    /// Constructor for `name > E:V-R`. See [`Self::eq`].
+    #[must_use]
+    pub fn gt(name: impl Into<Arc<str>>, evr: EVR) -> Self {
+        Self { name: name.into(), version: CapVersion::Gt(evr) }
+    }
+    /// Constructor for `name >= E:V-R`. See [`Self::eq`].
+    #[must_use]
+    pub fn ge(name: impl Into<Arc<str>>, evr: EVR) -> Self {
+        Self { name: name.into(), version: CapVersion::Ge(evr) }
+    }
+
     /// `true` when this capability is a file-path requirement
     /// (`Requires: /usr/bin/foo`). rpm-md publishes file ownership
     /// via the per-package filelist, so callers must route these
@@ -130,40 +228,29 @@ impl Capability {
     pub fn display(&self) -> String {
         use std::fmt::Write as _;
         let mut s = self.name.to_string();
-        if let Some(evr) = &self.evr {
-            // `CapFlags::None` + `Some(evr)` is a parser bug: the
-            // unconstrained sense should never carry a version. Assert
-            // in debug to catch backend regressions; in release fall
-            // back to the unconstrained form (no operator) so we never
-            // emit a silent `?` token to the user.
-            debug_assert!(
-                !matches!(self.flags, CapFlags::None),
-                "Capability::display: CapFlags::None must not carry evr ({})",
-                self.name
-            );
-            let op = match self.flags {
-                CapFlags::LT => Some("<"),
-                CapFlags::LE => Some("<="),
-                CapFlags::EQ => Some("="),
-                CapFlags::GE => Some(">="),
-                CapFlags::GT => Some(">"),
-                CapFlags::None => None,
-            };
-            let Some(op) = op else { return s };
-            s.push(' ');
-            s.push_str(op);
-            s.push(' ');
-            if evr.epoch > 0 {
-                // `write!` into the existing String avoids the
-                // intermediate allocation `push_str(&format!(...))`
-                // would create. Infallible on a String sink.
-                let _ = write!(&mut s, "{}:", evr.epoch);
-            }
-            s.push_str(&evr.version);
-            if !evr.release.is_empty() {
-                s.push('-');
-                s.push_str(&evr.release);
-            }
+        let Some(op) = self.version.op_str() else {
+            return s;
+        };
+        let Some(evr) = self.version.evr() else {
+            // Unreachable given `op_str()` only returns `Some` for
+            // variants that carry an EVR — but the enum is
+            // `#[non_exhaustive]` so the compiler can't prove that.
+            // Falling back to the bare name is the safe degradation.
+            return s;
+        };
+        s.push(' ');
+        s.push_str(op);
+        s.push(' ');
+        if evr.epoch > 0 {
+            // `write!` into the existing String avoids the
+            // intermediate allocation `push_str(&format!(...))`
+            // would create. Infallible on a String sink.
+            let _ = write!(&mut s, "{}:", evr.epoch);
+        }
+        s.push_str(&evr.version);
+        if !evr.release.is_empty() {
+            s.push('-');
+            s.push_str(&evr.release);
         }
         s
     }
@@ -360,56 +447,68 @@ impl Package {
 mod tests {
     use super::*;
 
-    fn cap(name: &str, flags: CapFlags, evr: Option<EVR>) -> Capability {
+    fn cap(name: &str, version: CapVersion) -> Capability {
         Capability {
             name: Arc::from(name),
-            flags,
-            evr,
+            version,
         }
     }
 
     #[test]
     fn is_file_path_recognises_absolute_paths() {
-        assert!(cap("/usr/bin/bash", CapFlags::None, None).is_file_path());
-        assert!(cap("/etc/passwd", CapFlags::None, None).is_file_path());
-        assert!(!cap("bash", CapFlags::None, None).is_file_path());
-        assert!(!cap("pkgconfig(foo)", CapFlags::None, None).is_file_path());
+        assert!(cap("/usr/bin/bash", CapVersion::Unversioned).is_file_path());
+        assert!(cap("/etc/passwd", CapVersion::Unversioned).is_file_path());
+        assert!(!cap("bash", CapVersion::Unversioned).is_file_path());
+        assert!(!cap("pkgconfig(foo)", CapVersion::Unversioned).is_file_path());
         // A leading-slash provide is treated as a path even with version
-        // — the lookup path is selected by name shape, not by flags.
-        assert!(cap("/lib64/libc.so.6", CapFlags::EQ, None).is_file_path());
+        // — the lookup path is selected by name shape, not by version.
+        let evr = EVR::new(None, "1.0", "1");
+        assert!(cap("/lib64/libc.so.6", CapVersion::Eq(evr)).is_file_path());
     }
 
     #[test]
     fn display_unconstrained_capability() {
-        assert_eq!(cap("foo", CapFlags::None, None).display(), "foo");
+        assert_eq!(cap("foo", CapVersion::Unversioned).display(), "foo");
     }
 
     #[test]
     fn display_versioned_capability() {
         let evr = EVR::new(None, "1.2", "3.el9");
-        assert_eq!(cap("foo", CapFlags::GE, Some(evr)).display(), "foo >= 1.2-3.el9");
+        assert_eq!(cap("foo", CapVersion::Ge(evr)).display(), "foo >= 1.2-3.el9");
     }
 
     #[test]
     fn display_with_epoch() {
         let evr = EVR::new(Some(2), "1.0", "1");
-        assert_eq!(cap("foo", CapFlags::EQ, Some(evr)).display(), "foo = 2:1.0-1");
+        assert_eq!(cap("foo", CapVersion::Eq(evr)).display(), "foo = 2:1.0-1");
     }
 
     #[test]
     fn display_without_release() {
         let evr = EVR::new(None, "1.2", "");
-        assert_eq!(cap("foo", CapFlags::LT, Some(evr)).display(), "foo < 1.2");
+        assert_eq!(cap("foo", CapVersion::Lt(evr)).display(), "foo < 1.2");
     }
 
     #[test]
-    #[cfg(not(debug_assertions))]
-    fn display_no_flag_with_evr_falls_back_in_release() {
-        // Release builds must never emit the `?` sentinel; the
-        // unreachable arm degrades to the unconstrained form.
-        let evr = EVR::new(None, "1.2", "");
-        assert_eq!(cap("foo", CapFlags::None, Some(evr)).display(), "foo");
+    fn cap_version_matches_orderings() {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        let evr = EVR::new(None, "1.0", "1");
+        assert!(CapVersion::Unversioned.matches(Less));
+        assert!(CapVersion::Unversioned.matches(Equal));
+        assert!(CapVersion::Unversioned.matches(Greater));
+        assert!(CapVersion::Eq(evr.clone()).matches(Equal));
+        assert!(!CapVersion::Eq(evr.clone()).matches(Greater));
+        assert!(CapVersion::Ge(evr.clone()).matches(Equal));
+        assert!(CapVersion::Ge(evr.clone()).matches(Greater));
+        assert!(!CapVersion::Ge(evr.clone()).matches(Less));
+        assert!(CapVersion::Le(evr.clone()).matches(Less));
+        assert!(CapVersion::Le(evr.clone()).matches(Equal));
+        assert!(!CapVersion::Le(evr).matches(Greater));
     }
+
+    // `cap_version_db_tag_round_trip` moved to `crate::db::convert`
+    // tests as part of relocating the SQL-tag mapping out of the
+    // domain type.
 
     #[test]
     fn pkg_checksum_parse_validates_sha256_length() {
@@ -483,23 +582,24 @@ mod tests {
     #[test]
     fn alt_set_version_ge_constraint_satisfied_by_any_set_provide() {
         // End-to-end check that the EVR `set:`-short-circuit composes
-        // with `CapFlags::GE` to satisfy ALT soname constraints. The
-        // real-world require shape is
+        // with `CapVersion::Ge` to satisfy ALT soname constraints.
+        // The real-world require shape is
         //   `libpcre2-8.so.0()(64bit) >= set:kgJAZn6...`
         // and the matching provide is
         //   `libpcre2-8.so.0()(64bit) = set:kdafcrS9...`
         // — different `set:` payloads. The name index narrows to the
         // right capability; the EVR comparison treats both as Equal,
-        // letting `GE` succeed.
+        // letting `Ge` succeed.
         let provide = EVR::new(Some(0), "set:kdafcrS9Ku7yZIO", "");
         let require = EVR::new(Some(0), "set:kgJAZn6CpJkW", "");
+        let ord = provide.compare_rpm(&require);
         assert!(
-            CapFlags::GE.matches(provide.compare_rpm(&require)),
-            "GE constraint with set: on both sides must be satisfied"
+            CapVersion::Ge(require.clone()).matches(ord),
+            "Ge constraint with set: on both sides must be satisfied"
         );
         assert!(
-            CapFlags::EQ.matches(provide.compare_rpm(&require)),
-            "EQ constraint with set: on both sides must be satisfied"
+            CapVersion::Eq(require).matches(ord),
+            "Eq constraint with set: on both sides must be satisfied"
         );
     }
 }

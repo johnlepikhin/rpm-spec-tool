@@ -170,7 +170,9 @@ mod tests {
     //! [`RepoUniverse::from_indexes_for_tests`] (in-memory SQLite,
     //! no disk I/O) to exercise `lookup` and the `is_strictly_better`
     //! tiebreak ordering.
-    use rpm_spec_repo_core::{CapFlags, Capability, Package, PkgChecksum, RepoIndex, RepoUniverse};
+    use rpm_spec_repo_core::{
+        CapVersion, Capability, Package, PkgChecksum, RepoIndex, RepoUniverse,
+    };
     use time::OffsetDateTime;
 
     use super::*;
@@ -186,19 +188,11 @@ mod tests {
     }
 
     fn cap_unversioned(name: &str) -> Capability {
-        Capability {
-            name: Arc::from(name),
-            flags: CapFlags::None,
-            evr: None,
-        }
+        Capability::unversioned(name)
     }
 
     fn cap_ge(name: &str, version: &str, release: &str) -> Capability {
-        Capability {
-            name: Arc::from(name),
-            flags: CapFlags::GE,
-            evr: Some(EVR::new(Some(0), version, release)),
-        }
+        Capability::ge(name, EVR::new(Some(0), version, release))
     }
 
     fn pkg(

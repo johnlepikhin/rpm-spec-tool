@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use rpm_spec_repo_core::{
-    CapFlags, Capability, Dependency, NEVRA, Package, PkgChecksum, RepoIndex, RepoUniverse,
+    Capability, Dependency, NEVRA, Package, PkgChecksum, RepoIndex, RepoUniverse,
 };
 use rpm_spec_repo_resolver::{SolveRequest, Solution, solve};
 use time::OffsetDateTime;
@@ -21,11 +21,7 @@ fn nevra(name: &str, version: &str, release: &str) -> NEVRA {
 }
 
 fn cap(name: &str) -> Capability {
-    Capability {
-        name: Arc::from(name),
-        flags: CapFlags::None,
-        evr: None,
-    }
+    Capability::unversioned(name)
 }
 
 fn pkg(
@@ -136,11 +132,7 @@ fn unsatisfiable_when_provider_absent() {
         Vec::new(),
     )]);
 
-    let req = vec![Dependency {
-        name: Arc::from("nonexistent"),
-        flags: CapFlags::None,
-        evr: None,
-    }];
+    let req = vec![Dependency::unversioned("nonexistent")];
     let sol = solve(SolveRequest {
         universe: &uni,
         requirements: &req,

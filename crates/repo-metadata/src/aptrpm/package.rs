@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use rpm_spec_repo_core::{CapFlags, Capability, EVR, NEVRA, Package, PkgChecksum, RepoId};
+use rpm_spec_repo_core::{CapVersion, Capability, EVR, NEVRA, Package, PkgChecksum, RepoId};
 
 use super::header::{Header, HeaderEntry};
 
@@ -250,40 +250,40 @@ fn capability_triple(
         {
             continue;
         }
-        let (cap_flags, evr) = decode_flags(flags[i], &versions[i]);
+        let version = decode_version(flags[i], &versions[i]);
         out.push(Capability {
             name: Arc::from(name),
-            flags: cap_flags,
-            evr,
+            version,
         });
     }
     out
 }
 
-/// Decode `RPMSENSE_*` bits into our [`CapFlags`] + optional [`EVR`].
+/// Decode `RPMSENSE_*` bits + the version string into a [`CapVersion`].
 /// rpm models dep flags as a bit set: `LESS`, `GREATER`, `EQUAL` are
 /// the three comparison bits (combinable as `LESS|EQUAL` → `<=`).
-/// An entirely unflagged dep with an empty version is an unversioned
-/// requirement (`CapFlags::None`).
-fn decode_flags(flags: u32, version_raw: &str) -> (CapFlags, Option<EVR>) {
+/// An entirely unflagged dep, or a versioned op with an unparseable
+/// EVR, collapses to [`CapVersion::Unversioned`].
+fn decode_version(flags: u32, version_raw: &str) -> CapVersion {
     let has_lt = flags & RPMSENSE_LESS != 0;
     let has_gt = flags & RPMSENSE_GREATER != 0;
     let has_eq = flags & RPMSENSE_EQUAL != 0;
-    let cap = match (has_lt, has_gt, has_eq) {
-        (false, false, false) => CapFlags::None,
-        (true, false, false) => CapFlags::LT,
-        (false, true, false) => CapFlags::GT,
-        (false, false, true) => CapFlags::EQ,
-        (true, false, true) => CapFlags::LE,
-        (false, true, true) => CapFlags::GE,
-        // `LESS|GREATER` doesn't exist in rpm; treat as unversioned.
-        _ => CapFlags::None,
+    let evr = match parse_evr(version_raw) {
+        Some(e) => e,
+        // Op set but no EVR — collapse to Unversioned (matches dnf
+        // tolerance and the old `decode_flags` early-return).
+        None => return CapVersion::Unversioned,
     };
-    if matches!(cap, CapFlags::None) {
-        return (cap, None);
+    match (has_lt, has_gt, has_eq) {
+        (false, false, false) => CapVersion::Unversioned,
+        (true, false, false) => CapVersion::Lt(evr),
+        (false, true, false) => CapVersion::Gt(evr),
+        (false, false, true) => CapVersion::Eq(evr),
+        (true, false, true) => CapVersion::Le(evr),
+        (false, true, true) => CapVersion::Ge(evr),
+        // `LESS|GREATER` doesn't exist in rpm; treat as unversioned.
+        _ => CapVersion::Unversioned,
     }
-    let evr = parse_evr(version_raw);
-    (cap, evr)
 }
 
 /// Parse an rpm wire EVR string `[E:]V[-R]` into an [`EVR`].
@@ -375,10 +375,13 @@ mod tests {
         assert_eq!(p.provides.len(), 1);
         let cap = &p.provides[0];
         assert_eq!(cap.name.as_ref(), "pkgconfig(foo)");
-        assert!(matches!(cap.flags, CapFlags::EQ));
-        let evr = cap.evr.as_ref().unwrap();
-        assert_eq!(evr.version, "1.0");
-        assert_eq!(evr.release, "1");
+        match &cap.version {
+            CapVersion::Eq(evr) => {
+                assert_eq!(evr.version, "1.0");
+                assert_eq!(evr.release, "1");
+            }
+            other => panic!("expected Eq variant, got {other:?}"),
+        }
     }
 
     #[test]
@@ -393,7 +396,10 @@ mod tests {
             (TAG_REQUIREVERSION, sa(&["2.0"])),
         ]);
         let p = package_from_header(&h_le, &RepoId::from("c")).unwrap();
-        assert!(matches!(p.requires[0].flags, CapFlags::LE));
+        let CapVersion::Le(evr_le) = &p.requires[0].version else {
+            panic!("expected Le, got {:?}", p.requires[0].version);
+        };
+        assert_eq!(&*evr_le.version, "2.0");
 
         let h_ge = make_header(vec![
             (TAG_NAME, s("b")),
@@ -405,7 +411,10 @@ mod tests {
             (TAG_REQUIREVERSION, sa(&["2.0"])),
         ]);
         let p = package_from_header(&h_ge, &RepoId::from("c")).unwrap();
-        assert!(matches!(p.requires[0].flags, CapFlags::GE));
+        let CapVersion::Ge(evr_ge) = &p.requires[0].version else {
+            panic!("expected Ge, got {:?}", p.requires[0].version);
+        };
+        assert_eq!(&*evr_ge.version, "2.0");
     }
 
     #[test]
@@ -421,8 +430,7 @@ mod tests {
         ]);
         let p = package_from_header(&h, &RepoId::from("c")).unwrap();
         assert_eq!(p.requires.len(), 1);
-        assert!(matches!(p.requires[0].flags, CapFlags::None));
-        assert!(p.requires[0].evr.is_none());
+        assert!(p.requires[0].version.is_unversioned());
     }
 
     #[test]

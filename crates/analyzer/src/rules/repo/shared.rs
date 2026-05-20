@@ -13,7 +13,7 @@ use rpm_spec::ast::{
     Section, ShellBody, Span, SpecFile, SpecItem, Tag, TagValue, VerOp,
 };
 use rpm_spec_profile::{MacroRegistry, Profile};
-use rpm_spec_repo_core::{CapFlags, Capability, EVR, RepoUniverse};
+use rpm_spec_repo_core::{CapVersion, Capability, EVR, RepoUniverse};
 
 use crate::bcond::{BcondMap, BcondOverrides};
 use crate::branch_coverage::evaluate_branch;
@@ -349,16 +349,7 @@ fn project_atom(atom: &DepAtom, macros: &MacroRegistry, span: Span) -> Option<Pr
         .and_then(|t| t.literal_str())
         .map(str::trim);
 
-    let (flags, evr) = if let Some(c) = atom.constraint.as_ref() {
-        let op = match c.op {
-            VerOp::Lt => CapFlags::LT,
-            VerOp::Le => CapFlags::LE,
-            VerOp::Eq => CapFlags::EQ,
-            VerOp::Ge => CapFlags::GE,
-            VerOp::Gt => CapFlags::GT,
-            // VerOp is non_exhaustive; unknown operators short-circuit.
-            _ => return None,
-        };
+    let cap_version = if let Some(c) = atom.constraint.as_ref() {
         let version = resolve_text(c.evr.version.literal_str()?.trim(), macros)?;
         let release = if let Some(rel) = c.evr.release.as_ref() {
             resolve_text(rel.literal_str()?.trim(), macros)?
@@ -368,18 +359,25 @@ fn project_atom(atom: &DepAtom, macros: &MacroRegistry, span: Span) -> Option<Pr
             String::new()
         };
         let evr = EVR::new(c.evr.epoch, version, release);
-        (op, Some(evr))
+        match c.op {
+            VerOp::Lt => CapVersion::Lt(evr),
+            VerOp::Le => CapVersion::Le(evr),
+            VerOp::Eq => CapVersion::Eq(evr),
+            VerOp::Ge => CapVersion::Ge(evr),
+            VerOp::Gt => CapVersion::Gt(evr),
+            // VerOp is non_exhaustive; unknown operators short-circuit.
+            _ => return None,
+        }
     } else {
-        (CapFlags::None, None)
+        CapVersion::Unversioned
     };
 
-    let display = format_capability_display(&name, arch, flags, evr.as_ref());
+    let display = format_capability_display(&name, arch, &cap_version);
 
     Some(ProjectedDep {
         capability: Capability {
             name: Arc::from(name),
-            flags,
-            evr,
+            version: cap_version,
         },
         display,
         span,
@@ -399,13 +397,11 @@ fn project_atom(atom: &DepAtom, macros: &MacroRegistry, span: Span) -> Option<Pr
 fn format_capability_display(
     name: &str,
     arch: Option<&str>,
-    op: CapFlags,
-    evr: Option<&EVR>,
+    version: &CapVersion,
 ) -> String {
     let cap = Capability {
         name: Arc::from(name),
-        flags: op,
-        evr: evr.cloned(),
+        version: version.clone(),
     };
     let base = cap.display();
     let Some(arch) = arch else {

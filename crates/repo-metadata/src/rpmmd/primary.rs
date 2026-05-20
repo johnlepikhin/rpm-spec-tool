@@ -11,7 +11,7 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 
 use rpm_spec_repo_core::{
-    CapFlags, Capability, Dependency, NEVRA, Package, PkgChecksum, RepoError, RepoId,
+    CapVersion, Capability, Dependency, EVR, NEVRA, Package, PkgChecksum, RepoError, RepoId,
 };
 
 /// Hard cap on the number of `<package>` entries the parser will
@@ -295,7 +295,18 @@ impl PackageBuilder {
 
 fn parse_entry(e: &quick_xml::events::BytesStart) -> Result<Capability, RepoError> {
     let mut name = String::new();
-    let mut flags = CapFlags::None;
+    /// Local enum-of-strings — lets us validate flag + EVR in one pass
+    /// before assembling the final `CapVersion`. The "unknown flags
+    /// token degrades to Unversioned" policy is preserved verbatim.
+    enum Op {
+        None,
+        Eq,
+        Lt,
+        Le,
+        Gt,
+        Ge,
+    }
+    let mut op = Op::None;
     let mut epoch: Option<u32> = None;
     let mut ver: Option<String> = None;
     let mut rel: Option<String> = None;
@@ -306,13 +317,13 @@ fn parse_entry(e: &quick_xml::events::BytesStart) -> Result<Capability, RepoErro
         match attr.key.as_ref() {
             b"name" => name = val.to_string(),
             b"flags" => {
-                flags = match val {
-                    "EQ" => CapFlags::EQ,
-                    "LT" => CapFlags::LT,
-                    "LE" => CapFlags::LE,
-                    "GT" => CapFlags::GT,
-                    "GE" => CapFlags::GE,
-                    _ => CapFlags::None,
+                op = match val {
+                    "EQ" => Op::Eq,
+                    "LT" => Op::Lt,
+                    "LE" => Op::Le,
+                    "GT" => Op::Gt,
+                    "GE" => Op::Ge,
+                    _ => Op::None,
                 };
             }
             b"epoch" => epoch = val.parse::<u32>().ok(),
@@ -322,16 +333,27 @@ fn parse_entry(e: &quick_xml::events::BytesStart) -> Result<Capability, RepoErro
         }
     }
 
-    let evr = match (ver, rel) {
-        (Some(v), Some(r)) => Some(rpm_spec_repo_core::EVR::new(epoch, v, r)),
-        (Some(v), None) => Some(rpm_spec_repo_core::EVR::new(epoch, v, "")),
-        _ => None,
+    // Build EVR only when version is present. Missing release on a
+    // versioned entry is real (some `<rpm:entry>` ship only `ver=`);
+    // empty-release wildcard semantics in `EVR::compare_rpm` handle
+    // those at lookup time without losing the version constraint.
+    let evr_opt = ver.map(|v| EVR::new(epoch, v, rel.unwrap_or_default()));
+    let version = match (op, evr_opt) {
+        (Op::None, _) => CapVersion::Unversioned,
+        (Op::Eq, Some(e)) => CapVersion::Eq(e),
+        (Op::Lt, Some(e)) => CapVersion::Lt(e),
+        (Op::Le, Some(e)) => CapVersion::Le(e),
+        (Op::Gt, Some(e)) => CapVersion::Gt(e),
+        (Op::Ge, Some(e)) => CapVersion::Ge(e),
+        // Versioned op without EVR is malformed; degrade to
+        // Unversioned so the lookup at least keeps the package
+        // queryable by name (matches dnf's tolerance).
+        (_, None) => CapVersion::Unversioned,
     };
 
     Ok(Capability {
         name: Arc::from(name),
-        flags,
-        evr,
+        version,
     })
 }
 
@@ -383,6 +405,6 @@ mod tests {
             .expect("cmake present");
         // cmake's Requires references plain `bash` (no version constraint)
         assert_eq!(cmake.requires.len(), 1);
-        assert!(matches!(cmake.requires[0].flags, CapFlags::None));
+        assert!(cmake.requires[0].version.is_unversioned());
     }
 }
