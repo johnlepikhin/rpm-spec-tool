@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.3] - 2026-05-21
 
+### Added
+
+- `rpm-spec-lsp` (Language Server Protocol implementation for RPM
+  .spec files) is now shipped alongside `rpm-spec-tool` in every
+  release: included in each architecture's `.tar.gz` archive, plus
+  a dedicated `rpm-spec-lsp_*.deb` / `rpm-spec-lsp-*.rpm` so
+  editor users can install it independently of the CLI.
+- `rpm-spec-lsp --version` / `--help` / `-V` / `-h` flags so
+  packaging smoke-tests and editor configuration probes can query
+  the binary without opening an LSP transport.
+
 ### Fixed
 
 - Release binaries previously built on Ubuntu 24.04 baked glibc
@@ -22,7 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and other distros pinned at glibc 2.35–2.37. The release
   workflow now builds on `ubuntu-22.04` / `ubuntu-22.04-arm`
   (glibc 2.35), restoring portability to every distro shipping
-  glibc ≥ 2.35.
+  glibc ≥ 2.35. `cargo-deb` and `cargo-generate-rpm` are now
+  `cargo install`ed on the runner instead of being downloaded as
+  prebuilt binaries (which themselves needed glibc 2.39).
 
 ## [0.1.2] - 2026-05-21
 

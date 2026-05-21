@@ -67,13 +67,15 @@ jobs:
           fi
           echo "TAG_VERSION=$TAG_VERSION" >> "$GITHUB_ENV"
 
-      - name: Build release binary
-        run: cargo build --release -p rpm-spec-tool
+      - name: Build release binaries
+        run: cargo build --release -p rpm-spec-tool -p rpm-spec-lsp
 
-      - name: Smoke-test binary
+      - name: Smoke-test binaries
         run: |
           ./target/release/rpm-spec-tool --version
           ./target/release/rpm-spec-tool --help >/dev/null
+          ./target/release/rpm-spec-lsp --version
+          ./target/release/rpm-spec-lsp --help >/dev/null
 
       - name: Pack tar.gz
         run: |
@@ -81,7 +83,7 @@ jobs:
           STAGE="$(mktemp -d)"
           PKG="rpm-spec-tool-${TAG_VERSION}-${{ matrix.name }}"
           mkdir -p "$STAGE/$PKG"
-          cp target/release/rpm-spec-tool "$STAGE/$PKG/"
+          cp target/release/rpm-spec-tool target/release/rpm-spec-lsp "$STAGE/$PKG/"
           cp README.md LICENSE-MIT LICENSE-APACHE "$STAGE/$PKG/"
           mkdir -p dist
           tar -C "$STAGE" -czf "dist/${PKG}.tar.gz" "$PKG"
@@ -89,12 +91,14 @@ jobs:
       - name: Build .deb
         run: |
           cargo deb -p rpm-spec-tool --no-build
+          cargo deb -p rpm-spec-lsp  --no-build
           mkdir -p dist
           mv target/debian/*.deb dist/
 
       - name: Build .rpm
         run: |
           cargo generate-rpm -p crates/cli
+          cargo generate-rpm -p crates/lsp
           mkdir -p dist
           mv target/generate-rpm/*.rpm dist/
 

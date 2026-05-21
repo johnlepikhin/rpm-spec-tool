@@ -7,12 +7,55 @@ use std::process::ExitCode;
 use lsp_server::Connection;
 
 fn main() -> ExitCode {
+    // Handle informational flags before any LSP / tracing setup so
+    // packaging smoke-tests and editor configuration probes can run
+    // without speaking the JSON-RPC framing.
+    let mut args = std::env::args().skip(1);
+    if let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--version" | "-V" => {
+                println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+                return ExitCode::SUCCESS;
+            }
+            "--help" | "-h" => {
+                print_help();
+                return ExitCode::SUCCESS;
+            }
+            other => {
+                eprintln!("rpm-spec-lsp: unknown argument: {other}");
+                eprintln!("hint: this binary speaks LSP on stdio; use --help to see flags");
+                return ExitCode::from(2);
+            }
+        }
+    }
     init_tracing();
     if let Err(e) = run() {
         eprintln!("rpm-spec-lsp: fatal: {e:#}");
         return ExitCode::from(2);
     }
     ExitCode::SUCCESS
+}
+
+fn print_help() {
+    println!(
+        "{name} {version}
+Language Server Protocol implementation for RPM .spec files.
+
+Usage: rpm-spec-lsp [OPTIONS]
+
+This binary speaks LSP over stdio when launched with no arguments. Editor
+integrations should configure their LSP client to spawn it directly.
+
+Options:
+  -h, --help       Print this help and exit.
+  -V, --version    Print version and exit.
+
+Environment:
+  RUST_LOG         Filter spec for tracing output to stderr (e.g. `info`,
+                   `rpm_spec_lsp=debug`). Default: `info`.",
+        name = env!("CARGO_PKG_NAME"),
+        version = env!("CARGO_PKG_VERSION"),
+    );
 }
 
 fn run() -> anyhow::Result<()> {

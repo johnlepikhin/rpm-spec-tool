@@ -35,5 +35,39 @@ crossbeam-channel = "0.5"
 [dev-dependencies]
 tempfile = "3"
 
+# ---------------------------------------------------------------------------
+# Packaging metadata for cargo-deb and cargo-generate-rpm. The release
+# workflow uses these to produce a separate .deb / .rpm for the LSP
+# server so editor users can install it alongside (or without) the CLI.
+# ---------------------------------------------------------------------------
+
+[package.metadata.deb]
+maintainer = "Evgenii Lepikhin <johnlepikhin@gmail.com>"
+copyright = "2026, Evgenii Lepikhin <johnlepikhin@gmail.com>"
+license-file = ["../../LICENSE-MIT", "0"]
+extended-description = """
+Language Server Protocol implementation for RPM .spec files. Provides
+diagnostics, hover, and other editor-driven features by reusing the
+analyzer and parser used by `rpm-spec-tool`. Configure your LSP-aware
+editor to spawn `rpm-spec-lsp` on `*.spec` buffers."""
+section = "devel"
+priority = "optional"
+assets = [
+    ["target/release/rpm-spec-lsp",  "usr/bin/",                                 "755"],
+    ["../../README.md",              "usr/share/doc/rpm-spec-lsp/README.md",     "644"],
+    ["../../LICENSE-MIT",            "usr/share/doc/rpm-spec-lsp/LICENSE-MIT",   "644"],
+    ["../../LICENSE-APACHE",         "usr/share/doc/rpm-spec-lsp/LICENSE-APACHE", "644"],
+]
+
+[package.metadata.generate-rpm]
+license = "MIT OR Apache-2.0"
+summary = "Language Server Protocol implementation for RPM .spec files"
+assets = [
+    { source = "target/release/rpm-spec-lsp", dest = "/usr/bin/rpm-spec-lsp",                          mode = "755" },
+    { source = "../../README.md",             dest = "/usr/share/doc/rpm-spec-lsp/README.md",          mode = "644", doc = true },
+    { source = "../../LICENSE-MIT",           dest = "/usr/share/doc/rpm-spec-lsp/LICENSE-MIT",        mode = "644", doc = true },
+    { source = "../../LICENSE-APACHE",        dest = "/usr/share/doc/rpm-spec-lsp/LICENSE-APACHE",     mode = "644", doc = true },
+]
+
 [lints]
 workspace = true
