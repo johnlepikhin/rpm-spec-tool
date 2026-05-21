@@ -41,6 +41,7 @@ rusqlite   = { version = "0.32", features = ["bundled"] }
 # (≥ 1.95) make these `warn-by-default`, but we want them on for every
 # toolchain we build with so the failure surface stays consistent.
 [workspace.lints.clippy]
-collapsible_if      = "deny"
-collapsible_match   = "deny"
-collapsible_else_if = "deny"
+collapsible_if       = "deny"
+collapsible_match    = "deny"
+collapsible_else_if  = "deny"
+unnecessary_sort_by  = "deny"

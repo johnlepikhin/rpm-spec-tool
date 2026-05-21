@@ -169,7 +169,7 @@ fn gc_candidates(dirs: &CacheDirs, keep: usize) -> Result<Vec<std::path::PathBuf
             let m = s.metadata()?;
             by_mtime.push((s.path(), m.modified().unwrap_or(std::time::UNIX_EPOCH)));
         }
-        by_mtime.sort_by(|a, b| b.1.cmp(&a.1));
+        by_mtime.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         let current_target = std::fs::read_link(repo_dir.join("current")).ok();
         for (path, _) in by_mtime.into_iter().skip(keep) {
             if current_target.as_ref() == Some(&path) {
@@ -242,7 +242,7 @@ fn gc(
             by_mtime.push((s.path(), m.modified().unwrap_or(std::time::UNIX_EPOCH)));
         }
         // Newest first.
-        by_mtime.sort_by(|a, b| b.1.cmp(&a.1));
+        by_mtime.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         for (path, _) in by_mtime.into_iter().skip(keep) {
             // Skip if it's still the `current` target.
             let current = repo_dir.join("current");
