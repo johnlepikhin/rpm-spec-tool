@@ -420,10 +420,10 @@ fn collect_files_paths(
     use rpm_spec::ast::{Section, SpecItem};
     let mut out: BTreeSet<String> = BTreeSet::new();
     walk_active_sections_in_items(&spec.items, selection, &mut |item| {
-        if let SpecItem::Section(boxed) = item {
-            if let Section::Files { content, .. } = boxed.as_ref() {
-                collect_files_from_content(content, selection, &mut out);
-            }
+        if let SpecItem::Section(boxed) = item
+            && let Section::Files { content, .. } = boxed.as_ref()
+        {
+            collect_files_from_content(content, selection, &mut out);
         }
     });
     out
@@ -524,15 +524,15 @@ fn collect_scalar_diffs(
          out: &mut std::collections::HashMap<&'static str, String>| {
             rpm_spec_analyzer::walk_active_preamble(spec, sel, |item| {
                 for (tag, label) in SCALAR_TAGS {
-                    if &item.tag == tag {
-                        if let TagValue::Text(t) = &item.value {
-                            let rendered = rpm_spec_analyzer::render_text_with_macros(t);
-                            // First-write-wins: subpackage preamble can
-                            // declare the same tag again with a different
-                            // value, but the top-level scalar is what we
-                            // want for cross-profile comparison.
-                            out.entry(label).or_insert(rendered);
-                        }
+                    if &item.tag == tag
+                        && let TagValue::Text(t) = &item.value
+                    {
+                        let rendered = rpm_spec_analyzer::render_text_with_macros(t);
+                        // First-write-wins: subpackage preamble can
+                        // declare the same tag again with a different
+                        // value, but the top-level scalar is what we
+                        // want for cross-profile comparison.
+                        out.entry(label).or_insert(rendered);
                     }
                 }
             });
@@ -642,15 +642,14 @@ fn section_multiset_diff(label: String, a: &[String], b: &[String]) -> ScriptSec
 /// which is still useful for relative comparison between profiles.
 fn main_package_name(spec: &SpecFile<Span>) -> String {
     for item in &spec.items {
-        if let rpm_spec::ast::SpecItem::Preamble(p) = item {
-            if matches!(p.tag, Tag::Name) {
-                if let TagValue::Text(t) = &p.value {
-                    let rendered = rpm_spec_analyzer::render_text_with_macros(t);
-                    let trimmed = rendered.trim();
-                    if !trimmed.is_empty() {
-                        return trimmed.to_string();
-                    }
-                }
+        if let rpm_spec::ast::SpecItem::Preamble(p) = item
+            && matches!(p.tag, Tag::Name)
+            && let TagValue::Text(t) = &p.value
+        {
+            let rendered = rpm_spec_analyzer::render_text_with_macros(t);
+            let trimmed = rendered.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
             }
         }
     }
@@ -668,21 +667,21 @@ fn collect_subpackages(
     use rpm_spec::ast::{PackageName, Section, SpecItem};
     let mut out: BTreeSet<String> = BTreeSet::new();
     walk_active_sections_in_items(&spec.items, selection, &mut |item| {
-        if let SpecItem::Section(boxed) = item {
-            if let Section::Package { name_arg, .. } = boxed.as_ref() {
-                let name = match name_arg {
-                    PackageName::Relative(t) => {
-                        let suffix = rpm_spec_analyzer::render_text_with_macros(t);
-                        format!("{}-{}", main_name, suffix.trim())
-                    }
-                    PackageName::Absolute(t) => rpm_spec_analyzer::render_text_with_macros(t)
-                        .trim()
-                        .to_string(),
-                    _ => return,
-                };
-                if !name.is_empty() {
-                    out.insert(name);
+        if let SpecItem::Section(boxed) = item
+            && let Section::Package { name_arg, .. } = boxed.as_ref()
+        {
+            let name = match name_arg {
+                PackageName::Relative(t) => {
+                    let suffix = rpm_spec_analyzer::render_text_with_macros(t);
+                    format!("{}-{}", main_name, suffix.trim())
                 }
+                PackageName::Absolute(t) => rpm_spec_analyzer::render_text_with_macros(t)
+                    .trim()
+                    .to_string(),
+                _ => return,
+            };
+            if !name.is_empty() {
+                out.insert(name);
             }
         }
     });
@@ -742,18 +741,18 @@ fn collect_dep_names_by_tag(
         // `Tag` derives `PartialEq` and `==` works regardless of
         // future `#[non_exhaustive]` additions: an unknown tag simply
         // matches no entry in COMPARED_TAGS and the item is skipped.
-        if let Some(idx) = tags.iter().position(|(t, _)| t == &item.tag) {
-            if let TagValue::Dep(dep) = &item.value {
-                // Shared walker keeps the And/Or flatten + If/Unless/Not
-                // skip policy aligned with contract verification.
-                for_each_dep_atom(dep, |name| {
-                    let rendered = render_text_with_macros(name);
-                    let trimmed = rendered.trim();
-                    if !trimmed.is_empty() {
-                        buckets[idx].insert(trimmed.to_string());
-                    }
-                });
-            }
+        if let Some(idx) = tags.iter().position(|(t, _)| t == &item.tag)
+            && let TagValue::Dep(dep) = &item.value
+        {
+            // Shared walker keeps the And/Or flatten + If/Unless/Not
+            // skip policy aligned with contract verification.
+            for_each_dep_atom(dep, |name| {
+                let rendered = render_text_with_macros(name);
+                let trimmed = rendered.trim();
+                if !trimmed.is_empty() {
+                    buckets[idx].insert(trimmed.to_string());
+                }
+            });
         }
     });
     buckets

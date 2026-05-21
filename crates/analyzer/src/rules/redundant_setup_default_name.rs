@@ -97,13 +97,13 @@ fn trailing_has_redundant_n(segs: &[TextSegment]) -> bool {
                 }
                 // Track whether the literal ends mid-word — affects
                 // adjacency with a following macro.
-                if !s.ends_with(char::is_whitespace) {
-                    if let Some(last) = tokens.last_mut() {
-                        *last = match *last {
-                            Token::Lit(l) => Token::LitOpen(l),
-                            other => other,
-                        };
-                    }
+                if !s.ends_with(char::is_whitespace)
+                    && let Some(last) = tokens.last_mut()
+                {
+                    *last = match *last {
+                        Token::Lit(l) => Token::LitOpen(l),
+                        other => other,
+                    };
                 }
             }
             TextSegment::Macro(m) => {

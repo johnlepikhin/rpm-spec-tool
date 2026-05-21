@@ -202,12 +202,12 @@ pub(super) fn run(
         eprintln!("hint: try 'git log --oneline' to verify the revision exists");
         return Ok(ExitCode::from(2));
     }
-    if let Some(to_rev) = opts.to.as_deref() {
-        if let Err(e) = git_resolve_rev(&opts.git_cmd, &repo_root, to_rev) {
-            eprintln!("error: --to '{to_rev}': git revision not found (git: {e:#})");
-            eprintln!("hint: try 'git log --oneline' to verify the revision exists");
-            return Ok(ExitCode::from(2));
-        }
+    if let Some(to_rev) = opts.to.as_deref()
+        && let Err(e) = git_resolve_rev(&opts.git_cmd, &repo_root, to_rev)
+    {
+        eprintln!("error: --to '{to_rev}': git revision not found (git: {e:#})");
+        eprintln!("hint: try 'git log --oneline' to verify the revision exists");
+        return Ok(ExitCode::from(2));
     }
 
     let from_bytes = match git_show(&opts.git_cmd, &repo_root, &opts.from, &spec_rel) {

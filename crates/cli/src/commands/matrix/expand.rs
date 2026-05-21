@@ -320,13 +320,13 @@ fn render_human(
                     // silent — internally consistent with the
                     // untagged `%if` above.
                     let mut updated = false;
-                    if let Some(top) = cond_stack.last_mut() {
-                        if !top.siblings.is_empty() {
-                            let complement = complement_status(&top.siblings);
-                            top.current_branch_status = Some(borrow_status(&complement));
-                            tagged = Some(complement);
-                            updated = true;
-                        }
+                    if let Some(top) = cond_stack.last_mut()
+                        && !top.siblings.is_empty()
+                    {
+                        let complement = complement_status(&top.siblings);
+                        top.current_branch_status = Some(borrow_status(&complement));
+                        tagged = Some(complement);
+                        updated = true;
                     }
                     if updated {
                         refresh_inactive_chain(&mut cond_stack);
@@ -342,12 +342,12 @@ fn render_human(
                     // eventual `%else` complement AND for nested
                     // suppression detection.
                     let mut updated = false;
-                    if let Some(top) = cond_stack.last_mut() {
-                        if matches!(kind, ConditionalKind::ElseOrElif) {
-                            top.siblings.push(borrow_status(&info.status));
-                            top.current_branch_status = Some(borrow_status(&info.status));
-                            updated = true;
-                        }
+                    if let Some(top) = cond_stack.last_mut()
+                        && matches!(kind, ConditionalKind::ElseOrElif)
+                    {
+                        top.siblings.push(borrow_status(&info.status));
+                        top.current_branch_status = Some(borrow_status(&info.status));
+                        updated = true;
                     }
                     if updated {
                         refresh_inactive_chain(&mut cond_stack);

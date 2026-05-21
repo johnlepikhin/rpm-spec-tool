@@ -32,16 +32,17 @@ where
         ColorChoice::Never => TermColor::Never,
         ColorChoice::Auto => {
             // CLICOLOR_FORCE: any non-empty, non-"0" value forces colour.
-            if let Some(v) = env("CLICOLOR_FORCE") {
-                if !v.is_empty() && v != std::ffi::OsStr::new("0") {
-                    return TermColor::Always;
-                }
+            if let Some(v) = env("CLICOLOR_FORCE")
+                && !v.is_empty()
+                && v != std::ffi::OsStr::new("0")
+            {
+                return TermColor::Always;
             }
             // NO_COLOR: any non-empty value disables colour.
-            if let Some(v) = env("NO_COLOR") {
-                if !v.is_empty() {
-                    return TermColor::Never;
-                }
+            if let Some(v) = env("NO_COLOR")
+                && !v.is_empty()
+            {
+                return TermColor::Never;
             }
             if is_tty() {
                 TermColor::Auto

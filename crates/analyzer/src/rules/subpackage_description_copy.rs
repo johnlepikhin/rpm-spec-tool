@@ -119,10 +119,10 @@ fn canonical_body(body: &TextBody) -> String {
 fn body_has_literal_content(body: &TextBody) -> bool {
     for line in &body.lines {
         for seg in &line.segments {
-            if let TextSegment::Literal(s) = seg {
-                if s.chars().any(|c| c.is_alphabetic()) {
-                    return true;
-                }
+            if let TextSegment::Literal(s) = seg
+                && s.chars().any(|c| c.is_alphabetic())
+            {
+                return true;
             }
         }
     }

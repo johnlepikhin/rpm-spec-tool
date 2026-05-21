@@ -172,12 +172,13 @@ fn scan_conditional(
             }
         }
     }
-    if !any_active && !any_indeterminate {
+    if !any_active
+        && !any_indeterminate
+        && let Some(els) = &c.otherwise
+    {
         // All branches inactive — `%else` fires.
-        if let Some(els) = &c.otherwise {
-            for nested in els {
-                scan_item(nested, profile, bcond, out);
-            }
+        for nested in els {
+            scan_item(nested, profile, bcond, out);
         }
     }
 }
@@ -215,13 +216,13 @@ fn extract_from_default_set(mr: &MacroRef, out: &mut BTreeMap<String, String>) {
     let Some(body) = mr.with_value.as_ref() else {
         return;
     };
-    if let Some((name, value)) = parse_default_set_body(body) {
+    if let Some((name, value)) = parse_default_set_body(body)
+        && name == mr.name
+    {
         // Strict match: only register when the inner `%global`'s
         // target name matches the outer `%{!?NAME}` guard. Anything
         // else is a more exotic pattern we don't model.
-        if name == mr.name {
-            out.entry(name).or_insert(value);
-        }
+        out.entry(name).or_insert(value);
     }
 }
 

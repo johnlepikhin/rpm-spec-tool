@@ -51,29 +51,28 @@ impl AdjacentLicenseLines {
         let mut prev: Option<Span> = None;
         for it in content {
             match it {
-                FilesContent::Entry(e) => {
-                    if is_license_entry_with_path(e) {
-                        if prev.is_some() {
-                            self.diagnostics.push(
-                                Diagnostic::new(
-                                    &METADATA,
-                                    Severity::Warn,
-                                    "adjacent `%license` entries — merge into one `%license A B C` \
+                FilesContent::Entry(e) if is_license_entry_with_path(e) => {
+                    if prev.is_some() {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                &METADATA,
+                                Severity::Warn,
+                                "adjacent `%license` entries — merge into one `%license A B C` \
                                      line",
-                                    e.data,
-                                )
-                                .with_suggestion(Suggestion::new(
-                                    "combine consecutive `%license PATH` entries into a single \
+                                e.data,
+                            )
+                            .with_suggestion(Suggestion::new(
+                                "combine consecutive `%license PATH` entries into a single \
                                      `%license PATH1 PATH2 …` line",
-                                    Vec::new(),
-                                    Applicability::Manual,
-                                )),
-                            );
-                        }
-                        prev = Some(e.data);
-                    } else {
-                        prev = None;
+                                Vec::new(),
+                                Applicability::Manual,
+                            )),
+                        );
                     }
+                    prev = Some(e.data);
+                }
+                FilesContent::Entry(_) => {
+                    prev = None;
                 }
                 FilesContent::Blank | FilesContent::Comment(_) => {}
                 FilesContent::Conditional(c) => {

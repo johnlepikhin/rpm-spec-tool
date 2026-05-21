@@ -347,14 +347,14 @@ impl BuildRequiresCollector {
     /// preamble item that survives branch projection. Filters on
     /// `Tag::BuildRequires` and records the dep atoms.
     fn consume_preamble_item(&mut self, item: &PreambleItem<Span>) {
-        if matches!(item.tag, Tag::BuildRequires) {
-            if let TagValue::Dep(dep) = &item.value {
-                // Delegate rich-dep traversal to the shared walker
-                // in `crate::dep_walk` so the And/Or flattening
-                // and If/Unless/Not skip policy stay aligned with
-                // `matrix diff` and any future consumer.
-                for_each_dep_atom(dep, |name| self.record_atom_name(name));
-            }
+        if matches!(item.tag, Tag::BuildRequires)
+            && let TagValue::Dep(dep) = &item.value
+        {
+            // Delegate rich-dep traversal to the shared walker
+            // in `crate::dep_walk` so the And/Or flattening
+            // and If/Unless/Not skip policy stay aligned with
+            // `matrix diff` and any future consumer.
+            for_each_dep_atom(dep, |name| self.record_atom_name(name));
         }
     }
 

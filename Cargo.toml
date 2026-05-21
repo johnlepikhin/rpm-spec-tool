@@ -35,3 +35,12 @@ tracing    = "0.1"
 time       = { version = "0.3", default-features = false, features = ["std"] }
 rusqlite   = { version = "0.32", features = ["bundled"] }
 
+# Lints elevated to `deny` at the workspace level so CI doesn't surface
+# them as surprises. Members opt in via `[lints] workspace = true` in
+# their own Cargo.toml — see crates/*/Cargo.toml. Newer clippy versions
+# (≥ 1.95) make these `warn-by-default`, but we want them on for every
+# toolchain we build with so the failure surface stays consistent.
+[workspace.lints.clippy]
+collapsible_if      = "deny"
+collapsible_match   = "deny"
+collapsible_else_if = "deny"

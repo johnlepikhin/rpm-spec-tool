@@ -103,10 +103,10 @@ pub fn merge(xml: &[u8], packages: &mut [Package]) -> Result<(), RepoError> {
                             .as_deref()
                             .and_then(|n| by_name_idx.get(n).copied())
                     });
-                if let Some(i) = idx {
-                    if let Some(target) = packages.get_mut(i) {
-                        target.files = std::mem::take(&mut files_for_pkg);
-                    }
+                if let Some(i) = idx
+                    && let Some(target) = packages.get_mut(i)
+                {
+                    target.files = std::mem::take(&mut files_for_pkg);
                 }
             }
             Event::Eof => break,

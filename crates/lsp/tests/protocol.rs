@@ -126,10 +126,10 @@ fn wait_for_diagnostics(client: &Connection) -> PublishDiagnosticsParams {
             .receiver
             .recv_timeout(remaining)
             .expect("timeout waiting for publishDiagnostics");
-        if let Message::Notification(note) = msg {
-            if note.method == PublishDiagnostics::METHOD {
-                return serde_json::from_value(note.params).expect("parse publishDiagnostics");
-            }
+        if let Message::Notification(note) = msg
+            && note.method == PublishDiagnostics::METHOD
+        {
+            return serde_json::from_value(note.params).expect("parse publishDiagnostics");
         }
     }
 }

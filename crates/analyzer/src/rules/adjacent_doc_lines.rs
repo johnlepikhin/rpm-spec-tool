@@ -55,28 +55,27 @@ impl AdjacentDocLines {
         let mut prev_doc: Option<Span> = None;
         for it in content {
             match it {
-                FilesContent::Entry(e) => {
-                    if is_doc_entry_with_path(e) {
-                        if prev_doc.is_some() {
-                            self.diagnostics.push(
-                                Diagnostic::new(
-                                    &METADATA,
-                                    Severity::Warn,
-                                    "adjacent `%doc` entries — merge into one `%doc A B C` line",
-                                    e.data,
-                                )
-                                .with_suggestion(Suggestion::new(
-                                    "combine consecutive `%doc PATH` entries into a single \
+                FilesContent::Entry(e) if is_doc_entry_with_path(e) => {
+                    if prev_doc.is_some() {
+                        self.diagnostics.push(
+                            Diagnostic::new(
+                                &METADATA,
+                                Severity::Warn,
+                                "adjacent `%doc` entries — merge into one `%doc A B C` line",
+                                e.data,
+                            )
+                            .with_suggestion(Suggestion::new(
+                                "combine consecutive `%doc PATH` entries into a single \
                                      `%doc PATH1 PATH2 …` line",
-                                    Vec::new(),
-                                    Applicability::Manual,
-                                )),
-                            );
-                        }
-                        prev_doc = Some(e.data);
-                    } else {
-                        prev_doc = None;
+                                Vec::new(),
+                                Applicability::Manual,
+                            )),
+                        );
                     }
+                    prev_doc = Some(e.data);
+                }
+                FilesContent::Entry(_) => {
+                    prev_doc = None;
                 }
                 FilesContent::Blank | FilesContent::Comment(_) => {
                     // Whitespace doesn't break adjacency.

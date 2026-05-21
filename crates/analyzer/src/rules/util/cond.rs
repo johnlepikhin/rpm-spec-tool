@@ -222,12 +222,12 @@ mod tests {
         // Walk to the first conditional, find its branch expr's Parsed AST.
         let mut found: Option<(usize, usize)> = None;
         for item in &spec.items {
-            if let rpm_spec::ast::SpecItem::Conditional(c) = item {
-                if let CondExpr::Parsed(ast) = &c.branches[0].expr {
-                    let parts = flatten_or(ast.as_ref());
-                    found = Some((parts.len(), parts.len()));
-                    assert_eq!(parts.len(), 3, "expected 3 disjuncts: {parts:?}");
-                }
+            if let rpm_spec::ast::SpecItem::Conditional(c) = item
+                && let CondExpr::Parsed(ast) = &c.branches[0].expr
+            {
+                let parts = flatten_or(ast.as_ref());
+                found = Some((parts.len(), parts.len()));
+                assert_eq!(parts.len(), 3, "expected 3 disjuncts: {parts:?}");
             }
         }
         assert!(found.is_some(), "no %if seen");

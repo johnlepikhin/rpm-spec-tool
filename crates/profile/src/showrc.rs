@@ -120,22 +120,22 @@ impl<'a> Parser<'a> {
         let trimmed = line.trim_start();
 
         // Architecture / OS — split on first `:`.
-        if let Some(rest) = trimmed.strip_prefix("build arch") {
-            if let Some(v) = colon_value(rest) {
-                self.arch.build_arch = Some(v.to_string());
-            }
-        } else if let Some(rest) = trimmed.strip_prefix("build os") {
-            if let Some(v) = colon_value(rest) {
-                self.arch.build_os = Some(v.to_string());
-            }
-        } else if let Some(rest) = trimmed.strip_prefix("compatible build archs") {
-            if let Some(v) = colon_value(rest) {
-                self.arch.compatible_archs = Some(split_ws(v));
-            }
-        } else if let Some(rest) = trimmed.strip_prefix("optflags") {
-            if let Some(v) = colon_value(rest) {
-                self.arch.optflags_template = Some(v.to_string());
-            }
+        if let Some(rest) = trimmed.strip_prefix("build arch")
+            && let Some(v) = colon_value(rest)
+        {
+            self.arch.build_arch = Some(v.to_string());
+        } else if let Some(rest) = trimmed.strip_prefix("build os")
+            && let Some(v) = colon_value(rest)
+        {
+            self.arch.build_os = Some(v.to_string());
+        } else if let Some(rest) = trimmed.strip_prefix("compatible build archs")
+            && let Some(v) = colon_value(rest)
+        {
+            self.arch.compatible_archs = Some(split_ws(v));
+        } else if let Some(rest) = trimmed.strip_prefix("optflags")
+            && let Some(v) = colon_value(rest)
+        {
+            self.arch.optflags_template = Some(v.to_string());
         } else if let Some(rest) = trimmed.strip_prefix("rpmlib(") {
             // "rpmlib(Foo) = 1.2.3-1"
             if let Some(end) = rest.find(')') {

@@ -287,14 +287,15 @@ impl MacroUsageCollector {
     fn record_expr_ast(&mut self, expr: &ExprAst<Span>) {
         match expr {
             ExprAst::Macro { text, .. } => {
-                if let Some(name) = macro_name_from_verbatim(text) {
+                if let Some(name) = macro_name_from_verbatim(text)
+                    && !is_reserved_keyword(&name)
+                    && !is_rpm_auto_macro(&name)
+                {
                     // Apply the same reserved-keyword and
                     // RPM-auto-macro filters as `is_user_macro` so
                     // condition-side references aren't a backdoor
                     // for noise.
-                    if !is_reserved_keyword(&name) && !is_rpm_auto_macro(&name) {
-                        self.names.insert(name);
-                    }
+                    self.names.insert(name);
                 }
             }
             ExprAst::Paren { inner, .. } | ExprAst::Not { inner, .. } => {
@@ -462,10 +463,11 @@ fn is_rpm_auto_macro(name: &str) -> bool {
         return true;
     }
     for prefix in ["SOURCE", "PATCH", "NOSOURCE", "NOPATCH"] {
-        if let Some(tail) = name.strip_prefix(prefix) {
-            if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) {
-                return true;
-            }
+        if let Some(tail) = name.strip_prefix(prefix)
+            && !tail.is_empty()
+            && tail.chars().all(|c| c.is_ascii_digit())
+        {
+            return true;
         }
     }
     false

@@ -1624,11 +1624,9 @@ fn expand_text(t: &Text, macros: &MacroRegistry) -> Result<String, EvalError> {
                         }
                     }
                     ConditionalMacro::IfNotDefined => {
-                        if !defined {
-                            if let Some(wv) = mr.with_value.as_ref() {
-                                let expanded = expand_text(wv, macros)?;
-                                out.push_str(&expanded);
-                            }
+                        if !defined && let Some(wv) = mr.with_value.as_ref() {
+                            let expanded = expand_text(wv, macros)?;
+                            out.push_str(&expanded);
                         }
                     }
                     ConditionalMacro::None => {

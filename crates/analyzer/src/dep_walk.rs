@@ -139,10 +139,11 @@ mod tests {
                 &mut self,
                 p: &'ast rpm_spec::ast::PreambleItem<rpm_spec::ast::Span>,
             ) {
-                if self.0.is_none() && matches!(p.tag, Tag::BuildRequires) {
-                    if let TagValue::Dep(d) = &p.value {
-                        self.0 = Some(d.clone());
-                    }
+                if self.0.is_none()
+                    && matches!(p.tag, Tag::BuildRequires)
+                    && let TagValue::Dep(d) = &p.value
+                {
+                    self.0 = Some(d.clone());
                 }
                 visit::walk_preamble(self, p);
             }

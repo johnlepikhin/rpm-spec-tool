@@ -319,16 +319,16 @@ fn collect_dep_names(
     let mut buckets: Vec<BTreeSet<String>> =
         COMPARED_TAGS.iter().map(|_| BTreeSet::new()).collect();
     walk_active_preamble(spec, selection, |item| {
-        if let Some(idx) = COMPARED_TAGS.iter().position(|(t, _)| t == &item.tag) {
-            if let TagValue::Dep(dep) = &item.value {
-                for_each_dep_atom(dep, |name| {
-                    let rendered = render_text_with_macros(name);
-                    let trimmed = rendered.trim();
-                    if !trimmed.is_empty() {
-                        buckets[idx].insert(trimmed.to_string());
-                    }
-                });
-            }
+        if let Some(idx) = COMPARED_TAGS.iter().position(|(t, _)| t == &item.tag)
+            && let TagValue::Dep(dep) = &item.value
+        {
+            for_each_dep_atom(dep, |name| {
+                let rendered = render_text_with_macros(name);
+                let trimmed = rendered.trim();
+                if !trimmed.is_empty() {
+                    buckets[idx].insert(trimmed.to_string());
+                }
+            });
         }
     });
     buckets
@@ -505,10 +505,10 @@ fn collect_from_section(section: &Section<Span>, out: &mut BTreeMap<String, Vec<
             let label = label_with_subpkg("%files", subpkg.as_ref());
             let mut lines: Vec<String> = file_lists.iter().map(render_text_with_macros).collect();
             for c in content {
-                if let rpm_spec::ast::FilesContent::Entry(e) = c {
-                    if let Some(line) = render_file_entry_path(e) {
-                        lines.push(line);
-                    }
+                if let rpm_spec::ast::FilesContent::Entry(e) = c
+                    && let Some(line) = render_file_entry_path(e)
+                {
+                    lines.push(line);
                 }
             }
             out.entry(label).or_default().extend(lines);
@@ -704,10 +704,10 @@ fn collect_active_from_section(
             if l == label {
                 out.extend(file_lists.iter().map(render_text_with_macros));
                 for c in content {
-                    if let rpm_spec::ast::FilesContent::Entry(e) = c {
-                        if let Some(line) = render_file_entry_path(e) {
-                            out.push(line);
-                        }
+                    if let rpm_spec::ast::FilesContent::Entry(e) = c
+                        && let Some(line) = render_file_entry_path(e)
+                    {
+                        out.push(line);
                     }
                 }
             }

@@ -92,16 +92,16 @@ impl ProfileSignature {
         let mut buckets: Vec<BTreeSet<String>> =
             SIGNATURE_TAGS.iter().map(|_| BTreeSet::new()).collect();
         walk_active_preamble(spec, &sel, |item| {
-            if let Some(idx) = SIGNATURE_TAGS.iter().position(|(t, _)| t == &item.tag) {
-                if let TagValue::Dep(dep) = &item.value {
-                    for_each_dep_atom(dep, |name| {
-                        let rendered = render_text_with_macros(name);
-                        let trimmed = rendered.trim();
-                        if !trimmed.is_empty() {
-                            buckets[idx].insert(trimmed.to_string());
-                        }
-                    });
-                }
+            if let Some(idx) = SIGNATURE_TAGS.iter().position(|(t, _)| t == &item.tag)
+                && let TagValue::Dep(dep) = &item.value
+            {
+                for_each_dep_atom(dep, |name| {
+                    let rendered = render_text_with_macros(name);
+                    let trimmed = rendered.trim();
+                    if !trimmed.is_empty() {
+                        buckets[idx].insert(trimmed.to_string());
+                    }
+                });
             }
         });
         Self {

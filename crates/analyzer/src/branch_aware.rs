@@ -283,11 +283,11 @@ pub fn walk_active_files<'ast, F>(
     F: FnMut(&'ast FilesContent<Span>),
 {
     for item in &spec.items {
-        if let SpecItem::Section(section) = item {
-            if let Section::Files { content, .. } = section.as_ref() {
-                for fc in content {
-                    walk_files_content(fc, selection, &mut on_item);
-                }
+        if let SpecItem::Section(section) = item
+            && let Section::Files { content, .. } = section.as_ref()
+        {
+            for fc in content {
+                walk_files_content(fc, selection, &mut on_item);
             }
         }
     }
@@ -395,10 +395,10 @@ B
         let (spec, sel) = build_selection(RHEL_GATED, "rhel-9-x86_64", IndeterminatePolicy::Skip);
         let mut names = Vec::new();
         walk_active_preamble(&spec, &sel, |p| {
-            if let rpm_spec::ast::TagValue::Dep(_) = &p.value {
-                if matches!(p.tag, rpm_spec::ast::Tag::BuildRequires) {
-                    names.push(format!("{:?}", p.tag));
-                }
+            if let rpm_spec::ast::TagValue::Dep(_) = &p.value
+                && matches!(p.tag, rpm_spec::ast::Tag::BuildRequires)
+            {
+                names.push(format!("{:?}", p.tag));
             }
         });
         // Two BuildRequires items survive on rhel: common-pkg and rhel-only.
@@ -566,12 +566,11 @@ B
         let (spec, sel) = build_selection(NESTED, "rhel-9-x86_64", IndeterminatePolicy::Skip);
         let mut names: Vec<String> = Vec::new();
         walk_active_preamble(&spec, &sel, |p| {
-            if matches!(p.tag, rpm_spec::ast::Tag::BuildRequires) {
-                if let rpm_spec::ast::TagValue::Dep(rpm_spec::ast::DepExpr::Atom(atom)) = &p.value {
-                    if let Some(s) = atom.name.literal_str() {
-                        names.push(s.to_string());
-                    }
-                }
+            if matches!(p.tag, rpm_spec::ast::Tag::BuildRequires)
+                && let rpm_spec::ast::TagValue::Dep(rpm_spec::ast::DepExpr::Atom(atom)) = &p.value
+                && let Some(s) = atom.name.literal_str()
+            {
+                names.push(s.to_string());
             }
         });
         assert_eq!(
@@ -612,12 +611,11 @@ B
         let (spec, sel) = build_selection(ELIF, "rhel-9-x86_64", IndeterminatePolicy::Skip);
         let mut names: Vec<String> = Vec::new();
         walk_active_preamble(&spec, &sel, |p| {
-            if matches!(p.tag, rpm_spec::ast::Tag::BuildRequires) {
-                if let rpm_spec::ast::TagValue::Dep(rpm_spec::ast::DepExpr::Atom(atom)) = &p.value {
-                    if let Some(s) = atom.name.literal_str() {
-                        names.push(s.to_string());
-                    }
-                }
+            if matches!(p.tag, rpm_spec::ast::Tag::BuildRequires)
+                && let rpm_spec::ast::TagValue::Dep(rpm_spec::ast::DepExpr::Atom(atom)) = &p.value
+                && let Some(s) = atom.name.literal_str()
+            {
+                names.push(s.to_string());
             }
         });
         assert_eq!(
