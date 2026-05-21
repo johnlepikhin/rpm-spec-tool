@@ -1,6 +1,13 @@
 # Repositories — guide
 
-> Status: **M1 skeleton** (rpm-md fetch + on-disk cache + `repo sync`/`show`/`cache`). Repo-aware lints (`matrix deps check` etc.) land in M2; apt-rpm support, lockfile, and built-in defaults in M3+.
+> Status snapshot — what ships **today**:
+> rpm-md fetch + on-disk cache + `repo sync` / `show` / `status` /
+> `cache`. Repo-aware lints are wired up through the `matrix deps *`,
+> `matrix buildroot *`, and `matrix upgrade-sim` subcommands —
+> see [matrix.md](matrix.md) for their flags and exit codes.
+> apt-rpm support and a lockfile workflow are tracked for later
+> milestones (see [§ What's not here yet](#whats-not-here-yet) at the
+> bottom of this page).
 
 `rpm-spec-tool` can attach RPM repositories to each profile. With a configured repo set the tool stops being a pure-text linter and starts answering questions a release engineer asks before submitting a build:
 
@@ -188,14 +195,27 @@ Key invariants:
 > **The cache feels too big**
 > `repo cache gc` keeps 1 snapshot per repo by default. Override with `--keep N` if you need to keep history (e.g. for the upcoming `repo impact` command). `repo cache prune` wipes everything.
 
-## What's not in M1
+## What's not here yet
 
 Tracked for later milestones:
 
-- `matrix deps check`, `matrix buildroot solve`, `matrix upgrade-sim`, RPM-REPO-* lints — **M2**.
-- `repo lock {create,update,verify,pin-closure,status}` lockfile workflow — **M2 PR5**.
-- apt-rpm backend (ALT Linux) + ALT built-in defaults — **M3**.
-- `repo health`, `repo impact`, `workspace build-order`, `repo security scan` — **M4 / M5**.
-- LSP integration (hover "package X is in repo Y", inline unsat diagnostics) — **P3+**.
+- `repo lock {create,update,verify,pin-closure,status}` lockfile
+  workflow — record a frozen snapshot for reproducible builds.
+- apt-rpm backend (ALT Linux) + ALT built-in repo defaults.
+- `repo health`, `repo impact`, `workspace build-order`,
+  `repo security scan` — operator-oriented repo introspection
+  beyond `repo show`.
+- LSP integration: hover *"package X is in repo Y"* and inline unsat
+  diagnostics, surfacing `RPM-REPO-*` directly in the editor.
 
-See [`/tmp/ideas.md`](file:///tmp/ideas.md) for the full architectural brief and the `/home/evgenii/.claude/plans/quirky-rolling-comet.md` plan file for the rollout schedule.
+## See also
+
+* [matrix.md § Repository-aware analysis](matrix.md) — the
+  `matrix deps`, `matrix buildroot`, and `matrix upgrade-sim`
+  subcommands that consume the cached metadata.
+* [ci-integration.md § Repo-aware lints in CI](ci-integration.md#repo-aware-lints-in-ci)
+  — caching the on-disk cache between CI runs and enforcing
+  `--cache-only`.
+* [configuration.md](configuration.md) — the
+  `[profiles.<name>.repos.<id>]` block in the wider `rpmspec.toml`
+  schema.

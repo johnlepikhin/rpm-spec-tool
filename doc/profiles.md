@@ -5,9 +5,15 @@ A *profile* describes the target build environment: distribution identity
 whitelists. The analyzer does not guess anything about the host — it
 reads only what the profile tells it.
 
-Profiles are configured in `.rpmspec.toml`. Optionally, you can drop in a
+Profiles are configured in `rpmspec.toml`. Optionally, you can drop in a
 dump of `rpm --showrc` taken on the target machine: the analyzer's parser
 extracts identity and all macros from it automatically.
+
+If you are new to the tool, start with [getting-started.md](getting-started.md)
+— this page covers the profile model in detail. For multi-profile
+release matrices (running one spec against many target distributions
+at once) see [matrix.md](matrix.md). For attaching RPM repositories to
+profiles see [repos.md](repos.md).
 
 ## Minimal config
 
@@ -354,3 +360,15 @@ A *target set* groups multiple profiles so the same spec can be checked
 across an entire release matrix in one invocation, with findings
 aggregated by affected profiles. See [`matrix.md`](matrix.md) for the
 `[targets.<name>]` schema and the `matrix check` command.
+
+## See also
+
+* [getting-started.md](getting-started.md) — install + the five core
+  subcommands; introduces profiles in the worked example.
+* [configuration.md](configuration.md) — the full `rpmspec.toml`
+  schema; the `[profiles.X]` section in context with `[lints]`,
+  `[targets.X]`, `[macros.X]`.
+* [matrix.md](matrix.md) — running one spec against many profiles
+  in one invocation.
+* [repos.md](repos.md) — attaching RPM repositories to profiles for
+  repo-aware lints.

@@ -114,9 +114,28 @@ rpm-spec-tool matrix check --profiles rhel-8-x86_64,rhel-9-x86_64,altlinux-10-x8
 
 Every spec-taking subcommand reads from stdin when the path is `-` or omitted.
 
-## Configuration
+## Documentation
 
-Drop a `.rpmspec.toml` next to your specs (or anywhere up the directory tree —
+Long-form documentation lives under [`doc/`](doc/) — start with
+[`doc/README.md`](doc/README.md) for the index. The most-used pages:
+
+| Topic | Document |
+| ----- | -------- |
+| Install + first lint + concepts | [`doc/getting-started.md`](doc/getting-started.md) |
+| The edit / lint / fix / format / commit loop | [`doc/workflow.md`](doc/workflow.md) |
+| Per-subcommand reference + global flags | [`doc/cli.md`](doc/cli.md) |
+| `rpmspec.toml` schema + `config` subcommand | [`doc/configuration.md`](doc/configuration.md) |
+| Severity model, fix levels, the `lints` command | [`doc/lints.md`](doc/lints.md) |
+| Auto-generated rule catalogue | [`doc/lints-list.md`](doc/lints-list.md) |
+| Distribution profile model + built-ins | [`doc/profiles.md`](doc/profiles.md) |
+| Multi-profile release matrix | [`doc/matrix.md`](doc/matrix.md) |
+| Repo-aware analysis (`repo sync` / `matrix deps`) | [`doc/repos.md`](doc/repos.md) |
+| LSP / editor setup + shell completions | [`doc/editor-integration.md`](doc/editor-integration.md) |
+| GitHub Actions recipes + SARIF + baselines | [`doc/ci-integration.md`](doc/ci-integration.md) |
+
+## Configuration in 30 seconds
+
+Drop a `rpmspec.toml` next to your specs (or anywhere up the directory tree —
 the tool walks upward from each input). Minimal example:
 
 ```toml
@@ -124,69 +143,29 @@ the tool walks upward from each input). Minimal example:
 profile = "rhel-9-x86_64"
 
 # Per-lint severity overrides. CLI flags --deny/--warn/--allow win.
-# Rule IDs below are illustrative — see the lint reference for the full list.
 [lints]
 RPM031 = "warn"
 RPM093 = "allow"
-
-# Tune shellcheck. Set `shellcheck = "allow"` at the top level to
-# disable shellcheck entirely.
-[shellcheck]
-binary       = "shellcheck"
-timeout_secs = 10
-
-# Define macros at lint time (also available via CLI: -D 'name value').
-[profiles."rhel-9-x86_64".macros]
-mybranch = "production"
 ```
 
-Subcommand options that override the config:
-
-| Flag | Available in | Purpose |
-| --- | --- | --- |
-| `--config <PATH>` | `lint`, `check`, `format`, `pretty`, `profile *` | explicit `.rpmspec.toml` path |
-| `--profile <NAME>` | `lint`, `check` | pick the distribution profile (in `profile show` the name is a positional argument) |
-| `-D, --define 'NAME VALUE'` | `lint`, `check`, `profile *` | inject a macro (rpmbuild-style); repeatable |
-| `--deny <LINT>` / `--warn` / `--allow` | `lint` | override severity for a single rule; repeatable |
-| `--fix` / `--fix-suggested` | `lint` | apply machine-applicable (and optionally suggested) rewrites |
-| `--format human\|json\|sarif` | `lint` | diagnostics output format |
-| `--check` / `--in-place` / `--diff` | `format` | dry-run / overwrite / unified-diff modes |
-| `--indent N` | `format`, `pretty` | indent `%if` blocks for readability (rpm rejects indented `%if` — display only) |
-| `--format json\|yaml` / `--pretty` | `ast` | AST dump format |
-| `--color auto\|always\|never` | top-level and every subcommand | ANSI colour control |
+Generate a heavily-commented starter with
+`rpm-spec-tool config init --profile rhel-9-x86_64`. Full schema and the
+`config init` / `validate` / `schema` / `doc` subcommands are documented in
+[`doc/configuration.md`](doc/configuration.md).
 
 ## Exit codes
 
 | Command | Code | Meaning |
 | --- | --- | --- |
 | `lint` | `0` | no errors (warnings allowed) |
-| `lint` | `1` | one or more error-severity diagnostics |
+| `lint` | `1` | one or more deny-severity diagnostics |
 | `format --check` | `0` | input is already canonical |
 | `format --check` | `1` | input would be rewritten |
 | `check` | `1` | either lint or format-check failed |
 | `profile macro <NAME>` | `2` | single-profile lookup with undefined macro |
 | any | non-zero | parse error, I/O failure, or invalid CLI |
 
-## Lint rules
-
-The full catalogue of built-in rules — IDs, default severities,
-categories, one-line descriptions — lives in
-[`doc/lints-list.md`](doc/lints-list.md). That file is regenerated from
-the registry by the `lints` subcommand:
-
-```sh
-rpm-spec-tool lints                                    # text, grouped by category
-rpm-spec-tool lints --format markdown                  # the canonical reference
-rpm-spec-tool lints --category correctness --severity deny
-```
-
-`--category` and `--severity` are repeatable. Values inside one flag
-OR-combine; distinct flags AND-combine — for example
-`--category correctness --severity warn` lists only warn-severity rules
-in the correctness category.
-
-The distribution-profile model is documented in
-[`doc/profiles.md`](doc/profiles.md).
+See [`doc/cli.md`](doc/cli.md) for the per-subcommand exit-code table.
 
 ## Installation
 
@@ -221,24 +200,16 @@ cargo install --path crates/cli
 
 ### Shell completions
 
-After installation, generate a completion script for your shell with the
-`completions` subcommand:
+`rpm-spec-tool completions <SHELL>` writes a completion script to
+stdout — see [`doc/editor-integration.md § Shell completions`](doc/editor-integration.md#shell-completions)
+for the install snippets. Supported shells: `bash`, `zsh`, `fish`,
+`powershell`, `elvish`.
 
-```sh
-# Bash (system-wide):
-rpm-spec-tool completions bash | sudo tee /etc/bash_completion.d/rpm-spec-tool >/dev/null
+### Editor / LSP integration
 
-# Zsh (per-user; ensure the target dir is on $fpath):
-rpm-spec-tool completions zsh  > ~/.zsh/completions/_rpm-spec-tool
-
-# Fish (per-user):
-rpm-spec-tool completions fish > ~/.config/fish/completions/rpm-spec-tool.fish
-
-# PowerShell:
-rpm-spec-tool completions powershell >> $PROFILE
-```
-
-Supported shells: `bash`, `zsh`, `fish`, `powershell`, `elvish`.
+`rpm-spec-lsp` is a separate binary in the same workspace. Setup
+recipes for Neovim, Helix, Emacs, and VS Code are in
+[`doc/editor-integration.md`](doc/editor-integration.md).
 
 ### Pre-commit hook (contributors)
 

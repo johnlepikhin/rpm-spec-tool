@@ -6,7 +6,11 @@ aggregates findings so cross-platform regressions show up as one
 record per root cause rather than one per profile.
 
 If you are new to profiles, read [`profiles.md`](profiles.md) first.
-This document covers the multi-profile layer that sits on top.
+This document covers the multi-profile layer that sits on top. For
+the day-to-day workflow that wraps `matrix check` see
+[`workflow.md § Multi-target sweep`](workflow.md#step-6--multi-target-sweep-optional-recommended);
+for repo-aware variants (`matrix deps`, `matrix buildroot`,
+`matrix upgrade-sim`) see [`repos.md`](repos.md).
 
 ## TL;DR
 
