@@ -147,7 +147,10 @@ pub fn validate_repo_id(id: &str) -> Result<(), String> {
     if id.len() > 64 {
         return Err(format!("repo id `{id}` exceeds 64 characters"));
     }
-    if !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_') {
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    {
         return Err(format!(
             "repo id `{id}` must match `[a-z0-9_-]+` (lowercase ascii, digits, `-`, `_`)"
         ));

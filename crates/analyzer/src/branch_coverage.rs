@@ -1779,8 +1779,7 @@ B\n\
         // concat yields `"0"`, parsed as `0` → false → branch inactive.
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%if 0%{?never_defined}");
-        let report =
-            CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         assert!(
             b.inactive_on.contains(&"generic".to_string()),
@@ -1796,11 +1795,8 @@ B\n\
         // `0%{?rhel} >= 9` activates rhel-9 and stays inactive on
         // generic / rhel-7 (where rhel is undefined → concat = 0).
         let set = resolved(&["generic", "rhel-9-x86_64"]);
-        let spec = spec_with_conditional(
-            "%if 0%{?rhel} >= 9 || 0%{?never_defined_macro_xyz}",
-        );
-        let report =
-            CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
+        let spec = spec_with_conditional("%if 0%{?rhel} >= 9 || 0%{?never_defined_macro_xyz}");
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         assert!(
             b.active_on.contains(&"rhel-9-x86_64".to_string()),
@@ -1822,8 +1818,7 @@ B\n\
         // is `0 || 0 || 0` → false → inactive.
         let set = resolved(&["generic"]);
         let spec = spec_with_conditional("%if 0%{?el8} || 0%{?el9} || 0%{?el10}");
-        let report =
-            CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
+        let report = CoverageReport::compute(&spec, &set, &crate::bcond::BcondOverrides::default());
         let b = &report.conditionals[0].branches[0];
         assert!(
             b.inactive_on.contains(&"generic".to_string()),
@@ -2385,7 +2380,11 @@ B\n\
             b.indeterminate_on,
             b.conditional_on
         );
-        assert_eq!(b.inactive_on, vec!["rhel-9-x86_64"], "profile must be inactive");
+        assert_eq!(
+            b.inactive_on,
+            vec!["rhel-9-x86_64"],
+            "profile must be inactive"
+        );
         assert!(
             b.indeterminate_on.is_empty(),
             "indeterminate must be empty after variant exhaustion"
@@ -2503,7 +2502,10 @@ B\n\
             &vmap,
         );
         let b = &report.conditionals[0].branches[0];
-        assert!(b.is_dead(), "must stay DEAD: no variant value activates `spices`");
+        assert!(
+            b.is_dead(),
+            "must stay DEAD: no variant value activates `spices`"
+        );
         assert!(!b.is_conditional());
         assert!(b.conditional_on.is_empty());
     }
@@ -2527,9 +2529,18 @@ B\n\
             &vmap,
         );
         let b = &report.conditionals[0].branches[0];
-        assert!(b.is_conditional(), "indeterminate → conditional with variants");
-        let values = b.reachable_under.get("pgsql_major").expect("pgsql_major key");
-        assert!(values.contains("13"), "expected 13 in values; got {values:?}");
+        assert!(
+            b.is_conditional(),
+            "indeterminate → conditional with variants"
+        );
+        let values = b
+            .reachable_under
+            .get("pgsql_major")
+            .expect("pgsql_major key");
+        assert!(
+            values.contains("13"),
+            "expected 13 in values; got {values:?}"
+        );
     }
 
     #[test]

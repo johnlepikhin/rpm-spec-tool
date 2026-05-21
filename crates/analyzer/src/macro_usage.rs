@@ -48,21 +48,60 @@ use crate::visit::{
 /// today.
 const RESERVED_KEYWORDS: &[&str] = &[
     // Conditional directives
-    "if", "elif", "else", "endif", "ifarch", "ifnarch", "ifos", "ifnos",
+    "if",
+    "elif",
+    "else",
+    "endif",
+    "ifarch",
+    "ifnarch",
+    "ifos",
+    "ifnos",
     // Section markers
-    "package", "description", "prep", "setup", "patch", "autopatch",
-    "build", "install", "check", "files", "changelog", "clean",
+    "package",
+    "description",
+    "prep",
+    "setup",
+    "patch",
+    "autopatch",
+    "build",
+    "install",
+    "check",
+    "files",
+    "changelog",
+    "clean",
     // Scriptlet sections
-    "post", "postun", "pre", "preun", "pretrans", "posttrans",
-    "preuntrans", "postuntrans", "verifyscript",
+    "post",
+    "postun",
+    "pre",
+    "preun",
+    "pretrans",
+    "posttrans",
+    "preuntrans",
+    "postuntrans",
+    "verifyscript",
     // Trigger / filetrigger family
-    "triggerin", "triggerun", "triggerpostun", "triggerprein", "trigger",
-    "filetriggerin", "filetriggerun", "filetriggerpostun", "filetriggerprein",
-    "transfiletriggerin", "transfiletriggerun", "transfiletriggerpostun",
+    "triggerin",
+    "triggerun",
+    "triggerpostun",
+    "triggerprein",
+    "trigger",
+    "filetriggerin",
+    "filetriggerun",
+    "filetriggerpostun",
+    "filetriggerprein",
+    "transfiletriggerin",
+    "transfiletriggerun",
+    "transfiletriggerpostun",
     "transfiletriggerprein",
     // Definition keywords (the directive itself, not the name being defined)
-    "define", "global", "undefine", "bcond", "bcond_with", "bcond_without",
-    "include", "load",
+    "define",
+    "global",
+    "undefine",
+    "bcond",
+    "bcond_with",
+    "bcond_without",
+    "include",
+    "load",
 ];
 
 /// RPM auto-defines from the preamble: the build process injects
@@ -75,9 +114,19 @@ const RESERVED_KEYWORDS: &[&str] = &[
 /// by prefix-and-tail-digits in [`is_rpm_auto_macro`] so the list
 /// stays manageable.
 const RPM_AUTO_MACROS: &[&str] = &[
-    "name", "version", "release", "epoch", "arch", "os",
-    "vendor", "packager", "license", "summary", "description",
-    "buildroot", "buildsubdir",
+    "name",
+    "version",
+    "release",
+    "epoch",
+    "arch",
+    "os",
+    "vendor",
+    "packager",
+    "license",
+    "summary",
+    "description",
+    "buildroot",
+    "buildsubdir",
 ];
 
 /// Visitor that records every user-meaningful macro name referenced
@@ -119,9 +168,7 @@ impl MacroUsageCollector {
     /// the raw set of names introduced by `%global` / `%define` /
     /// `%bcond_*` — exposed so renderers can show a "spec-local
     /// macros: N" rollup if useful.
-    pub fn collect_with_local_defs(
-        spec: &SpecFile<Span>,
-    ) -> (BTreeSet<String>, BTreeSet<String>) {
+    pub fn collect_with_local_defs(spec: &SpecFile<Span>) -> (BTreeSet<String>, BTreeSet<String>) {
         let mut me = Self::new();
         me.collect_local_defs(spec);
         me.visit_spec(spec);

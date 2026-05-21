@@ -83,8 +83,7 @@ mod tests {
 
     #[test]
     fn roundtrip_gz() {
-        let mut enc =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         enc.write_all(PAYLOAD).unwrap();
         let gzipped = enc.finish().unwrap();
         let out = decompress("x.gz", &gzipped).unwrap();

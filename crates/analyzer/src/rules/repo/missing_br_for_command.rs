@@ -76,124 +76,24 @@ const IMPLICIT_BUILD_COMMANDS: &[&str] = &[
     // Shell built-ins (POSIX + common bash). Most are already filtered
     // by the parser, but a few (cd, set, eval, source) appear as bare
     // tokens in scripts.
-    ":",
-    "[",
-    "[[",
-    "alias",
-    "break",
-    "builtin",
-    "case",
-    "cd",
-    "command",
-    "continue",
-    "declare",
-    "do",
-    "done",
-    "echo",
-    "elif",
-    "else",
-    "esac",
-    "eval",
-    "exec",
-    "exit",
-    "export",
-    "false",
-    "fi",
-    "for",
-    "function",
-    "getopts",
-    "hash",
-    "if",
-    "in",
-    "let",
-    "local",
-    "printf",
-    "pushd",
-    "popd",
-    "pwd",
-    "read",
-    "readonly",
-    "return",
-    "set",
-    "shift",
-    "source",
-    "test",
-    "then",
-    "time",
-    "trap",
-    "true",
-    "type",
-    "ulimit",
-    "umask",
-    "unalias",
-    "unset",
-    "until",
-    "wait",
-    "while",
+    ":", "[", "[[", "alias", "break", "builtin", "case", "cd", "command", "continue", "declare",
+    "do", "done", "echo", "elif", "else", "esac", "eval", "exec", "exit", "export", "false", "fi",
+    "for", "function", "getopts", "hash", "if", "in", "let", "local", "printf", "pushd", "popd",
+    "pwd", "read", "readonly", "return", "set", "shift", "source", "test", "then", "time", "trap",
+    "true", "type", "ulimit", "umask", "unalias", "unset", "until", "wait", "while",
     // Coreutils — universally present in any build chroot.
-    "awk",
-    "basename",
-    "cat",
-    "chgrp",
-    "chmod",
-    "chown",
-    "cmp",
-    "cp",
-    "cut",
-    "date",
-    "diff",
-    "dirname",
-    "du",
-    "env",
-    "expr",
-    "find",
-    "grep",
-    "head",
-    "iconv",
-    "id",
-    "install",
-    "ln",
-    "ls",
-    "mkdir",
-    "mktemp",
-    "mv",
-    "od",
-    "readlink",
-    "realpath",
-    "rm",
-    "rmdir",
-    "sed",
-    "seq",
-    "sleep",
-    "sort",
-    "stat",
-    "tail",
-    "tee",
+    "awk", "basename", "cat", "chgrp", "chmod", "chown", "cmp", "cp", "cut", "date", "diff",
+    "dirname", "du", "env", "expr", "find", "grep", "head", "iconv", "id", "install", "ln", "ls",
+    "mkdir", "mktemp", "mv", "od", "readlink", "realpath", "rm", "rmdir", "sed", "seq", "sleep",
+    "sort", "stat", "tail", "tee",
     // `test` / `true` already listed under shell built-ins; this
     // section deliberately omits them to keep `.contains()` from
     // walking duplicates.
-    "touch",
-    "tr",
-    "uname",
-    "uniq",
-    "wc",
-    "which",
-    "xargs",
+    "touch", "tr", "uname", "uniq", "wc", "which", "xargs",
     // Standard build / unpack stack (every distro pulls these into
     // the buildroot baseline via `base_packages` or rpm-build itself).
-    "bash",
-    "bunzip2",
-    "bzip2",
-    "gunzip",
-    "gzip",
-    "make",
-    "patch",
-    "sh",
-    "tar",
-    "unxz",
-    "unzip",
-    "xz",
-    "zstd",
+    "bash", "bunzip2", "bzip2", "gunzip", "gzip", "make", "patch", "sh", "tar", "unxz", "unzip",
+    "xz", "zstd",
 ];
 
 #[derive(Debug, Default)]
@@ -218,15 +118,11 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForCommand {
         };
         let bcond = BcondMap::from_spec(spec, &BcondOverrides::default());
 
-        let declared_br: BTreeSet<String> = super::shared::project_deps(
-            spec,
-            profile,
-            &bcond,
-            |t| matches!(t, Tag::BuildRequires),
-        )
-        .into_iter()
-        .map(|d| d.requirement.name().to_string())
-        .collect();
+        let declared_br: BTreeSet<String> =
+            super::shared::project_deps(spec, profile, &bcond, |t| matches!(t, Tag::BuildRequires))
+                .into_iter()
+                .map(|d| d.requirement.name().to_string())
+                .collect();
 
         let sections: Vec<(BuildScriptKind, &ShellBody<Span>, Span)> =
             shared::collect_active_build_scripts(&spec.items, profile, &bcond);
@@ -248,9 +144,7 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForCommand {
             let inactive_ranges = shared::inactive_line_ranges(body, profile, &bcond);
             let section_start = section_span.start_line;
             for (idx, line) in body.lines.iter().enumerate() {
-                let source_line = section_start
-                    .saturating_add(1)
-                    .saturating_add(idx as u32);
+                let source_line = section_start.saturating_add(1).saturating_add(idx as u32);
                 if inactive_ranges
                     .iter()
                     .any(|(s, e)| source_line >= *s && source_line <= *e)
@@ -309,9 +203,7 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForCommand {
                             ),
                             section_span,
                         )
-                        .with_repo_context(RepoContext::for_profile(
-                            &state.universe.profile_name,
-                        )),
+                        .with_repo_context(RepoContext::for_profile(&state.universe.profile_name)),
                     );
                 }
             }
@@ -731,8 +623,14 @@ mod tests {
     #[test]
     fn scan_bare_commands_basic() {
         assert_eq!(scan_bare_commands("cmake -B build"), vec!["cmake"]);
-        assert_eq!(scan_bare_commands("make && meson setup"), vec!["make", "meson"]);
-        assert_eq!(scan_bare_commands("a ; b | c || d"), vec!["a", "b", "c", "d"]);
+        assert_eq!(
+            scan_bare_commands("make && meson setup"),
+            vec!["make", "meson"]
+        );
+        assert_eq!(
+            scan_bare_commands("a ; b | c || d"),
+            vec!["a", "b", "c", "d"]
+        );
         // Heuristic catches the first token at each command position;
         // `do` is the syntactic first token after `;` in `for...do`.
         // The whitelist filters it out downstream so it doesn't

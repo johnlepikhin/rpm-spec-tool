@@ -144,9 +144,7 @@ pub fn solve(req: SolveRequest<'_>) -> Result<Solution, RepoError> {
         }
 
         let newly_pinned = state.pin(universe, provider.clone(), &provenance)?;
-        if newly_pinned
-            && let Some(pkg) = provider.resolve(universe)?
-        {
+        if newly_pinned && let Some(pkg) = provider.resolve(universe)? {
             // Each transitive Require inherits this provider's
             // ancestry so its eventual unmet report can trace
             // back to a top-level BR.
@@ -232,11 +230,7 @@ impl SolverState {
     /// the same file path (`/usr/bin/pkg-config`, owned by both
     /// `pkgconfig` and `pkgconf-pkg-config`) once one of them is
     /// already in the closure.
-    fn any_pinned_owns(
-        &self,
-        universe: &RepoUniverse,
-        path: &str,
-    ) -> Result<bool, RepoError> {
+    fn any_pinned_owns(&self, universe: &RepoUniverse, path: &str) -> Result<bool, RepoError> {
         for (pref, _) in &self.pinned {
             let Some(db) = universe.db_for(&pref.repo_id) else {
                 continue;

@@ -39,10 +39,7 @@ pub fn tiny_universe() -> Arc<RepoUniverse> {
                 arch: Arc::from("x86_64"),
             },
             repo_id: RepoId::from("baseos"),
-            provides: provides
-                .into_iter()
-                .map(Capability::unversioned)
-                .collect(),
+            provides: provides.into_iter().map(Capability::unversioned).collect(),
             requires: Vec::new(),
             conflicts: Vec::new(),
             obsoletes: Vec::new(),

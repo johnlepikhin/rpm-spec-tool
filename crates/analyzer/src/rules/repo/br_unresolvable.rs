@@ -120,14 +120,15 @@ mod tests {
     fn flags_missing_buildrequires() {
         let src = "Name: x\nVersion: 1\nRelease: 1\nSummary: s\n\
                    License: MIT\nBuildRequires: missing-package\n%description\nx\n";
-        let diags = run_repo_lint::<BuildRequiresUnresolvable>(
-            src,
-            &redos_profile(),
-            tiny_universe(),
-        );
+        let diags =
+            run_repo_lint::<BuildRequiresUnresolvable>(src, &redos_profile(), tiny_universe());
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(diags[0].lint_id, "RPM-REPO-001");
-        assert!(diags[0].message.contains("missing-package"), "{}", diags[0].message);
+        assert!(
+            diags[0].message.contains("missing-package"),
+            "{}",
+            diags[0].message
+        );
         assert!(diags[0].repo_context.is_some());
     }
 
@@ -135,11 +136,8 @@ mod tests {
     fn silent_when_buildrequire_present() {
         let src = "Name: x\nVersion: 1\nRelease: 1\nSummary: s\n\
                    License: MIT\nBuildRequires: bash\n%description\nx\n";
-        let diags = run_repo_lint::<BuildRequiresUnresolvable>(
-            src,
-            &redos_profile(),
-            tiny_universe(),
-        );
+        let diags =
+            run_repo_lint::<BuildRequiresUnresolvable>(src, &redos_profile(), tiny_universe());
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -164,13 +162,9 @@ mod tests {
         let mut profile = redos_profile();
         profile.macros.insert(
             "_vendor".to_string(),
-            rpm_spec_profile::MacroEntry::literal(
-                "redhat",
-                rpm_spec_profile::Provenance::Override,
-            ),
+            rpm_spec_profile::MacroEntry::literal("redhat", rpm_spec_profile::Provenance::Override),
         );
-        let diags =
-            run_repo_lint::<BuildRequiresUnresolvable>(src, &profile, tiny_universe());
+        let diags = run_repo_lint::<BuildRequiresUnresolvable>(src, &profile, tiny_universe());
         assert!(
             diags.is_empty(),
             "inactive vendor branch should be skipped; got {diags:?}",
@@ -193,13 +187,9 @@ mod tests {
         let mut profile = redos_profile();
         profile.macros.insert(
             "_vendor".to_string(),
-            rpm_spec_profile::MacroEntry::literal(
-                "rosa",
-                rpm_spec_profile::Provenance::Override,
-            ),
+            rpm_spec_profile::MacroEntry::literal("rosa", rpm_spec_profile::Provenance::Override),
         );
-        let diags =
-            run_repo_lint::<BuildRequiresUnresolvable>(src, &profile, tiny_universe());
+        let diags = run_repo_lint::<BuildRequiresUnresolvable>(src, &profile, tiny_universe());
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(
             diags[0].message.contains("lib64systemd-devel"),

@@ -164,8 +164,7 @@ impl RepoDb {
         let fetched_at_str = fetched_at
             .format(&Rfc3339)
             .map_err(|e| RepoError::Database(format!("rfc3339 format: {e}")))?;
-        let mut stmt =
-            conn.prepare("INSERT INTO meta (key, value) VALUES (?1, ?2)")?;
+        let mut stmt = conn.prepare("INSERT INTO meta (key, value) VALUES (?1, ?2)")?;
         stmt.execute(params![
             schema::meta_keys::SCHEMA_VERSION,
             schema::SCHEMA_VERSION.to_string()
@@ -356,8 +355,7 @@ impl RepoDb {
 
             for pkg in packages {
                 let (alg, hex) = convert::checksum_columns(&pkg.checksum);
-                let source_name =
-                    pkg.source_rpm.as_deref().and_then(convert::source_rpm_name);
+                let source_name = pkg.source_rpm.as_deref().and_then(convert::source_rpm_name);
                 insert_pkg.execute(params![
                     pkg.nevra.name.as_ref(),
                     pkg.nevra.epoch,
@@ -375,13 +373,48 @@ impl RepoDb {
                 let pkg_id = tx.last_insert_rowid();
 
                 insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Provides, &pkg.provides)?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Requires, pkg.requires.iter().map(|d| d.as_capability()))?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Conflicts, pkg.conflicts.iter().map(|d| d.as_capability()))?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Obsoletes, pkg.obsoletes.iter().map(|d| d.as_capability()))?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Recommends, pkg.recommends.iter().map(|d| d.as_capability()))?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Suggests, pkg.suggests.iter().map(|d| d.as_capability()))?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Supplements, pkg.supplements.iter().map(|d| d.as_capability()))?;
-                insert_cap_batch(&mut insert_cap, pkg_id, CapKind::Enhances, pkg.enhances.iter().map(|d| d.as_capability()))?;
+                insert_cap_batch(
+                    &mut insert_cap,
+                    pkg_id,
+                    CapKind::Requires,
+                    pkg.requires.iter().map(|d| d.as_capability()),
+                )?;
+                insert_cap_batch(
+                    &mut insert_cap,
+                    pkg_id,
+                    CapKind::Conflicts,
+                    pkg.conflicts.iter().map(|d| d.as_capability()),
+                )?;
+                insert_cap_batch(
+                    &mut insert_cap,
+                    pkg_id,
+                    CapKind::Obsoletes,
+                    pkg.obsoletes.iter().map(|d| d.as_capability()),
+                )?;
+                insert_cap_batch(
+                    &mut insert_cap,
+                    pkg_id,
+                    CapKind::Recommends,
+                    pkg.recommends.iter().map(|d| d.as_capability()),
+                )?;
+                insert_cap_batch(
+                    &mut insert_cap,
+                    pkg_id,
+                    CapKind::Suggests,
+                    pkg.suggests.iter().map(|d| d.as_capability()),
+                )?;
+                insert_cap_batch(
+                    &mut insert_cap,
+                    pkg_id,
+                    CapKind::Supplements,
+                    pkg.supplements.iter().map(|d| d.as_capability()),
+                )?;
+                insert_cap_batch(
+                    &mut insert_cap,
+                    pkg_id,
+                    CapKind::Enhances,
+                    pkg.enhances.iter().map(|d| d.as_capability()),
+                )?;
 
                 for path in &pkg.files {
                     insert_file.execute(params![pkg_id, path.as_ref()])?;
@@ -395,7 +428,9 @@ impl RepoDb {
     /// Number of packages indexed. Cheap (single COUNT).
     pub fn package_count(&self) -> Result<u64, RepoError> {
         let guard = self.lock();
-        Ok(guard.query_row("SELECT COUNT(*) FROM packages", [], |row| row.get::<_, i64>(0))? as u64)
+        Ok(guard.query_row("SELECT COUNT(*) FROM packages", [], |row| {
+            row.get::<_, i64>(0)
+        })? as u64)
     }
 
     /// Look up packages by exact name. Returns pkg_id values; resolve
@@ -711,9 +746,8 @@ impl RepoDb {
     /// Returns pkg_id values.
     pub fn pkg_ids_providing(&self, name: &str) -> Result<Vec<i64>, RepoError> {
         let guard = self.lock();
-        let mut stmt = guard.prepare(
-            "SELECT DISTINCT pkg_id FROM caps WHERE kind = 'provides' AND name = ?1",
-        )?;
+        let mut stmt = guard
+            .prepare("SELECT DISTINCT pkg_id FROM caps WHERE kind = 'provides' AND name = ?1")?;
         let rows = stmt.query_map(params![name], |row| row.get::<_, i64>(0))?;
         let mut out = Vec::new();
         for r in rows {
@@ -763,9 +797,8 @@ impl RepoDb {
     /// Reverse-requires: packages that require capability `name`.
     pub fn pkg_ids_requiring(&self, name: &str) -> Result<Vec<i64>, RepoError> {
         let guard = self.lock();
-        let mut stmt = guard.prepare(
-            "SELECT DISTINCT pkg_id FROM caps WHERE kind = 'requires' AND name = ?1",
-        )?;
+        let mut stmt = guard
+            .prepare("SELECT DISTINCT pkg_id FROM caps WHERE kind = 'requires' AND name = ?1")?;
         let rows = stmt.query_map(params![name], |row| row.get::<_, i64>(0))?;
         let mut out = Vec::new();
         for r in rows {
@@ -783,39 +816,41 @@ impl RepoDb {
     /// error.
     pub fn load_package(&self, pkg_id: i64) -> Result<Option<Package>, RepoError> {
         let guard = self.lock();
-        let header = guard.query_row(
-            "SELECT name, epoch, version, release, arch, source_rpm, summary, \
+        let header = guard
+            .query_row(
+                "SELECT name, epoch, version, release, arch, source_rpm, summary, \
                     size_installed, checksum_alg, checksum_hex, location \
              FROM packages WHERE pkg_id = ?1",
-            params![pkg_id],
-            |row| {
-                let name: String = row.get(0)?;
-                let epoch: u32 = row.get(1)?;
-                let version: String = row.get(2)?;
-                let release: String = row.get(3)?;
-                let arch: String = row.get(4)?;
-                let source_rpm: Option<String> = row.get(5)?;
-                let summary: String = row.get(6)?;
-                let size_installed: i64 = row.get(7)?;
-                let checksum_alg: String = row.get(8)?;
-                let checksum_hex: String = row.get(9)?;
-                let location: String = row.get(10)?;
-                Ok(PackageHeader {
-                    nevra: NEVRA {
-                        name: Arc::from(name),
-                        epoch,
-                        version: Arc::from(version),
-                        release: Arc::from(release),
-                        arch: Arc::from(arch),
-                    },
-                    source_rpm: source_rpm.map(Arc::from),
-                    summary: Arc::from(summary),
-                    size_installed: size_installed as u64,
-                    checksum: convert::checksum_from_columns(&checksum_alg, &checksum_hex),
-                    location: Arc::from(location),
-                })
-            },
-        ).optional()?;
+                params![pkg_id],
+                |row| {
+                    let name: String = row.get(0)?;
+                    let epoch: u32 = row.get(1)?;
+                    let version: String = row.get(2)?;
+                    let release: String = row.get(3)?;
+                    let arch: String = row.get(4)?;
+                    let source_rpm: Option<String> = row.get(5)?;
+                    let summary: String = row.get(6)?;
+                    let size_installed: i64 = row.get(7)?;
+                    let checksum_alg: String = row.get(8)?;
+                    let checksum_hex: String = row.get(9)?;
+                    let location: String = row.get(10)?;
+                    Ok(PackageHeader {
+                        nevra: NEVRA {
+                            name: Arc::from(name),
+                            epoch,
+                            version: Arc::from(version),
+                            release: Arc::from(release),
+                            arch: Arc::from(arch),
+                        },
+                        source_rpm: source_rpm.map(Arc::from),
+                        summary: Arc::from(summary),
+                        size_installed: size_installed as u64,
+                        checksum: convert::checksum_from_columns(&checksum_alg, &checksum_hex),
+                        location: Arc::from(location),
+                    })
+                },
+            )
+            .optional()?;
         let Some(header) = header else {
             return Ok(None);
         };
@@ -865,7 +900,7 @@ impl RepoDb {
                 other => {
                     return Err(RepoError::Database(format!(
                         "unknown caps.kind discriminator: {other}"
-                    )))
+                    )));
                 }
             }
         }
@@ -939,24 +974,26 @@ impl RepoDb {
     /// where only the (name, version) tuple is needed.
     pub fn load_nevra(&self, pkg_id: i64) -> Result<Option<NEVRA>, RepoError> {
         let guard = self.lock();
-        Ok(guard.query_row(
-            "SELECT name, epoch, version, release, arch FROM packages WHERE pkg_id = ?1",
-            params![pkg_id],
-            |row| {
-                let name: String = row.get(0)?;
-                let epoch: u32 = row.get(1)?;
-                let version: String = row.get(2)?;
-                let release: String = row.get(3)?;
-                let arch: String = row.get(4)?;
-                Ok(NEVRA {
-                    name: Arc::from(name),
-                    epoch,
-                    version: Arc::from(version),
-                    release: Arc::from(release),
-                    arch: Arc::from(arch),
-                })
-            },
-        ).optional()?)
+        Ok(guard
+            .query_row(
+                "SELECT name, epoch, version, release, arch FROM packages WHERE pkg_id = ?1",
+                params![pkg_id],
+                |row| {
+                    let name: String = row.get(0)?;
+                    let epoch: u32 = row.get(1)?;
+                    let version: String = row.get(2)?;
+                    let release: String = row.get(3)?;
+                    let arch: String = row.get(4)?;
+                    Ok(NEVRA {
+                        name: Arc::from(name),
+                        epoch,
+                        version: Arc::from(version),
+                        release: Arc::from(release),
+                        arch: Arc::from(arch),
+                    })
+                },
+            )
+            .optional()?)
     }
 
     /// Fetch every `provides` capability for a pkg_id. Used by the
@@ -1102,7 +1139,6 @@ fn read_pkg_nevra_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, NEVRA)>
         },
     ))
 }
-
 
 /// Pragmas for the bulk-write path used by `repo sync`. The DB
 /// is created at a `.tmp` location and atomic-renamed into place
@@ -1281,7 +1317,8 @@ mod tests {
         )
         .unwrap();
         let mut pkg = sample_pkg("systemd-devel", "252");
-        pkg.provides.push(Capability::unversioned(Arc::from("pkgconfig(libsystemd)")));
+        pkg.provides
+            .push(Capability::unversioned(Arc::from("pkgconfig(libsystemd)")));
         db.ingest_packages(&[pkg]).unwrap();
 
         let providers = db.pkg_ids_providing("pkgconfig(libsystemd)").unwrap();

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use rpm_spec_repo_core::{
     Capability, Dependency, NEVRA, Package, PkgChecksum, RepoId, RepoIndex, RepoUniverse,
 };
-use rpm_spec_repo_resolver::{SolveRequest, Solution, solve};
+use rpm_spec_repo_resolver::{Solution, SolveRequest, solve};
 use time::OffsetDateTime;
 
 fn nevra(name: &str, version: &str, release: &str) -> NEVRA {

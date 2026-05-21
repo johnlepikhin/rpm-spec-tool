@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 
 use rpm_spec_repo_core::{
     CapVersion, Capability, Dependency, EVR, NEVRA, Package, PkgChecksum, RepoError, RepoId,
@@ -61,7 +61,12 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
                     for attr in e.attributes().with_checks(false).flatten() {
                         if attr.key.as_ref() == b"type" {
                             current.checksum_algo = std::str::from_utf8(&attr.value)
-                                .map_err(|err| RepoError::parse_at_file("primary.xml", format!("checksum type: {err}")))?
+                                .map_err(|err| {
+                                    RepoError::parse_at_file(
+                                        "primary.xml",
+                                        format!("checksum type: {err}"),
+                                    )
+                                })?
                                 .to_string();
                         }
                     }
@@ -82,8 +87,9 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
             Event::Empty(e) if in_package => match e.name().as_ref() {
                 b"version" => {
                     for attr in e.attributes().with_checks(false).flatten() {
-                        let val = std::str::from_utf8(&attr.value)
-                            .map_err(|e| RepoError::parse_at_file("primary.xml", format!("version: {e}")))?;
+                        let val = std::str::from_utf8(&attr.value).map_err(|e| {
+                            RepoError::parse_at_file("primary.xml", format!("version: {e}"))
+                        })?;
                         match attr.key.as_ref() {
                             // Missing/non-numeric epoch → 0. Matches rpm
                             // semantics (absent epoch == 0) and lines
@@ -98,10 +104,18 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
                 b"size" => {
                     for attr in e.attributes().with_checks(false).flatten() {
                         if attr.key.as_ref() == b"installed" {
-                            let s = std::str::from_utf8(&attr.value)
-                                .map_err(|err| RepoError::parse_at_file("primary.xml", format!("size@installed for {}: {err}", current.name)))?;
-                            current.size_installed = s.parse()
-                                .map_err(|err| RepoError::parse_at_file("primary.xml", format!("size@installed for {} = {s:?}: {err}", current.name)))?;
+                            let s = std::str::from_utf8(&attr.value).map_err(|err| {
+                                RepoError::parse_at_file(
+                                    "primary.xml",
+                                    format!("size@installed for {}: {err}", current.name),
+                                )
+                            })?;
+                            current.size_installed = s.parse().map_err(|err| {
+                                RepoError::parse_at_file(
+                                    "primary.xml",
+                                    format!("size@installed for {} = {s:?}: {err}", current.name),
+                                )
+                            })?;
                         }
                     }
                 }
@@ -109,7 +123,12 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
                     for attr in e.attributes().with_checks(false).flatten() {
                         if attr.key.as_ref() == b"href" {
                             current.location = std::str::from_utf8(&attr.value)
-                                .map_err(|e| RepoError::parse_at_file("primary.xml", format!("location: {e}")))?
+                                .map_err(|e| {
+                                    RepoError::parse_at_file(
+                                        "primary.xml",
+                                        format!("location: {e}"),
+                                    )
+                                })?
                                 .to_string();
                         }
                     }
@@ -135,9 +154,9 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
                 _ => {}
             },
             Event::Text(t) => {
-                let s = t
-                    .unescape()
-                    .map_err(|e| RepoError::parse_at_file("primary.xml", format!("text decode: {e}")))?;
+                let s = t.unescape().map_err(|e| {
+                    RepoError::parse_at_file("primary.xml", format!("text decode: {e}"))
+                })?;
                 last_text = s.into_owned();
                 if let Some(field) = last_field {
                     match field {
@@ -153,14 +172,10 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
                 b"name" | b"arch" | b"summary" | b"checksum" | b"rpm:sourcerpm" => {
                     last_field = None;
                 }
-                b"rpm:provides"
-                | b"rpm:requires"
-                | b"rpm:conflicts"
-                | b"rpm:obsoletes"
-                | b"rpm:recommends"
-                | b"rpm:suggests"
-                | b"rpm:supplements"
-                | b"rpm:enhances" => dep_collector = None,
+                b"rpm:provides" | b"rpm:requires" | b"rpm:conflicts" | b"rpm:obsoletes"
+                | b"rpm:recommends" | b"rpm:suggests" | b"rpm:supplements" | b"rpm:enhances" => {
+                    dep_collector = None
+                }
                 b"package" => {
                     if in_package {
                         packages.push(current.take().build(repo_id.clone())?);
@@ -238,7 +253,10 @@ impl PackageBuilder {
 
     fn build(self, repo_id: RepoId) -> Result<Package, RepoError> {
         if self.name.is_empty() {
-            return Err(RepoError::parse_at_file("primary.xml", "package without name"));
+            return Err(RepoError::parse_at_file(
+                "primary.xml",
+                "package without name",
+            ));
         }
         // Route through the validating constructor so a malformed
         // `<rpm:checksum>` (wrong length, non-hex bytes) doesn't
@@ -380,13 +398,20 @@ mod tests {
         assert_eq!(bash.nevra.version.as_ref(), "5.1.8");
         assert_eq!(bash.nevra.release.as_ref(), "9.el9");
         assert_eq!(bash.nevra.arch.as_ref(), "x86_64");
-        assert_eq!(bash.provides.len(), 3, "bash provides bash + /bin/bash + /bin/sh");
+        assert_eq!(
+            bash.provides.len(),
+            3,
+            "bash provides bash + /bin/bash + /bin/sh"
+        );
         assert_eq!(bash.requires.len(), 1, "bash requires glibc");
         assert_eq!(bash.requires[0].name().as_ref(), "glibc");
         assert_eq!(bash.source_rpm.as_deref(), Some("bash-5.1.8-9.el9.src.rpm"));
         assert_eq!(bash.summary.as_ref(), "The GNU Bourne Again shell");
         assert_eq!(bash.size_installed, 6_500_000);
-        assert_eq!(bash.location.as_ref(), "Packages/b/bash-5.1.8-9.el9.x86_64.rpm");
+        assert_eq!(
+            bash.location.as_ref(),
+            "Packages/b/bash-5.1.8-9.el9.x86_64.rpm"
+        );
         assert!(
             // Fixture uses sha256("bash") = 37d2b…c6c2 (real digest,
             // not just a length-correct placeholder, so the test

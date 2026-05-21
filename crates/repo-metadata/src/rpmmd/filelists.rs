@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 
 use rpm_spec_repo_core::{Package, RepoError};
 
@@ -58,8 +58,9 @@ pub fn merge(xml: &[u8], packages: &mut [Package]) -> Result<(), RepoError> {
                 current_name = None;
                 files_for_pkg.clear();
                 for attr in e.attributes().with_checks(false).flatten() {
-                    let val = std::str::from_utf8(&attr.value)
-                        .map_err(|e| RepoError::parse_at_file("filelists.xml", format!("attr: {e}")))?;
+                    let val = std::str::from_utf8(&attr.value).map_err(|e| {
+                        RepoError::parse_at_file("filelists.xml", format!("attr: {e}"))
+                    })?;
                     match attr.key.as_ref() {
                         b"pkgid" => current_pkgid = Some(val.to_string()),
                         b"name" => current_name = Some(val.to_string()),
@@ -72,10 +73,9 @@ pub fn merge(xml: &[u8], packages: &mut [Package]) -> Result<(), RepoError> {
                 file_text.clear();
             }
             Event::Text(t) if collecting_file => {
-                file_text.push_str(
-                    &t.unescape()
-                        .map_err(|e| RepoError::parse_at_file("filelists.xml", format!("text: {e}")))?,
-                );
+                file_text.push_str(&t.unescape().map_err(|e| {
+                    RepoError::parse_at_file("filelists.xml", format!("text: {e}"))
+                })?);
             }
             Event::End(e) if e.name().as_ref() == b"file" => {
                 if collecting_file {

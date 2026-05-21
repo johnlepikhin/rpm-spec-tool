@@ -82,10 +82,9 @@ pub fn parse_pkglist_bytes(
 ///
 /// See [`AptRpmParseError::BadReleaseFile`].
 pub fn parse_release_bytes(bytes: &[u8]) -> Result<release::ReleaseFile, AptRpmParseError> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|e| AptRpmParseError::BadReleaseFile {
-            detail: format!("not UTF-8: {e}"),
-        })?;
+    let text = std::str::from_utf8(bytes).map_err(|e| AptRpmParseError::BadReleaseFile {
+        detail: format!("not UTF-8: {e}"),
+    })?;
     release::parse(text)
 }
 
@@ -96,14 +95,11 @@ pub fn parse_release_bytes(bytes: &[u8]) -> Result<release::ReleaseFile, AptRpmP
 /// # Errors
 ///
 /// See [`AptRpmParseError::BadContentsIndexLine`].
-pub fn parse_contents_index_bytes(
-    bytes: &[u8],
-) -> Result<contents::FileMap, AptRpmParseError> {
-    let text =
-        std::str::from_utf8(bytes).map_err(|e| AptRpmParseError::BadContentsIndexLine {
-            line: 0,
-            detail: format!("not UTF-8: {e}"),
-        })?;
+pub fn parse_contents_index_bytes(bytes: &[u8]) -> Result<contents::FileMap, AptRpmParseError> {
+    let text = std::str::from_utf8(bytes).map_err(|e| AptRpmParseError::BadContentsIndexLine {
+        line: 0,
+        detail: format!("not UTF-8: {e}"),
+    })?;
     contents::parse(text)
 }
 
@@ -117,19 +113,14 @@ impl RepoBackend for AptRpmBackend {
         RepoKind::AptRpm
     }
 
-    fn fetch_revision(
-        &self,
-        http: &HttpCache,
-        baseurl: &str,
-    ) -> Result<RepoRevision, RepoError> {
+    fn fetch_revision(&self, http: &HttpCache, baseurl: &str) -> Result<RepoRevision, RepoError> {
         let url = join_url(baseurl, "base/release");
         let bytes = http.fetch(&url)?;
         // Validate as a sanity-check — if the file isn't a real
         // release we fail fast at sync time rather than letting the
         // unparseable header chain detonate later inside fetch_index.
-        let text = std::str::from_utf8(&bytes).map_err(|e| {
-            RepoError::parse_at_file("base/release", format!("not UTF-8: {e}"))
-        })?;
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|e| RepoError::parse_at_file("base/release", format!("not UTF-8: {e}")))?;
         let _ = release::parse(text)?;
         // Snapshot id = sha256 of the whole release bytes. Same
         // policy as rpm-md (sha of repomd.xml). Two syncs of the
@@ -210,8 +201,7 @@ impl RepoBackend for AptRpmBackend {
         let srclist_url = join_url(baseurl, srclist_loc);
         match http.fetch(&srclist_url) {
             Ok(srclist_raw) => {
-                let srclist_bytes =
-                    crate::compression::decompress(srclist_loc, &srclist_raw)?;
+                let srclist_bytes = crate::compression::decompress(srclist_loc, &srclist_raw)?;
                 let src_headers = header::parse_chain(&srclist_bytes)?;
                 for h in &src_headers {
                     if let Some(pkg) = package::package_from_header(h, repo_id) {

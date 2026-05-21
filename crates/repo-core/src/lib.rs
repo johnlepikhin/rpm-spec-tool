@@ -35,7 +35,9 @@
 )]
 
 #[cfg(not(target_os = "linux"))]
-compile_error!("rpm-spec-repo-core requires Linux — repository handling assumes Linux-only conventions");
+compile_error!(
+    "rpm-spec-repo-core requires Linux — repository handling assumes Linux-only conventions"
+);
 
 pub mod db;
 pub mod error;
@@ -45,7 +47,9 @@ pub mod package;
 
 pub use error::{ErrorLocation, HttpError, RepoError, SolveError};
 pub use evr::EVR;
-pub use index::{Advisory, AdvisorySeverity, ProviderRef, RepoId, RepoIndex, RepoRevision, RepoUniverse};
+pub use index::{
+    Advisory, AdvisorySeverity, ProviderRef, RepoId, RepoIndex, RepoRevision, RepoUniverse,
+};
 pub use package::{
     CapVersion, Capability, ChecksumParseError, Dependency, NEVRA, Package, PkgChecksum,
 };

@@ -254,8 +254,8 @@ impl HttpCache {
                 .unwrap_or(0),
             body_sha256,
         };
-        let meta_json = serde_json::to_string_pretty(&meta)
-            .map_err(|e| RepoError::Serialize(e.to_string()))?;
+        let meta_json =
+            serde_json::to_string_pretty(&meta).map_err(|e| RepoError::Serialize(e.to_string()))?;
         atomic_write(&meta_path, meta_json.as_bytes())?;
 
         Ok(body)

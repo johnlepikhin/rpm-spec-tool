@@ -126,7 +126,11 @@ impl SpecMainNevr {
     /// Build an [`EVR`] from this NEVR for rpm vercmp ordering.
     #[must_use]
     pub fn to_evr(&self) -> EVR {
-        EVR::new(Some(self.epoch_for_ordering()), &self.version, &self.release)
+        EVR::new(
+            Some(self.epoch_for_ordering()),
+            &self.version,
+            &self.release,
+        )
     }
 }
 
@@ -147,10 +151,7 @@ impl SpecMainNevr {
 /// that run the same spec × profile pair more than once should hoist
 /// the call out of the inner loop.
 #[must_use]
-pub fn enriched_macros_with_spec_locals(
-    spec: &SpecFile<Span>,
-    profile: &Profile,
-) -> MacroRegistry {
+pub fn enriched_macros_with_spec_locals(spec: &SpecFile<Span>, profile: &Profile) -> MacroRegistry {
     let bcond = BcondMap::from_spec(spec, &BcondOverrides::default());
     let locals = scan_spec_locals(spec, profile, &bcond);
     let mut macros = profile.macros.clone();
@@ -247,8 +248,7 @@ fn resolve_text_segments(segments: &[TextSegment], macros: &MacroRegistry) -> Op
                 }
                 ConditionalMacro::IfDefined => {
                     if macros.get(&m.name).is_some()
-                        && let Some(value) =
-                            macros.expand_to_literal(&m.name, MACRO_EXPAND_DEPTH)
+                        && let Some(value) = macros.expand_to_literal(&m.name, MACRO_EXPAND_DEPTH)
                     {
                         out.push_str(&value);
                     }

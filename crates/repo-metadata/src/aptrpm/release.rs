@@ -111,10 +111,7 @@ pub fn parse(text: &str) -> Result<ReleaseFile, AptRpmParseError> {
             "Codename" => codename = Some(value.to_string()),
             "Date" => date = Some(value.to_string()),
             "Architectures" => {
-                architectures = value
-                    .split_whitespace()
-                    .map(str::to_string)
-                    .collect();
+                architectures = value.split_whitespace().map(str::to_string).collect();
             }
             // Per-component `release.<component>` files use the
             // singular `Architecture: <single-arch>`. Treat it as a
@@ -126,10 +123,7 @@ pub fn parse(text: &str) -> Result<ReleaseFile, AptRpmParseError> {
                 }
             }
             "Components" => {
-                components = value
-                    .split_whitespace()
-                    .map(str::to_string)
-                    .collect();
+                components = value.split_whitespace().map(str::to_string).collect();
             }
             "MD5Sum" => {
                 in_md5 = true;
@@ -213,8 +207,14 @@ mod tests {
         let r = parse(SAMPLE).unwrap();
         assert_eq!(r.origin, "ALT Linux Team");
         assert_eq!(r.label.as_deref(), Some("p10"));
-        assert_eq!(r.architectures, vec!["x86_64", "i586", "aarch64", "armh", "noarch"]);
-        assert_eq!(r.components, vec!["checkinstall", "classic", "debuginfo", "gostcrypto"]);
+        assert_eq!(
+            r.architectures,
+            vec!["x86_64", "i586", "aarch64", "armh", "noarch"]
+        );
+        assert_eq!(
+            r.components,
+            vec!["checkinstall", "classic", "debuginfo", "gostcrypto"]
+        );
         assert_eq!(r.checksums.len(), 2);
         // Sorted by path → checkinstall comes before classic.
         assert_eq!(r.checksums[0].path, "base/pkglist.checkinstall");
@@ -225,13 +225,19 @@ mod tests {
     #[test]
     fn rejects_missing_origin() {
         let s = "Architectures: x86_64\nComponents: classic\n";
-        assert!(matches!(parse(s), Err(AptRpmParseError::BadReleaseFile { .. })));
+        assert!(matches!(
+            parse(s),
+            Err(AptRpmParseError::BadReleaseFile { .. })
+        ));
     }
 
     #[test]
     fn rejects_empty_arch() {
         let s = "Origin: x\nArchitectures:\nComponents: classic\n";
-        assert!(matches!(parse(s), Err(AptRpmParseError::BadReleaseFile { .. })));
+        assert!(matches!(
+            parse(s),
+            Err(AptRpmParseError::BadReleaseFile { .. })
+        ));
     }
 
     #[test]

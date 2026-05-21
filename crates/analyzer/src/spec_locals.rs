@@ -329,7 +329,8 @@ mod tests {
     #[test]
     fn always_false_branch_takes_else_body() {
         // `%if 0` is constant-false — `%if` body skipped, `%else` runs.
-        let locals = scan("%if 0\n%global foo skipped\n%else\n%global foo elsebody\n%endif\nName: x\n");
+        let locals =
+            scan("%if 0\n%global foo skipped\n%else\n%global foo elsebody\n%endif\nName: x\n");
         assert_eq!(locals.get("foo").map(String::as_str), Some("elsebody"));
     }
 

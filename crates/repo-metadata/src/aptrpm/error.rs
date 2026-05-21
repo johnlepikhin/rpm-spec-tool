@@ -45,7 +45,10 @@ pub enum AptRpmParseError {
     /// `tag_type` outside the documented 1..=9 range. Could indicate
     /// a future rpm extension, a corrupt header, or an attempt to
     /// parse a non-header binary as if it were one.
-    UnknownType { index_entry_at: usize, tag_type: u32 },
+    UnknownType {
+        index_entry_at: usize,
+        tag_type: u32,
+    },
     /// `base/release` had no recognisable key=value line, or
     /// required fields were missing.
     BadReleaseFile { detail: String },
@@ -94,12 +97,18 @@ impl fmt::Display for AptRpmParseError {
                 "index entry at byte {index_entry_at} points to offset {offset} \
                  (wanting {wanted} bytes) but data store is only {store_len} bytes"
             ),
-            Self::UnterminatedString { index_entry_at, offset } => write!(
+            Self::UnterminatedString {
+                index_entry_at,
+                offset,
+            } => write!(
                 f,
                 "index entry at byte {index_entry_at} references unterminated string \
                  starting at data offset {offset}"
             ),
-            Self::UnknownType { index_entry_at, tag_type } => write!(
+            Self::UnknownType {
+                index_entry_at,
+                tag_type,
+            } => write!(
                 f,
                 "index entry at byte {index_entry_at} has unknown tag type {tag_type} \
                  (expected 1..=9)"

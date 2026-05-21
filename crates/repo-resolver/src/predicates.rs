@@ -5,9 +5,7 @@
 //! `Dependency`?" with identical semantics. Keeping the predicate
 //! in one place prevents the two consumers from drifting.
 
-use rpm_spec_repo_core::{
-    Dependency, EVR, NEVRA, Package, ProviderRef, RepoError, RepoUniverse,
-};
+use rpm_spec_repo_core::{Dependency, EVR, NEVRA, Package, ProviderRef, RepoError, RepoUniverse};
 
 /// Priority assigned to repos not present in the priority map (e.g. when
 /// the universe was rebuilt after the map was constructed). Sorted to the
@@ -195,7 +193,10 @@ mod tests {
             "libfoo",
             "1.0",
             "1",
-            vec![provides_cap_versioned("libabc", CapVersion::Eq(evr("2.0", "1")))],
+            vec![provides_cap_versioned(
+                "libabc",
+                CapVersion::Eq(evr("2.0", "1")),
+            )],
         );
         let req = dep("libabc", CapVersion::Ge(evr("1.0", "1")));
         assert!(provides_satisfies(&p, &req));
@@ -207,7 +208,10 @@ mod tests {
             "libfoo",
             "1.0",
             "1",
-            vec![provides_cap_versioned("virtual-cap", CapVersion::Eq(evr("9.9", "9")))],
+            vec![provides_cap_versioned(
+                "virtual-cap",
+                CapVersion::Eq(evr("9.9", "9")),
+            )],
         );
         let req = dep_unversioned("virtual-cap");
         assert!(provides_satisfies(&p, &req));
@@ -254,21 +258,36 @@ mod tests {
         let pe = EVR::new(Some(0), "2.0", "1");
         // Eq
         assert!(evr_matches(&pe, &dep("x", CapVersion::Eq(evr("2.0", "1")))));
-        assert!(!evr_matches(&pe, &dep("x", CapVersion::Eq(evr("2.1", "1")))));
+        assert!(!evr_matches(
+            &pe,
+            &dep("x", CapVersion::Eq(evr("2.1", "1")))
+        ));
         // Lt
         assert!(evr_matches(&pe, &dep("x", CapVersion::Lt(evr("3.0", "1")))));
-        assert!(!evr_matches(&pe, &dep("x", CapVersion::Lt(evr("2.0", "1")))));
+        assert!(!evr_matches(
+            &pe,
+            &dep("x", CapVersion::Lt(evr("2.0", "1")))
+        ));
         // Le
         assert!(evr_matches(&pe, &dep("x", CapVersion::Le(evr("2.0", "1")))));
         assert!(evr_matches(&pe, &dep("x", CapVersion::Le(evr("3.0", "1")))));
-        assert!(!evr_matches(&pe, &dep("x", CapVersion::Le(evr("1.0", "1")))));
+        assert!(!evr_matches(
+            &pe,
+            &dep("x", CapVersion::Le(evr("1.0", "1")))
+        ));
         // Gt
         assert!(evr_matches(&pe, &dep("x", CapVersion::Gt(evr("1.0", "1")))));
-        assert!(!evr_matches(&pe, &dep("x", CapVersion::Gt(evr("2.0", "1")))));
+        assert!(!evr_matches(
+            &pe,
+            &dep("x", CapVersion::Gt(evr("2.0", "1")))
+        ));
         // Ge
         assert!(evr_matches(&pe, &dep("x", CapVersion::Ge(evr("2.0", "1")))));
         assert!(evr_matches(&pe, &dep("x", CapVersion::Ge(evr("1.0", "1")))));
-        assert!(!evr_matches(&pe, &dep("x", CapVersion::Ge(evr("3.0", "1")))));
+        assert!(!evr_matches(
+            &pe,
+            &dep("x", CapVersion::Ge(evr("3.0", "1")))
+        ));
     }
 
     #[test]

@@ -74,7 +74,10 @@ fn fixture_specs_lint_without_panic() {
         for d in repo_diags {
             assert!(d.lint_id.starts_with("RPM-REPO-"), "lint_id: {}", d.lint_id);
             assert!(!d.message.is_empty());
-            assert!(d.repo_context.is_some(), "RPM-REPO-* must attach repo_context");
+            assert!(
+                d.repo_context.is_some(),
+                "RPM-REPO-* must attach repo_context"
+            );
         }
     }
 }

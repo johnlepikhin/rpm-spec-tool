@@ -131,8 +131,7 @@ impl ProfileImpact {
     /// platforms a PR actually moved.
     #[must_use]
     pub fn is_no_change(&self) -> bool {
-        self.tags.iter().all(|t| t.changes.has_no_movement())
-            && self.script_sections.is_empty()
+        self.tags.iter().all(|t| t.changes.has_no_movement()) && self.script_sections.is_empty()
     }
 }
 
@@ -268,12 +267,10 @@ impl ImpactReport {
                 // profile don't pollute the output.
                 let mut script_sections = Vec::new();
                 for label in &section_labels {
-                    let from_active = collect_active_section_lines(
-                        from_spec, &from_cov, &rt.profile_id, label,
-                    );
-                    let to_active = collect_active_section_lines(
-                        to_spec, &to_cov, &rt.profile_id, label,
-                    );
+                    let from_active =
+                        collect_active_section_lines(from_spec, &from_cov, &rt.profile_id, label);
+                    let to_active =
+                        collect_active_section_lines(to_spec, &to_cov, &rt.profile_id, label);
                     let change = multiset_diff((*label).clone(), &from_active, &to_active);
                     if !change.has_no_movement() {
                         script_sections.push(change);
@@ -586,7 +583,6 @@ fn render_file_entry_path<T>(e: &FileEntry<T>) -> Option<String> {
     }
 }
 
-
 /// For one script section identified by `label`, return the rendered
 /// lines **active on `profile_id`** — i.e. with lines inside inactive
 /// [`rpm_spec::ast::ShellConditional`] branches filtered out. For
@@ -625,7 +621,12 @@ fn collect_active_from_items(
             SpecItem::Conditional(c) => {
                 for branch in &c.branches {
                     collect_active_from_items(
-                        &branch.body, coverage, profile_id, label, out, depth + 1,
+                        &branch.body,
+                        coverage,
+                        profile_id,
+                        label,
+                        out,
+                        depth + 1,
                     );
                 }
                 if let Some(els) = &c.otherwise {
@@ -757,9 +758,7 @@ fn active_shell_lines(
         // `%else` activity is the complement of its siblings:
         // any sibling Active → else Inactive.
         if let Some(els) = &cond.otherwise {
-            let else_inactive = statuses
-                .iter()
-                .any(|s| matches!(s, BranchVerdict::Active));
+            let else_inactive = statuses.iter().any(|s| matches!(s, BranchVerdict::Active));
             if else_inactive {
                 inactive_ranges.push((els.data.start_line, els.data.end_line));
             }

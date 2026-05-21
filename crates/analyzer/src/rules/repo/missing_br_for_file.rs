@@ -100,15 +100,11 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForFile {
         // same active-conditional gating policy. Reuse the resolver-
         // shaped projection from `shared.rs` to inherit macro
         // expansion + rich-dep flattening — we only need the names.
-        let declared_br: BTreeSet<String> = super::shared::project_deps(
-            spec,
-            profile,
-            &bcond,
-            |t| matches!(t, Tag::BuildRequires),
-        )
-        .into_iter()
-        .map(|d| d.requirement.name().to_string())
-        .collect();
+        let declared_br: BTreeSet<String> =
+            super::shared::project_deps(spec, profile, &bcond, |t| matches!(t, Tag::BuildRequires))
+                .into_iter()
+                .map(|d| d.requirement.name().to_string())
+                .collect();
 
         // Walk every active build-script section.
         let sections: Vec<(BuildScriptKind, &ShellBody<Span>, Span)> =
@@ -131,9 +127,7 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForFile {
                 // Parser pushes one physical line per `body.lines`
                 // entry; index 0 corresponds to `section_start + 1`
                 // (the line after `%install`). Mirrors `impact::active_shell_lines`.
-                let source_line = section_start
-                    .saturating_add(1)
-                    .saturating_add(idx as u32);
+                let source_line = section_start.saturating_add(1).saturating_add(idx as u32);
                 if inactive_ranges
                     .iter()
                     .any(|(s, e)| source_line >= *s && source_line <= *e)
@@ -194,9 +188,7 @@ impl<'ast> Visit<'ast> for MissingBuildRequiresForFile {
                             ),
                             section_span,
                         )
-                        .with_repo_context(RepoContext::for_profile(
-                            &state.universe.profile_name,
-                        )),
+                        .with_repo_context(RepoContext::for_profile(&state.universe.profile_name)),
                     );
                 }
             }
@@ -233,10 +225,16 @@ fn scan_tool_paths(line: &str) -> Vec<&str> {
         // left (backticks, parens, redirections) — keeps the heuristic
         // useful inside `$(...)` and `;cmd` constructs.
         let trimmed = raw.trim_start_matches(|c: char| {
-            matches!(c, '(' | ')' | '`' | ';' | '&' | '|' | '<' | '>' | '"' | '\'')
+            matches!(
+                c,
+                '(' | ')' | '`' | ';' | '&' | '|' | '<' | '>' | '"' | '\''
+            )
         });
         let trimmed = trimmed.trim_end_matches(|c: char| {
-            matches!(c, '(' | ')' | '`' | ';' | '&' | '|' | '<' | '>' | '"' | '\'')
+            matches!(
+                c,
+                '(' | ')' | '`' | ';' | '&' | '|' | '<' | '>' | '"' | '\''
+            )
         });
         if trimmed.starts_with('/') || trimmed.starts_with('%') {
             out.push(trimmed);
@@ -284,9 +282,9 @@ fn expand_path_macros(token: &str, macros: &MacroRegistry) -> Option<String> {
             // Macro names must be plain identifier characters; reject
             // qualifiers like `%{?foo}` to stay conservative.
             if name_bytes.is_empty()
-                || !name_bytes.iter().all(|&b| {
-                    b.is_ascii_alphanumeric() || b == b'_'
-                })
+                || !name_bytes
+                    .iter()
+                    .all(|&b| b.is_ascii_alphanumeric() || b == b'_')
             {
                 return None;
             }
@@ -493,16 +491,10 @@ mod tests {
         let mut profile = redos_profile();
         profile.macros.insert(
             "_vendor".to_string(),
-            rpm_spec_profile::MacroEntry::literal(
-                "redhat",
-                rpm_spec_profile::Provenance::Override,
-            ),
+            rpm_spec_profile::MacroEntry::literal("redhat", rpm_spec_profile::Provenance::Override),
         );
-        let diags = run_repo_lint::<MissingBuildRequiresForFile>(
-            src,
-            &profile,
-            universe_with_xsltproc(),
-        );
+        let diags =
+            run_repo_lint::<MissingBuildRequiresForFile>(src, &profile, universe_with_xsltproc());
         assert!(
             diags.is_empty(),
             "inactive vendor branch should be skipped; got {diags:?}",

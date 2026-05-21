@@ -223,19 +223,14 @@ pub fn write_snapshot(
         baseurl_sha256: baseurl_key(baseurl),
     };
 
-    let manifest_json = serde_json::to_string_pretty(&manifest)
-        .map_err(|e| RepoError::Serialize(e.to_string()))?;
+    let manifest_json =
+        serde_json::to_string_pretty(&manifest).map_err(|e| RepoError::Serialize(e.to_string()))?;
     atomic_write(&snap_dir.join("manifest.json"), manifest_json.as_bytes())?;
 
     // SQLite snapshot is the load-time source of truth. Tmp-rename
     // keeps the file atomic from a reader's perspective; SQLite's
     // own WAL handles crash-during-write.
-    write_repo_db(
-        &snap_dir,
-        baseurl,
-        backend_kind,
-        index,
-    )?;
+    write_repo_db(&snap_dir, baseurl, backend_kind, index)?;
 
     // Repoint `current` to the new snapshot. ENOENT is benign (first
     // snapshot for this repo); any other error indicates a real
@@ -288,7 +283,6 @@ fn write_repo_db(
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,4 +312,3 @@ mod tests {
         assert!(r.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }
-

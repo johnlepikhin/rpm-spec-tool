@@ -97,8 +97,18 @@ pub fn package_from_header(header: &Header, repo_id: &RepoId) -> Option<Package>
         arch: Arc::from(arch.as_str()),
     };
 
-    let provides = capability_triple(header, TAG_PROVIDENAME, TAG_PROVIDEFLAGS, TAG_PROVIDEVERSION);
-    let requires = dependency_triple(header, TAG_REQUIRENAME, TAG_REQUIREFLAGS, TAG_REQUIREVERSION);
+    let provides = capability_triple(
+        header,
+        TAG_PROVIDENAME,
+        TAG_PROVIDEFLAGS,
+        TAG_PROVIDEVERSION,
+    );
+    let requires = dependency_triple(
+        header,
+        TAG_REQUIRENAME,
+        TAG_REQUIREFLAGS,
+        TAG_REQUIREVERSION,
+    );
     let conflicts = dependency_triple(
         header,
         TAG_CONFLICTNAME,
@@ -251,9 +261,7 @@ fn capability_triple(
         // (observed in real p11 snapshots — `rpmlib(PosttransFiletriggers)`
         // ships with bit-flag 0). The cap name itself is the
         // authoritative signal of the rpmlib namespace.
-        if flags[i] & (RPMSENSE_RPMLIB | RPMSENSE_MISSINGOK) != 0
-            || name.starts_with("rpmlib(")
-        {
+        if flags[i] & (RPMSENSE_RPMLIB | RPMSENSE_MISSINGOK) != 0 || name.starts_with("rpmlib(") {
             continue;
         }
         // `Requires: foo < 0` is a contradiction (versions are
@@ -262,9 +270,7 @@ fn capability_triple(
         // never a real requirement. Filter at parse time so the
         // resolver doesn't report perpetual UNSAT against these
         // intentionally-impossible constraints.
-        if flags[i] & RPMSENSE_LESS != 0
-            && (versions[i].trim() == "0" || versions[i].is_empty())
-        {
+        if flags[i] & RPMSENSE_LESS != 0 && (versions[i].trim() == "0" || versions[i].is_empty()) {
             continue;
         }
         let version = decode_version(flags[i], &versions[i]);
@@ -581,10 +587,7 @@ mod tests {
             (TAG_VERSION, s("4.20")),
             (TAG_RELEASE, s("1")),
             (TAG_ARCH, s("x86_64")),
-            (
-                TAG_PROVIDENAME,
-                sa(&["rpm", "rpmlib(PayloadIsXz)"]),
-            ),
+            (TAG_PROVIDENAME, sa(&["rpm", "rpmlib(PayloadIsXz)"])),
             (
                 TAG_PROVIDEFLAGS,
                 i(&[RPMSENSE_EQUAL, RPMSENSE_RPMLIB | RPMSENSE_EQUAL]),

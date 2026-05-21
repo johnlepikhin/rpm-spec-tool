@@ -242,18 +242,28 @@ pub fn rpmvercmp(a: &str, b: &str) -> Ordering {
 
         if a_digit != b_digit {
             // Digit run always beats letter run.
-            return if a_digit { Ordering::Greater } else { Ordering::Less };
+            return if a_digit {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
         }
 
         let a_end = if a_digit {
             i + a[i..].iter().take_while(|c| c.is_ascii_digit()).count()
         } else {
-            i + a[i..].iter().take_while(|c| c.is_ascii_alphabetic()).count()
+            i + a[i..]
+                .iter()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .count()
         };
         let b_end = if b_digit {
             j + b[j..].iter().take_while(|c| c.is_ascii_digit()).count()
         } else {
-            j + b[j..].iter().take_while(|c| c.is_ascii_alphabetic()).count()
+            j + b[j..]
+                .iter()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .count()
         };
 
         let (mut a_seg, mut b_seg) = (&a[i..a_end], &b[j..b_end]);
@@ -368,7 +378,10 @@ mod tests {
     fn rpmvercmp_vectors() {
         for &(a, b, expected) in VECTORS {
             let got = rpmvercmp(a, b);
-            assert_eq!(got, expected, "rpmvercmp({a:?}, {b:?}) = {got:?}, want {expected:?}");
+            assert_eq!(
+                got, expected,
+                "rpmvercmp({a:?}, {b:?}) = {got:?}, want {expected:?}"
+            );
         }
     }
 

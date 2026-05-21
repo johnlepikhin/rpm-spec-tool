@@ -3,8 +3,8 @@
 //! sync` re-hashes anyway, and the revision is the sha of the file
 //! itself rather than any sub-checksum.
 
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 
 use rpm_spec_repo_core::RepoError;
 
@@ -46,7 +46,9 @@ pub fn parse(bytes: &[u8]) -> Result<Repomd, RepoError> {
                     if attr.key.as_ref() == b"type" {
                         current_type = Some(
                             std::str::from_utf8(&attr.value)
-                                .map_err(|e| RepoError::parse_at_file("repomd.xml", format!("type: {e}")))?
+                                .map_err(|e| {
+                                    RepoError::parse_at_file("repomd.xml", format!("type: {e}"))
+                                })?
                                 .to_string(),
                         );
                     }
@@ -57,7 +59,9 @@ pub fn parse(bytes: &[u8]) -> Result<Repomd, RepoError> {
                     for attr in e.attributes().with_checks(false).flatten() {
                         if attr.key.as_ref() == b"href" {
                             let href = std::str::from_utf8(&attr.value)
-                                .map_err(|e| RepoError::parse_at_file("repomd.xml", format!("href: {e}")))?
+                                .map_err(|e| {
+                                    RepoError::parse_at_file("repomd.xml", format!("href: {e}"))
+                                })?
                                 .to_string();
                             if href.contains("://")
                                 || href.contains("..")
@@ -66,9 +70,7 @@ pub fn parse(bytes: &[u8]) -> Result<Repomd, RepoError> {
                             {
                                 return Err(RepoError::parse_at_file(
                                     "repomd.xml",
-                                    format!(
-                                        "rejected suspicious href {href:?} for data type {ct}"
-                                    ),
+                                    format!("rejected suspicious href {href:?} for data type {ct}"),
                                 ));
                             }
                             entries.push((ct.clone(), href));
@@ -110,9 +112,18 @@ mod tests {
     #[test]
     fn parses_data_locations() {
         let r = parse(SAMPLE.as_bytes()).unwrap();
-        assert_eq!(r.location_for("primary").as_deref(), Some("repodata/primary.xml.gz"));
-        assert_eq!(r.location_for("filelists").as_deref(), Some("repodata/filelists.xml.gz"));
-        assert_eq!(r.location_for("updateinfo").as_deref(), Some("repodata/updateinfo.xml.gz"));
+        assert_eq!(
+            r.location_for("primary").as_deref(),
+            Some("repodata/primary.xml.gz")
+        );
+        assert_eq!(
+            r.location_for("filelists").as_deref(),
+            Some("repodata/filelists.xml.gz")
+        );
+        assert_eq!(
+            r.location_for("updateinfo").as_deref(),
+            Some("repodata/updateinfo.xml.gz")
+        );
         assert!(r.location_for("missing").is_none());
     }
 

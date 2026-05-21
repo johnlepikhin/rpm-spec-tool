@@ -132,11 +132,18 @@ pub fn parse_one(bytes: &[u8]) -> Result<(Header, usize), AptRpmParseError> {
     for i in 0..index_count {
         let off = index_start + i * INDEX_ENTRY_LEN;
         let tag = u32::from_be_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
-        let tag_type =
-            u32::from_be_bytes([bytes[off + 4], bytes[off + 5], bytes[off + 6], bytes[off + 7]]);
-        let data_offset =
-            u32::from_be_bytes([bytes[off + 8], bytes[off + 9], bytes[off + 10], bytes[off + 11]])
-                as usize;
+        let tag_type = u32::from_be_bytes([
+            bytes[off + 4],
+            bytes[off + 5],
+            bytes[off + 6],
+            bytes[off + 7],
+        ]);
+        let data_offset = u32::from_be_bytes([
+            bytes[off + 8],
+            bytes[off + 9],
+            bytes[off + 10],
+            bytes[off + 11],
+        ]) as usize;
         let count = u32::from_be_bytes([
             bytes[off + 12],
             bytes[off + 13],
@@ -264,13 +271,13 @@ fn read_cstring(
         });
     }
     let tail = &data[offset..];
-    let nul_pos = tail
-        .iter()
-        .position(|&b| b == 0)
-        .ok_or(AptRpmParseError::UnterminatedString {
-            index_entry_at: index_entry_pos,
-            offset,
-        })?;
+    let nul_pos =
+        tail.iter()
+            .position(|&b| b == 0)
+            .ok_or(AptRpmParseError::UnterminatedString {
+                index_entry_at: index_entry_pos,
+                offset,
+            })?;
     Ok(String::from_utf8_lossy(&tail[..nul_pos]).into_owned())
 }
 

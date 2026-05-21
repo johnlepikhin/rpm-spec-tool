@@ -48,11 +48,9 @@ fn release_file_parses() {
 
 #[test]
 fn pkglist_xz_parses_into_packages() {
-    let path = fixture_dir()
-        .join("tests/fixtures/repos/apt-rpm/tiny-alt/base/pkglist.classic.xz");
+    let path = fixture_dir().join("tests/fixtures/repos/apt-rpm/tiny-alt/base/pkglist.classic.xz");
     let xz_bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    let bytes =
-        decompress("pkglist.classic.xz", &xz_bytes).expect("decompress fixture pkglist");
+    let bytes = decompress("pkglist.classic.xz", &xz_bytes).expect("decompress fixture pkglist");
 
     // Magic check: rpm header v3 starts with `8e ad e8 01`. If the
     // decompressed bytes don't start with this, either xz produced

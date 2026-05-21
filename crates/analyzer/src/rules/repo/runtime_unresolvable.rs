@@ -71,9 +71,7 @@ impl<'ast> Visit<'ast> for RuntimeRequiresUnresolvable {
                             ),
                             dep.span,
                         )
-                        .with_repo_context(RepoContext::for_profile(
-                            &state.universe.profile_name,
-                        )),
+                        .with_repo_context(RepoContext::for_profile(&state.universe.profile_name)),
                     );
                 }
             },

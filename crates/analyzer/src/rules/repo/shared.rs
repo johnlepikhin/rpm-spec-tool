@@ -299,12 +299,7 @@ fn iter_subpackage_contents(spec: &SpecFile<Span>) -> Vec<&[PreambleContent<Span
     out
 }
 
-fn collect_into(
-    expr: &DepExpr,
-    out: &mut Vec<ProjectedDep>,
-    macros: &MacroRegistry,
-    span: Span,
-) {
+fn collect_into(expr: &DepExpr, out: &mut Vec<ProjectedDep>, macros: &MacroRegistry, span: Span) {
     match expr {
         DepExpr::Atom(atom) => {
             if let Some(projected) = project_atom(atom, macros, span) {
@@ -316,12 +311,7 @@ fn collect_into(
     }
 }
 
-fn collect_into_bool(
-    b: &BoolDep,
-    out: &mut Vec<ProjectedDep>,
-    macros: &MacroRegistry,
-    span: Span,
-) {
+fn collect_into_bool(b: &BoolDep, out: &mut Vec<ProjectedDep>, macros: &MacroRegistry, span: Span) {
     match b {
         BoolDep::And(xs) | BoolDep::Or(xs) | BoolDep::With(xs) => {
             for x in xs {
@@ -336,7 +326,12 @@ fn collect_into_bool(
         // produces false negatives (`BuildRequires: (cmake if linux)`
         // really does require `cmake` to be available). Conservatively
         // walk both branches; we don't model the condition itself.
-        BoolDep::If { then, otherwise, .. } | BoolDep::Unless { then, otherwise, .. } => {
+        BoolDep::If {
+            then, otherwise, ..
+        }
+        | BoolDep::Unless {
+            then, otherwise, ..
+        } => {
             collect_into(then, out, macros, span);
             if let Some(other) = otherwise.as_deref() {
                 collect_into(other, out, macros, span);
@@ -402,11 +397,7 @@ fn project_atom(atom: &DepAtom, macros: &MacroRegistry, span: Span) -> Option<Pr
 /// shared canonical form used by `matrix buildroot solve` too), then
 /// inserts the optional `(arch)` suffix between name and EVR — a
 /// detail unique to spec-side display text.
-fn format_capability_display(
-    name: &str,
-    arch: Option<&str>,
-    version: &CapVersion,
-) -> String {
+fn format_capability_display(name: &str, arch: Option<&str>, version: &CapVersion) -> String {
     let cap = Capability {
         name: Arc::from(name),
         version: version.clone(),
@@ -586,10 +577,7 @@ mod tests {
         let mut profile = test_fixtures::redos_profile();
         profile.macros.insert(
             "_vendor".to_string(),
-            rpm_spec_profile::MacroEntry::literal(
-                "redhat",
-                rpm_spec_profile::Provenance::Override,
-            ),
+            rpm_spec_profile::MacroEntry::literal("redhat", rpm_spec_profile::Provenance::Override),
         );
         let outcome = crate::session::parse(src);
         let brs = active_buildrequires(&outcome.spec, &profile);

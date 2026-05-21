@@ -233,10 +233,7 @@ impl RepoUniverse {
     /// Build a universe from a list of opened DBs. Caller orders by
     /// priority. Reads the `meta` rows of each DB once to populate
     /// the snapshot id map.
-    pub fn from_dbs(
-        profile_name: impl Into<String>,
-        dbs: Vec<RepoDb>,
-    ) -> Result<Self, RepoError> {
+    pub fn from_dbs(profile_name: impl Into<String>, dbs: Vec<RepoDb>) -> Result<Self, RepoError> {
         Self::from_dbs_with_arch(profile_name, dbs, Vec::new())
     }
 

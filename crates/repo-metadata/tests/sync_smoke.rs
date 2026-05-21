@@ -14,10 +14,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use rpm_spec_repo_metadata::backend::{detect_backend, RepoBackend};
+use rpm_spec_profile::repos::{RepoConfig, RepoKind};
+use rpm_spec_repo_metadata::backend::{RepoBackend, detect_backend};
 use rpm_spec_repo_metadata::cache::{self, CacheDirs};
 use rpm_spec_repo_metadata::http::{HttpCache, NetMode};
-use rpm_spec_profile::repos::{RepoConfig, RepoKind};
 
 /// Project-root-relative path to the fixture directory.
 fn fixture_dir() -> &'static Path {
@@ -34,9 +34,7 @@ fn fixture_dir() -> &'static Path {
 /// returns Err (sender dropped).
 fn spawn_http_server() -> (u16, mpsc::Sender<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    listener
-        .set_nonblocking(true)
-        .expect("set_nonblocking");
+    listener.set_nonblocking(true).expect("set_nonblocking");
     let port = listener.local_addr().unwrap().port();
     let root = fixture_dir().to_path_buf();
     let (tx, rx) = mpsc::channel::<()>();
@@ -129,7 +127,8 @@ fn sync_fixture_through_http_cache() {
     .expect("write_snapshot");
     assert!(snap.join("manifest.json").exists());
     assert!(
-        snap.join(rpm_spec_repo_core::db::RepoDb::file_name()).exists(),
+        snap.join(rpm_spec_repo_core::db::RepoDb::file_name())
+            .exists(),
         "repo.db should be present after write_snapshot"
     );
 

@@ -616,8 +616,7 @@ mod tests {
         for m in builtin_lint_metadata() {
             *counts.entry(m.id).or_default() += 1;
         }
-        let duplicates: Vec<(&&str, &usize)> =
-            counts.iter().filter(|(_, n)| **n > 1).collect();
+        let duplicates: Vec<(&&str, &usize)> = counts.iter().filter(|(_, n)| **n > 1).collect();
         assert!(
             duplicates.is_empty(),
             "duplicate lint ids found in builtin_lint_metadata: {duplicates:?}",

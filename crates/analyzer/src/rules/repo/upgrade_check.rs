@@ -177,10 +177,7 @@ impl Lint for UpgradeEvrCheck {
     fn set_profile(&mut self, profile: &Profile) {
         self.base.set_profile(profile);
     }
-    fn set_repo_universe(
-        &mut self,
-        universe: Option<std::sync::Arc<RepoUniverse>>,
-    ) {
+    fn set_repo_universe(&mut self, universe: Option<std::sync::Arc<RepoUniverse>>) {
         self.base.set_repo_universe(universe);
     }
 }
@@ -223,11 +220,7 @@ mod tests {
     use crate::rules::repo::test_fixtures::{redos_profile, tiny_universe};
     use std::sync::Arc;
 
-    fn run_check(
-        src: &str,
-        profile: &Profile,
-        universe: Arc<RepoUniverse>,
-    ) -> Vec<Diagnostic> {
+    fn run_check(src: &str, profile: &Profile, universe: Arc<RepoUniverse>) -> Vec<Diagnostic> {
         let outcome = crate::session::parse(src);
         let mut lint = UpgradeEvrCheck::new();
         lint.set_profile(profile);
@@ -307,7 +300,10 @@ mod tests {
         )]);
         let src = spec_src("foo", "1.1", "1", "");
         let diags = run_check(&src, &redos_profile(), uni);
-        let d030: Vec<_> = diags.iter().filter(|d| d.lint_id == "RPM-REPO-030").collect();
+        let d030: Vec<_> = diags
+            .iter()
+            .filter(|d| d.lint_id == "RPM-REPO-030")
+            .collect();
         assert!(d030.is_empty(), "expected no 030, got {d030:?}");
     }
 
@@ -323,7 +319,10 @@ mod tests {
         )]);
         let src = spec_src("foo", "1.0", "1", "");
         let diags = run_check(&src, &redos_profile(), uni);
-        let d030: Vec<_> = diags.iter().filter(|d| d.lint_id == "RPM-REPO-030").collect();
+        let d030: Vec<_> = diags
+            .iter()
+            .filter(|d| d.lint_id == "RPM-REPO-030")
+            .collect();
         assert_eq!(d030.len(), 1, "{diags:?}");
         assert!(d030[0].message.contains("equal to"), "{}", d030[0].message);
     }
@@ -340,7 +339,10 @@ mod tests {
         )]);
         let src = spec_src("foo", "1.5", "1", "");
         let diags = run_check(&src, &redos_profile(), uni);
-        let d030: Vec<_> = diags.iter().filter(|d| d.lint_id == "RPM-REPO-030").collect();
+        let d030: Vec<_> = diags
+            .iter()
+            .filter(|d| d.lint_id == "RPM-REPO-030")
+            .collect();
         assert_eq!(d030.len(), 1, "{diags:?}");
         assert!(d030[0].message.contains("less than"), "{}", d030[0].message);
     }
@@ -364,17 +366,13 @@ mod tests {
     fn wrong_arch_ignored() {
         // Published binary is i686, redos profile builds x86_64. The
         // i686 binary must not count toward the comparison.
-        let uni = universe_with(vec![pkg(
-            "foo",
-            0,
-            "9.9",
-            "1",
-            "i686",
-            "foo-9.9-1.src.rpm",
-        )]);
+        let uni = universe_with(vec![pkg("foo", 0, "9.9", "1", "i686", "foo-9.9-1.src.rpm")]);
         let src = spec_src("foo", "1.0", "1", "");
         let diags = run_check(&src, &redos_profile(), uni);
-        assert!(diags.is_empty(), "wrong-arch binary should not count: {diags:?}");
+        assert!(
+            diags.is_empty(),
+            "wrong-arch binary should not count: {diags:?}"
+        );
     }
 
     #[test]
@@ -389,7 +387,10 @@ mod tests {
         )]);
         let src = spec_src("foo", "1.0", "1", "");
         let diags = run_check(&src, &redos_profile(), uni);
-        let d030: Vec<_> = diags.iter().filter(|d| d.lint_id == "RPM-REPO-030").collect();
+        let d030: Vec<_> = diags
+            .iter()
+            .filter(|d| d.lint_id == "RPM-REPO-030")
+            .collect();
         assert_eq!(d030.len(), 1, "noarch binary should count: {diags:?}");
     }
 
@@ -405,7 +406,10 @@ mod tests {
         )]);
         let src = spec_src("foo", "1.0", "2", "");
         let diags = run_check(&src, &redos_profile(), uni);
-        let d031: Vec<_> = diags.iter().filter(|d| d.lint_id == "RPM-REPO-031").collect();
+        let d031: Vec<_> = diags
+            .iter()
+            .filter(|d| d.lint_id == "RPM-REPO-031")
+            .collect();
         assert_eq!(d031.len(), 1, "{diags:?}");
         assert!(d031[0].message.contains("Epoch: 2"), "{}", d031[0].message);
     }
@@ -423,9 +427,16 @@ mod tests {
         let src = "Name: foo\nEpoch: 1\nVersion: 1.0\nRelease: 1\n\
              Summary: s\nLicense: MIT\n%description\nx\n";
         let diags = run_check(src, &redos_profile(), uni);
-        let d031: Vec<_> = diags.iter().filter(|d| d.lint_id == "RPM-REPO-031").collect();
+        let d031: Vec<_> = diags
+            .iter()
+            .filter(|d| d.lint_id == "RPM-REPO-031")
+            .collect();
         assert_eq!(d031.len(), 1, "{diags:?}");
-        assert!(d031[0].message.contains("lowering epoch"), "{}", d031[0].message);
+        assert!(
+            d031[0].message.contains("lowering epoch"),
+            "{}",
+            d031[0].message
+        );
     }
 
     #[test]
@@ -441,7 +452,10 @@ mod tests {
         let src = "Name: foo\nEpoch: 1\nVersion: 1.0\nRelease: 2\n\
              Summary: s\nLicense: MIT\n%description\nx\n";
         let diags = run_check(src, &redos_profile(), uni);
-        let d031: Vec<_> = diags.iter().filter(|d| d.lint_id == "RPM-REPO-031").collect();
+        let d031: Vec<_> = diags
+            .iter()
+            .filter(|d| d.lint_id == "RPM-REPO-031")
+            .collect();
         assert!(d031.is_empty(), "{diags:?}");
     }
 
@@ -476,7 +490,10 @@ mod tests {
         ]);
         let src = spec_src("foo", "1.3", "1", "");
         let diags = run_check(&src, &redos_profile(), uni);
-        let d030: Vec<_> = diags.iter().filter(|d| d.lint_id == "RPM-REPO-030").collect();
+        let d030: Vec<_> = diags
+            .iter()
+            .filter(|d| d.lint_id == "RPM-REPO-030")
+            .collect();
         assert_eq!(d030.len(), 1, "{diags:?}");
         assert!(d030[0].message.contains("foo-1.5-3"), "{}", d030[0].message);
     }

@@ -24,11 +24,7 @@ pub trait RepoBackend: Send + Sync + std::fmt::Debug {
 
     /// Fetch the top-level metadata file (`repomd.xml` or
     /// `base/release`) and derive a snapshot identity.
-    fn fetch_revision(
-        &self,
-        http: &HttpCache,
-        baseurl: &str,
-    ) -> Result<RepoRevision, RepoError>;
+    fn fetch_revision(&self, http: &HttpCache, baseurl: &str) -> Result<RepoRevision, RepoError>;
 
     /// Fetch + parse the full metadata into a populated
     /// [`RepoIndex`]. Per the M1 decision filelists / contents_index

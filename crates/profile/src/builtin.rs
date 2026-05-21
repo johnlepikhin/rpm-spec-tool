@@ -265,7 +265,11 @@ fn build_snapshot(name: &'static str) -> BuiltinSnapshot {
         patch
     });
 
-    BuiltinSnapshot { meta, showrc, repos }
+    BuiltinSnapshot {
+        meta,
+        showrc,
+        repos,
+    }
 }
 
 /// On-disk representation of a built-in profile file. Kept private —
@@ -325,10 +329,7 @@ impl RawProfile {
     /// They live in different slots on [`crate::Profile`] — repos
     /// have atomic-per-id replacement semantics, not patched merge —
     /// so the pieces flow through different paths in the resolver.
-    fn into_parts(
-        self,
-        builtin_name: &'static str,
-    ) -> RawProfileParts {
+    fn into_parts(self, builtin_name: &'static str) -> RawProfileParts {
         let identity = IdentityPatch {
             name: self.identity.name,
             family: self.identity.family,
@@ -359,9 +360,7 @@ impl RawProfile {
         // TOML file is a build-time bug, so panic is appropriate.
         for id in self.repos.keys() {
             if let Err(reason) = validate_repo_id(id) {
-                panic!(
-                    "BUG: built-in `{builtin_name}` has invalid repo id `{id}`: {reason}",
-                );
+                panic!("BUG: built-in `{builtin_name}` has invalid repo id `{id}`: {reason}",);
             }
         }
         let repos = if self.repos.is_empty()

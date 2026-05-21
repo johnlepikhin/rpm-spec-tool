@@ -64,9 +64,7 @@ pub fn parse(text: &str) -> Result<FileMap, AptRpmParseError> {
                 detail: format!("empty path or owner on line: {line:?}"),
             });
         }
-        out.entry(Arc::from(pkg))
-            .or_default()
-            .push(Arc::from(path));
+        out.entry(Arc::from(pkg)).or_default().push(Arc::from(path));
     }
     Ok(out)
 }
@@ -82,7 +80,10 @@ mod tests {
                     /usr/share/foo\tfoobar\n";
         let m = parse(text).unwrap();
         assert_eq!(m.len(), 3);
-        assert_eq!(m[&Arc::<str>::from("bash")], vec![Arc::<str>::from("/bin/sh")]);
+        assert_eq!(
+            m[&Arc::<str>::from("bash")],
+            vec![Arc::<str>::from("/bin/sh")]
+        );
     }
 
     #[test]
@@ -99,7 +100,10 @@ mod tests {
     fn preserves_file_order_per_package() {
         let text = "/a\tpkg\n/b\tpkg\n/c\tpkg\n";
         let m = parse(text).unwrap();
-        let files: Vec<&str> = m[&Arc::<str>::from("pkg")].iter().map(|s| s.as_ref()).collect();
+        let files: Vec<&str> = m[&Arc::<str>::from("pkg")]
+            .iter()
+            .map(|s| s.as_ref())
+            .collect();
         assert_eq!(files, vec!["/a", "/b", "/c"]);
     }
 

@@ -78,12 +78,7 @@ impl ErrorLocation {
     /// Full carrier with file:line:col. Use when the parser has a
     /// source span available.
     #[must_use]
-    pub fn at(
-        file: impl Into<String>,
-        line: u32,
-        col: u32,
-        detail: impl Into<String>,
-    ) -> Self {
+    pub fn at(file: impl Into<String>, line: u32, col: u32, detail: impl Into<String>) -> Self {
         Self::AtPos {
             file: file.into(),
             line,

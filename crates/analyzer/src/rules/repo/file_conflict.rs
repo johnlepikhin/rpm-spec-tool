@@ -411,15 +411,19 @@ mod tests {
         )]);
         let src = "Name: mypkg\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\n\
                    %description\nx\n%files\n/usr/bin/widget\n";
-        let diags = run_repo_lint::<FileConflictWithExistingPackage>(
-            src,
-            &redos_profile(),
-            uni,
-        );
+        let diags = run_repo_lint::<FileConflictWithExistingPackage>(src, &redos_profile(), uni);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(diags[0].lint_id, "RPM-REPO-020");
-        assert!(diags[0].message.contains("/usr/bin/widget"), "{}", diags[0].message);
-        assert!(diags[0].message.contains("otherpkg"), "{}", diags[0].message);
+        assert!(
+            diags[0].message.contains("/usr/bin/widget"),
+            "{}",
+            diags[0].message
+        );
+        assert!(
+            diags[0].message.contains("otherpkg"),
+            "{}",
+            diags[0].message
+        );
     }
 
     #[test]
@@ -440,11 +444,7 @@ mod tests {
                    Summary: s\nLicense: MIT\n\
                    %description\nx\n\
                    %files\n/usr/lib/libacme.so.1\n";
-        let diags = run_repo_lint::<FileConflictWithExistingPackage>(
-            src,
-            &redos_profile(),
-            uni,
-        );
+        let diags = run_repo_lint::<FileConflictWithExistingPackage>(src, &redos_profile(), uni);
         assert!(
             diags.is_empty(),
             "templated `Name` must resolve through `enriched_macros_with_spec_locals`; got {diags:?}",
@@ -463,12 +463,11 @@ mod tests {
         )]);
         let src = "Name: mypkg\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\n\
                    %description\nx\n%files\n/usr/lib/libmypkg.so.1\n";
-        let diags = run_repo_lint::<FileConflictWithExistingPackage>(
-            src,
-            &redos_profile(),
-            uni,
+        let diags = run_repo_lint::<FileConflictWithExistingPackage>(src, &redos_profile(), uni);
+        assert!(
+            diags.is_empty(),
+            "self-ownership should not flag: {diags:?}"
         );
-        assert!(diags.is_empty(), "self-ownership should not flag: {diags:?}");
     }
 
     #[test]
@@ -482,11 +481,7 @@ mod tests {
         )]);
         let src = "Name: mypkg\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\n\
                    %description\nx\n%files\n%ghost /var/log/messages\n";
-        let diags = run_repo_lint::<FileConflictWithExistingPackage>(
-            src,
-            &redos_profile(),
-            uni,
-        );
+        let diags = run_repo_lint::<FileConflictWithExistingPackage>(src, &redos_profile(), uni);
         assert!(diags.is_empty(), "%ghost should not flag: {diags:?}");
     }
 
@@ -500,11 +495,7 @@ mod tests {
         )]);
         let src = "Name: java-17\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\n\
                    %description\nx\n%files\n/etc/alternatives/java\n";
-        let diags = run_repo_lint::<FileConflictWithExistingPackage>(
-            src,
-            &redos_profile(),
-            uni,
-        );
+        let diags = run_repo_lint::<FileConflictWithExistingPackage>(src, &redos_profile(), uni);
         assert!(diags.is_empty(), "alternatives should not flag: {diags:?}");
     }
 
@@ -518,11 +509,7 @@ mod tests {
         )]);
         let src = "Name: mypkg\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\n\
                    %description\nx\n%files\n/usr/bin/mypkg\n";
-        let diags = run_repo_lint::<FileConflictWithExistingPackage>(
-            src,
-            &redos_profile(),
-            uni,
-        );
+        let diags = run_repo_lint::<FileConflictWithExistingPackage>(src, &redos_profile(), uni);
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -550,11 +537,7 @@ mod tests {
         )]);
         let src = "Name: mypkg\nVersion: 1\nRelease: 1\nSummary: s\nLicense: MIT\n\
                    %description\nx\n%files\nREADME.md\n%{_bindir}/foo\n";
-        let diags = run_repo_lint::<FileConflictWithExistingPackage>(
-            src,
-            &redos_profile(),
-            uni,
-        );
+        let diags = run_repo_lint::<FileConflictWithExistingPackage>(src, &redos_profile(), uni);
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -572,11 +555,7 @@ mod tests {
                    %package extra\nSummary: extra\n%description extra\nextra\n\
                    %files\n/usr/share/mypkg/data\n\
                    %files extra\n/usr/share/mypkg/data\n";
-        let diags = run_repo_lint::<FileConflictWithExistingPackage>(
-            src,
-            &redos_profile(),
-            uni,
-        );
+        let diags = run_repo_lint::<FileConflictWithExistingPackage>(src, &redos_profile(), uni);
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }

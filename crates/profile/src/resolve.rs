@@ -1413,10 +1413,7 @@ mod tests {
         let p = resolve(&section, Path::new("."), ResolveOptions::default()).unwrap();
         let pkgs = &p.repos.unwrap().buildroot.base_packages;
         let gcc_count = pkgs.iter().filter(|s| *s == "gcc").count();
-        assert_eq!(
-            gcc_count, 1,
-            "duplicate gcc after merge: {pkgs:?}",
-        );
+        assert_eq!(gcc_count, 1, "duplicate gcc after merge: {pkgs:?}",);
         assert!(pkgs.iter().any(|s| s == "acme-toolchain"));
     }
 

@@ -88,9 +88,7 @@ pub fn capability_from_columns(
         (s, Some(e)) if s == TAG_LE => CapVersion::Le(e),
         (s, Some(e)) if s == TAG_GT => CapVersion::Gt(e),
         (s, Some(e)) if s == TAG_GE => CapVersion::Ge(e),
-        (s, None)
-            if s == TAG_EQ || s == TAG_LT || s == TAG_LE || s == TAG_GT || s == TAG_GE =>
-        {
+        (s, None) if s == TAG_EQ || s == TAG_LT || s == TAG_LE || s == TAG_GT || s == TAG_GE => {
             // Partial-row corruption: versioned tag but NULL EVR. Log
             // so operators with structured-log pipelines can detect
             // cache-on-disk damage, then degrade gracefully (see fn
@@ -254,7 +252,9 @@ mod tests {
         match err {
             RepoError::Cache(io_err) => {
                 assert!(
-                    io_err.to_string().contains("unknown cap flags discriminator"),
+                    io_err
+                        .to_string()
+                        .contains("unknown cap flags discriminator"),
                     "unexpected: {io_err}"
                 );
             }
@@ -264,7 +264,10 @@ mod tests {
 
     #[test]
     fn source_rpm_name_simple() {
-        assert_eq!(source_rpm_name("foo-1.2.3-4.el9.src.rpm").as_deref(), Some("foo"));
+        assert_eq!(
+            source_rpm_name("foo-1.2.3-4.el9.src.rpm").as_deref(),
+            Some("foo")
+        );
     }
 
     #[test]

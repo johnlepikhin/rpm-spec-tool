@@ -19,9 +19,12 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Write `data` to `path` via a sibling tempfile + rename (atomic on POSIX).
 pub fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "atomic_write: path has no parent"))?;
+    let dir = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "atomic_write: path has no parent",
+        )
+    })?;
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
     tmp.write_all(data)?;
     tmp.persist(path).map_err(|e| e.error)?;

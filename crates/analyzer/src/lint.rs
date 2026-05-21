@@ -154,7 +154,10 @@ pub trait Lint: for<'ast> Visit<'ast> + Send {
     /// same session see the same indexes without rebuilding — see
     /// [`crate::session::LintSession::from_config_with_profile_and_universe`]
     /// for construction.
-    fn set_repo_universe(&mut self, universe: Option<std::sync::Arc<rpm_spec_repo_core::RepoUniverse>>) {
+    fn set_repo_universe(
+        &mut self,
+        universe: Option<std::sync::Arc<rpm_spec_repo_core::RepoUniverse>>,
+    ) {
         let _ = universe;
     }
 }

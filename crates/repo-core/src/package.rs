@@ -33,7 +33,11 @@ pub struct NEVRA {
 impl NEVRA {
     #[must_use]
     pub fn evr(&self) -> EVR {
-        EVR::new(Some(self.epoch), self.version.as_ref(), self.release.as_ref())
+        EVR::new(
+            Some(self.epoch),
+            self.version.as_ref(),
+            self.release.as_ref(),
+        )
     }
 }
 
@@ -316,27 +320,42 @@ impl Capability {
     /// struct-literal boilerplate at every test or builder site.
     #[must_use]
     pub fn eq(name: impl Into<Arc<str>>, evr: EVR) -> Self {
-        Self { name: name.into(), version: CapVersion::Eq(evr) }
+        Self {
+            name: name.into(),
+            version: CapVersion::Eq(evr),
+        }
     }
     /// Constructor for `name < E:V-R`. See [`Self::eq`].
     #[must_use]
     pub fn lt(name: impl Into<Arc<str>>, evr: EVR) -> Self {
-        Self { name: name.into(), version: CapVersion::Lt(evr) }
+        Self {
+            name: name.into(),
+            version: CapVersion::Lt(evr),
+        }
     }
     /// Constructor for `name <= E:V-R`. See [`Self::eq`].
     #[must_use]
     pub fn le(name: impl Into<Arc<str>>, evr: EVR) -> Self {
-        Self { name: name.into(), version: CapVersion::Le(evr) }
+        Self {
+            name: name.into(),
+            version: CapVersion::Le(evr),
+        }
     }
     /// Constructor for `name > E:V-R`. See [`Self::eq`].
     #[must_use]
     pub fn gt(name: impl Into<Arc<str>>, evr: EVR) -> Self {
-        Self { name: name.into(), version: CapVersion::Gt(evr) }
+        Self {
+            name: name.into(),
+            version: CapVersion::Gt(evr),
+        }
     }
     /// Constructor for `name >= E:V-R`. See [`Self::eq`].
     #[must_use]
     pub fn ge(name: impl Into<Arc<str>>, evr: EVR) -> Self {
-        Self { name: name.into(), version: CapVersion::Ge(evr) }
+        Self {
+            name: name.into(),
+            version: CapVersion::Ge(evr),
+        }
     }
 
     /// `true` when this capability is a file-path requirement
@@ -413,7 +432,10 @@ pub enum PkgChecksum {
     Sha1(String),
     /// Unknown algorithm carried through verbatim so we don't lose
     /// information when a repo uses something we don't validate yet.
-    Other { algo: String, hex: String },
+    Other {
+        algo: String,
+        hex: String,
+    },
 }
 
 /// Validation failure from [`PkgChecksum::try_new`]. The variant
@@ -423,9 +445,7 @@ pub enum PkgChecksum {
 #[non_exhaustive]
 pub enum ChecksumParseError {
     /// Hex string length doesn't match the algorithm's digest size.
-    #[error(
-        "checksum length mismatch for `{algo}`: expected {expected} hex chars, got {got}"
-    )]
+    #[error("checksum length mismatch for `{algo}`: expected {expected} hex chars, got {got}")]
     BadLength {
         algo: String,
         expected: usize,
@@ -444,8 +464,7 @@ pub enum ChecksumParseError {
 /// so adding SHA-512 (or any other new variant) is a single-line
 /// extension that automatically catches the dispatch arm via the
 /// loop below.
-const KNOWN_DIGEST_LENGTHS: &[(&str, usize)] =
-    &[("sha256", 64), ("sha1", 40), ("md5", 32)];
+const KNOWN_DIGEST_LENGTHS: &[(&str, usize)] = &[("sha256", 64), ("sha1", 40), ("md5", 32)];
 
 impl PkgChecksum {
     /// Validate `(algo, hex)` and construct a [`PkgChecksum`]. The
@@ -605,7 +624,10 @@ mod tests {
     #[test]
     fn display_versioned_capability() {
         let evr = EVR::new(None, "1.2", "3.el9");
-        assert_eq!(cap("foo", CapVersion::Ge(evr)).display(), "foo >= 1.2-3.el9");
+        assert_eq!(
+            cap("foo", CapVersion::Ge(evr)).display(),
+            "foo >= 1.2-3.el9"
+        );
     }
 
     #[test]
@@ -706,7 +728,11 @@ mod tests {
         let short = "1".repeat(39);
         assert!(matches!(
             PkgChecksum::try_new("sha1", &short).unwrap_err(),
-            ChecksumParseError::BadLength { expected: 40, got: 39, .. }
+            ChecksumParseError::BadLength {
+                expected: 40,
+                got: 39,
+                ..
+            }
         ));
     }
 
@@ -770,10 +796,7 @@ mod dependency_tests {
     fn name_version_forwarders_match_inner_capability() {
         // Read API: the inherent forwarders return the same
         // references the `Capability` would expose via its fields.
-        let cap = Capability::ge(
-            "openssl",
-            EVR::new(Some(0), "3.0.0", "1.el9"),
-        );
+        let cap = Capability::ge("openssl", EVR::new(Some(0), "3.0.0", "1.el9"));
         let inner_name = cap.name.clone();
         let inner_version = cap.version.clone();
         let dep = Dependency::new(cap);

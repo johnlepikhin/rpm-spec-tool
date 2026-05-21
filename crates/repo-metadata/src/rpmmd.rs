@@ -29,11 +29,7 @@ impl RepoBackend for RpmMdBackend {
         RepoKind::RpmMd
     }
 
-    fn fetch_revision(
-        &self,
-        http: &HttpCache,
-        baseurl: &str,
-    ) -> Result<RepoRevision, RepoError> {
+    fn fetch_revision(&self, http: &HttpCache, baseurl: &str) -> Result<RepoRevision, RepoError> {
         let url = join_url(baseurl, "repodata/repomd.xml");
         let bytes = http.fetch(&url)?;
         let revision = crate::cache::revision_from(&bytes);
