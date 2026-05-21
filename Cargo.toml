@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version      = "0.1.1"
+version      = "0.1.2"
 edition      = "2024"
 rust-version = "1.88"
 license      = "MIT OR Apache-2.0"
@@ -21,10 +21,10 @@ publish      = ["crates-io"]
 
 [workspace.dependencies]
 rpm-spec               = { version = "0.4.1", features = ["parser", "printer", "serde"] }
-rpm-spec-profile       = { path = "crates/profile", version = "0.1.1" }
-rpm-spec-repo-core     = { path = "crates/repo-core", version = "0.1.1" }
-rpm-spec-repo-metadata = { path = "crates/repo-metadata", version = "0.1.1" }
-rpm-spec-repo-resolver = { path = "crates/repo-resolver", version = "0.1.1" }
+rpm-spec-profile       = { path = "crates/profile", version = "0.1.2" }
+rpm-spec-repo-core     = { path = "crates/repo-core", version = "0.1.2" }
+rpm-spec-repo-metadata = { path = "crates/repo-metadata", version = "0.1.2" }
+rpm-spec-repo-resolver = { path = "crates/repo-resolver", version = "0.1.2" }
 anyhow     = "1"
 thiserror  = "2"
 serde      = { version = "1", features = ["derive", "rc"] }

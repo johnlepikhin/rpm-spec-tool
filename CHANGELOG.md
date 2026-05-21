@@ -13,6 +13,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [0.1.2] - 2026-05-21
+
+### Added
+
+- `config init` defaults the output path to the XDG config location
+  (`$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml`, typically
+  `~/.config/rpm-spec-tool/rpmspec.toml`) — the same file the loader
+  picks up. Parent directory is created if missing.
+- `repo cache gc` / `repo cache prune` and `config init --force` now
+  prompt for confirmation on a TTY (`[y/N]`, abort exits 130) and
+  refuse on non-TTY without an explicit `--yes`. A `--dry-run` flag
+  on every destructive subcommand previews the actions without
+  touching disk.
+- `lint --fix` and `format --check` print end-of-run summaries
+  ("applied N fixes across M files", "all N files are properly
+  formatted", "no files to check", …).
+- `output/mod.rs::resolve_color` honours the `NO_COLOR` env var
+  (no-color.org standard) and `CLICOLOR_FORCE`, with the precedence
+  explicit-flag > CLICOLOR_FORCE > NO_COLOR > TTY detection.
+- `matrix impact --from REV` differentiates "not a git repo" from
+  "revision not found" and suggests `git log --oneline` in the
+  hint.
+- `repo cache list` is now exposed as a visible alias for
+  `repo cache ls`.
+- `completions --help` prepends a one-line explanation that the
+  command emits a script to stdout before the per-shell installation
+  examples.
+
+### Changed
+
+- Bumped `rpm-spec` to 0.4.1 and dropped the `[patch.crates-io]`
+  override — the released crate carries the printer fixes (parser
+  `%%{X}` decoding, scriptlet/`%description`/`%prep` body
+  indentation stability) that were previously local-only.
+- `config init --help`'s generated header trimmed from 15 to 6
+  lines; the discovery cascade explanation moved out of every
+  generated config to `--help` text.
+- Top-level command descriptions (`lint`, `format`, `pretty`,
+  `ast`, `check`, `profile`, `target`, `matrix`, `repo`, `lints`,
+  `config`, `completions`) rewritten to a uniform single-line
+  imperative voice.
+- `repo sync` progress messages routed to stderr so that stdout
+  stays clean for structured pipes; phrased as narrative
+  ("syncing X/Y (K) U", "→ revision R, N packages …") instead of
+  the log-style `key=value` form.
+- Matrix human renderer dropped markdown leakage (`# Matrix run`
+  → `Matrix run:`, `## file` → `=== file ===`) so the output no
+  longer collides with `git diff` markers in mixed contexts.
+- `RPM050` (`hardcoded-paths`) now skips comments, paths prefixed
+  by `%{buildroot}` / `$RPM_BUILD_ROOT`, and scriptlet / trigger
+  bodies. Workspace QA-corpus diagnostic count dropped from 372
+  to 235 (~43%) without losing real findings.
+- `--define NAME=VALUE` (the wrong shape — rpmbuild uses
+  whitespace, not `=`) now emits a friendly two-line error with a
+  hint instead of failing deep in the macro resolver.
+- Workspace lint config (`[workspace.lints.clippy]` in
+  `Cargo.toml`): `collapsible_if`, `collapsible_match`,
+  `collapsible_else_if`, `unnecessary_sort_by` raised to `deny`.
+  Local clippy on rustc ≥ 1.95 now mirrors CI.
+
+### Fixed
+
+- **`config validate --config <PATH>` silently ignored the global
+  flag.** Plumbed `config_override` through `Application::run` →
+  `config::Cmd::run` → `validate::run`; resolution now honours the
+  documented cascade (positional → `--config` → env var → XDG →
+  upward walk). The error message split into `error:` + `hint:`
+  lines naming all override paths.
+- `lint --fix` and `format --check` are no longer silent on the
+  zero-changes case; both report it explicitly.
+- `format --in-place` on stdin now emits a clean error (exit 2)
+  instead of silently discarding the formatted output.
+- `matrix check`'s `--warn` and `--allow` flags now carry the same
+  `--help` documentation as `--deny` (previously empty).
+- `repo cache prune --repo ' '` (whitespace-only prefix) is
+  rejected instead of silently matching nothing; `repo cache gc
+  --dry-run` and `prune --dry-run` print `(no snapshots to
+  remove)` / `(no repos to prune)` when the candidate list is
+  empty.
+- `repo cache` and `config init` use exit code 2 consistently for
+  refused destructive actions and 130 for user-aborted prompts.
+- 50+ `clippy::collapsible_if` / `collapsible_match` sites
+  flagged by rustc 1.95 collapsed to let-chains or guard patterns;
+  `if-let-guard` cases annotated with `#[allow(...)]` until that
+  feature stabilises.
+- `repo cache gc/prune` snapshot ordering switched from
+  `sort_by(|a, b| b.1.cmp(&a.1))` to `sort_by_key(|e|
+  Reverse(e.1))` for `clippy::unnecessary_sort_by` compliance.
+- `doc/lints-list.md` regenerated to match the current rule
+  catalogue (reordering + a handful of new descriptions).
+
 ## [0.1.1] - 2026-05-16
 
 ### Changed
@@ -77,6 +168,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.tar.gz`, `.deb`, and `.rpm` artifacts (plus `SHA256SUMS`) for Linux
   `x86_64` and `aarch64` on each `vX.Y.Z` tag.
 
-[Unreleased]: https://github.com/johnlepikhin/rpm-spec-tool/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/johnlepikhin/rpm-spec-tool/compare/v0.1.2...HEAD
+[0.1.2]:      https://github.com/johnlepikhin/rpm-spec-tool/compare/v0.1.1...v0.1.2
 [0.1.1]:      https://github.com/johnlepikhin/rpm-spec-tool/compare/v0.1.0...v0.1.1
 [0.1.0]:      https://github.com/johnlepikhin/rpm-spec-tool/releases/tag/v0.1.0
