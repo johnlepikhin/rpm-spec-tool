@@ -1,11 +1,3 @@
-   Compiling rpm-spec-profile v0.1.1 (/home/evgenii/experiments/rpm-spec-tool/crates/profile)
-   Compiling rpm-spec-repo-core v0.1.1 (/home/evgenii/experiments/rpm-spec-tool/crates/repo-core)
-   Compiling rpm-spec-repo-resolver v0.1.1 (/home/evgenii/experiments/rpm-spec-tool/crates/repo-resolver)
-   Compiling rpm-spec-repo-metadata v0.1.1 (/home/evgenii/experiments/rpm-spec-tool/crates/repo-metadata)
-   Compiling rpm-spec-analyzer v0.1.1 (/home/evgenii/experiments/rpm-spec-tool/crates/analyzer)
-   Compiling rpm-spec-tool v0.1.1 (/home/evgenii/experiments/rpm-spec-tool/crates/cli)
-    Finished `release` profile [optimized] target(s) in 1m 07s
-     Running `target/release/rpm-spec-tool lints --format markdown`
 # Lint rules reference
 
 ## Correctness
