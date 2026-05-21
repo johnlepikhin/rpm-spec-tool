@@ -20,7 +20,7 @@ repository   = "https://github.com/johnlepikhin/rpm-spec-tool"
 publish      = ["crates-io"]
 
 [workspace.dependencies]
-rpm-spec               = { version = "0.4", features = ["parser", "printer", "serde"] }
+rpm-spec               = { version = "0.4.1", features = ["parser", "printer", "serde"] }
 rpm-spec-profile       = { path = "crates/profile", version = "0.1.1" }
 rpm-spec-repo-core     = { path = "crates/repo-core", version = "0.1.1" }
 rpm-spec-repo-metadata = { path = "crates/repo-metadata", version = "0.1.1" }
@@ -35,10 +35,3 @@ tracing    = "0.1"
 time       = { version = "0.3", default-features = false, features = ["std"] }
 rusqlite   = { version = "0.32", features = ["bundled"] }
 
-# Pin rpm-spec at the local in-development checkout so workspace
-# code can use API additions (e.g. `BuiltinMacro::With` /
-# `parse_bcond_verbatim` from Phase 12) before the next rpm-spec
-# release lands on crates.io. Drop this patch once the rpm-spec
-# release containing those symbols is published.
-[patch.crates-io]
-rpm-spec = { path = "../rpm-spec" }
