@@ -18,7 +18,7 @@ name = "rpm-spec-tool"
 path = "src/main.rs"
 
 [dependencies]
-rpm-spec-analyzer      = { path = "../analyzer", version = "0.1.2" }
+rpm-spec-analyzer      = { path = "../analyzer", version = "0.1.3" }
 rpm-spec-profile.workspace       = true
 rpm-spec-repo-core.workspace     = true
 rpm-spec-repo-metadata.workspace = true

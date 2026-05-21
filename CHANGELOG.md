@@ -13,6 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [0.1.3] - 2026-05-21
+
+### Fixed
+
+- Release binaries previously built on Ubuntu 24.04 baked glibc
+  2.39 into the resulting ELF, breaking on Debian 12 (glibc 2.36)
+  and other distros pinned at glibc 2.35–2.37. The release
+  workflow now builds on `ubuntu-22.04` / `ubuntu-22.04-arm`
+  (glibc 2.35), restoring portability to every distro shipping
+  glibc ≥ 2.35.
+
 ## [0.1.2] - 2026-05-21
 
 ### Added
@@ -168,7 +179,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.tar.gz`, `.deb`, and `.rpm` artifacts (plus `SHA256SUMS`) for Linux
   `x86_64` and `aarch64` on each `vX.Y.Z` tag.
 
-[Unreleased]: https://github.com/johnlepikhin/rpm-spec-tool/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/johnlepikhin/rpm-spec-tool/compare/v0.1.3...HEAD
+[0.1.3]:      https://github.com/johnlepikhin/rpm-spec-tool/compare/v0.1.2...v0.1.3
 [0.1.2]:      https://github.com/johnlepikhin/rpm-spec-tool/compare/v0.1.1...v0.1.2
 [0.1.1]:      https://github.com/johnlepikhin/rpm-spec-tool/compare/v0.1.0...v0.1.1
 [0.1.0]:      https://github.com/johnlepikhin/rpm-spec-tool/releases/tag/v0.1.0

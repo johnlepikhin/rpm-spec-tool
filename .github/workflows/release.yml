@@ -20,12 +20,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Pin to Ubuntu 22.04 (glibc 2.35) so the produced binary
+          # runs on any distro shipping glibc >= 2.35. Ubuntu 24.04
+          # (the previous `ubuntu-latest`) bakes glibc 2.39 into the
+          # binary and breaks on Debian 12 (glibc 2.36) and earlier.
+          # Keep this until the lowest distro we support catches up.
           - name: linux-x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
             arch_deb: amd64
             arch_rpm: x86_64
           - name: linux-aarch64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
             arch_deb: arm64
             arch_rpm: aarch64
     runs-on: ${{ matrix.runner }}
