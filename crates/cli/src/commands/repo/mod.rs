@@ -40,8 +40,7 @@ pub use sync::SyncOpts;
 /// `.rpmspec.toml` and didn't pass `--profile`. Re-export of
 /// [`rpm_spec_profile::builtin::DEFAULT_BUILTIN`] so the two
 /// strings can't drift.
-pub(super) const DEFAULT_PROFILE_NAME: &str =
-    rpm_spec_analyzer::profile::builtin::DEFAULT_BUILTIN;
+pub(super) const DEFAULT_PROFILE_NAME: &str = rpm_spec_analyzer::profile::builtin::DEFAULT_BUILTIN;
 
 /// Shared `repo` args. Almost every action accepts the same network
 /// / cache flags so they're flattened here.

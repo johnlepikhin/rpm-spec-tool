@@ -228,7 +228,12 @@ pub fn run(
                 matches.len(),
             )?;
             for (p, cap_name) in matches {
-                writeln!(stdout, "    {} {}", p.nevra, style.dim(&format!("[{cap_name}]")))?;
+                writeln!(
+                    stdout,
+                    "    {} {}",
+                    p.nevra,
+                    style.dim(&format!("[{cap_name}]"))
+                )?;
             }
         } else if let Some(pat) = &opts.provides_like {
             // `%{pat}%` substring match via SQL LIKE. The exact
@@ -251,7 +256,12 @@ pub fn run(
                 matches.len(),
             )?;
             for (p, cap_name) in matches {
-                writeln!(stdout, "    {} {}", p.nevra, style.dim(&format!("[{cap_name}]")))?;
+                writeln!(
+                    stdout,
+                    "    {} {}",
+                    p.nevra,
+                    style.dim(&format!("[{cap_name}]"))
+                )?;
             }
         } else if let Some(path) = &opts.file {
             if path.is_empty() {
@@ -290,7 +300,10 @@ pub fn run(
                         writeln!(stdout, "  `{path}`: owner pkg_id={pkg_id} not found")?;
                     }
                 }
-                None => writeln!(stdout, "  `{path}` is not owned by any package in this repo")?,
+                None => writeln!(
+                    stdout,
+                    "  `{path}` is not owned by any package in this repo"
+                )?,
             }
         } else if opts.full {
             let all = db
@@ -311,7 +324,10 @@ pub fn run(
     }
 
     if !printed_anything {
-        writeln!(stdout, "no matching cached snapshots for profile `{active}`")?;
+        writeln!(
+            stdout,
+            "no matching cached snapshots for profile `{active}`"
+        )?;
     }
 
     Ok(ExitCode::SUCCESS)

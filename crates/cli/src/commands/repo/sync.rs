@@ -3,7 +3,6 @@
 //! M1: rpm-md only. Apt-rpm is wired in M3 (PR 6). Parallel fetch
 //! lands in M3.
 
-use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -12,7 +11,7 @@ use clap::Args;
 
 use rpm_spec_analyzer::config::Config;
 use rpm_spec_analyzer::profile::{Profile, ProfileSection, ResolveOptions, resolve_profile};
-use rpm_spec_repo_metadata::backend::{detect_backend, RepoBackend};
+use rpm_spec_repo_metadata::backend::{RepoBackend, detect_backend};
 use rpm_spec_repo_metadata::cache::{self, CacheDirs};
 use rpm_spec_repo_metadata::http::{HttpCache, NetMode};
 use rpm_spec_repo_metadata::locks;
@@ -38,11 +37,11 @@ pub struct SyncOpts {
     #[arg(long = "target-set", value_name = "ID", conflicts_with_all = ["profiles", "all_profiles"])]
     pub target_set: Option<String>,
 
-    /// Don't fail with exit code 1 on per-repo errors. Errors are
-    /// still printed to stderr and tracked, but the command exits 0
-    /// as long as parsing succeeded. Useful when a few repos in a
-    /// large target set are temporarily unreachable (TLS issues,
-    /// 404s, hostile metadata caps) and you want the rest to land.
+    /// Don't exit with code 1 on per-repo failures. Each error is still
+    /// printed to stderr, but the command exits 0 as long as the run
+    /// itself reached the end (no setup failure). Useful when a few
+    /// repos in a large target set are temporarily unreachable and you
+    /// want the rest to land.
     #[arg(long)]
     pub keep_going: bool,
 }
@@ -74,7 +73,6 @@ pub fn run(
         return Ok(ExitCode::SUCCESS);
     }
 
-    let mut stdout = std::io::stdout().lock();
     let mut had_error = false;
 
     for (profile_name, profile) in targets {
@@ -95,7 +93,8 @@ pub fn run(
                 continue;
             };
 
-            let interpolated = match crate::commands::repo::url::interpolate_url(baseurl, &profile) {
+            let interpolated = match crate::commands::repo::url::interpolate_url(baseurl, &profile)
+            {
                 Ok(u) => u,
                 Err(e) => {
                     eprintln!("error: profile `{profile_name}` repo `{repo_id}`: {e}");
@@ -123,11 +122,10 @@ pub fn run(
             // baseurl — that's all the wire protocol cares about, and
             // it keeps the trait narrow + testable.
             let backend: Box<dyn RepoBackend> = detect_backend(repo_cfg)?;
-            writeln!(
-                stdout,
-                "syncing  profile={profile_name}  repo={repo_id}  kind={}  url={interpolated}",
+            eprintln!(
+                "syncing {profile_name}/{repo_id} ({}) {interpolated}",
                 backend.kind().as_str()
-            )?;
+            );
 
             let rev = match backend.fetch_revision(&http, &interpolated) {
                 Ok(r) => r,
@@ -160,22 +158,18 @@ pub fn run(
                 rev.raw_bytes.len() as u64,
             )?;
 
-            writeln!(
-                stdout,
-                "  → revision={}  packages={}  snapshot={}",
+            eprintln!(
+                "  → revision {}, {} packages, snapshot at {}",
                 index.revision,
                 index.packages.len(),
                 snap_dir.display(),
-            )?;
+            );
         }
     }
 
     if had_error {
         if opts.keep_going {
-            writeln!(
-                stdout,
-                "warning: some repos failed; exit 0 because --keep-going was set"
-            )?;
+            eprintln!("warning: some repos failed; exit 0 because --keep-going was set");
             Ok(ExitCode::SUCCESS)
         } else {
             Ok(ExitCode::from(1))

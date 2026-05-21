@@ -29,8 +29,10 @@ Modes (chosen by number of PROFILES arguments):
 pub struct MacroOpts {
     /// Macro name to look up (without the `%` prefix).
     pub name: String,
-    /// Profiles to look the macro up in. See modes above for behaviour
-    /// by argument count.
+    /// Profiles to look the macro up in. Behaviour depends on count:
+    /// 0 → comparison table of every available profile;
+    /// 1 → compact single-profile output (exit 2 if undefined);
+    /// 2+ → comparison table of just the named profiles.
     pub profiles: Vec<String>,
 
     #[command(flatten)]
@@ -154,7 +156,10 @@ fn render_macro(
     style: &Style,
 ) -> Result<MacroLookup> {
     let Some(entry) = profile.macros.get(macro_name) else {
-        eprintln!("error: macro `{macro_name}` is not defined in profile `{profile_name}`");
+        eprintln!(
+            "error: macro '{macro_name}' is not defined in profile '{profile_name}' \
+             (try 'rpm-spec-tool profile macros \"{profile_name}\" --filter \"{macro_name}\"' to search)"
+        );
         return Ok(MacroLookup::Undefined);
     };
 

@@ -120,6 +120,8 @@ mod tests {
             all_lints: false,
             stdout: false,
             force: false,
+            yes: false,
+            dry_run: false,
         })
         .unwrap();
 

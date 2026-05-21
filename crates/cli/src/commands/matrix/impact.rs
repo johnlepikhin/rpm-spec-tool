@@ -71,12 +71,17 @@ pub struct ImpactOpts {
     #[command(flatten)]
     pub input: crate::app::CommonInput,
 
+    /// Output format for the per-profile impact report.
     #[arg(long, default_value_t = OutputFormat::Human, value_enum)]
     pub format: OutputFormat,
 
+    /// Name of a target set defined in `[targets.<name>]`.
     #[arg(long = "target-set", value_name = "NAME")]
     pub target_set: Option<String>,
 
+    /// Ad-hoc profile list — bypasses `[targets.*]` and runs against
+    /// the given profiles directly. Comma-separated. Equivalent to a
+    /// minimal `[targets.<ad-hoc>]` with no shared defines.
     #[arg(long = "profiles", value_name = "P1,P2,...", value_delimiter = ',')]
     pub profiles: Vec<String>,
 
@@ -190,12 +195,17 @@ pub(super) fn run(
     // this pre-check we'd silently treat a typo as "spec added in this
     // PR" and produce misleading impact output.
     if let Err(e) = git_resolve_rev(&opts.git_cmd, &repo_root, &opts.from) {
-        eprintln!("error: revision `{}`: {e:#}", opts.from);
+        eprintln!(
+            "error: --from '{}': git revision not found (git: {e:#})",
+            opts.from
+        );
+        eprintln!("hint: try 'git log --oneline' to verify the revision exists");
         return Ok(ExitCode::from(2));
     }
     if let Some(to_rev) = opts.to.as_deref() {
         if let Err(e) = git_resolve_rev(&opts.git_cmd, &repo_root, to_rev) {
-            eprintln!("error: revision `{to_rev}`: {e:#}");
+            eprintln!("error: --to '{to_rev}': git revision not found (git: {e:#})");
+            eprintln!("hint: try 'git log --oneline' to verify the revision exists");
             return Ok(ExitCode::from(2));
         }
     }
@@ -282,7 +292,7 @@ fn git_resolve_rev(git_cmd: &str, repo: &Path, rev: &str) -> Result<()> {
             // `--quiet` suppresses stderr for the common "no such rev"
             // case; substitute a useful message so the operator can
             // distinguish a typo from a wider git failure.
-            anyhow::bail!("unknown revision (no commit named `{rev}`)");
+            anyhow::bail!("unknown revision (no commit named '{rev}')");
         }
         anyhow::bail!("{trimmed}");
     }
@@ -365,7 +375,7 @@ fn git_show(git_cmd: &str, repo: &Path, rev: &str, rel_path: &Path) -> Result<St
 
     if stdout_buf.len() as u64 > GIT_SHOW_MAX_BYTES {
         anyhow::bail!(
-            "git show `{pathspec}` exceeded {GIT_SHOW_MAX_BYTES}-byte cap; refusing to load"
+            "git show '{pathspec}' exceeded {GIT_SHOW_MAX_BYTES}-byte cap; refusing to load"
         );
     }
 
@@ -388,6 +398,20 @@ fn git_show(git_cmd: &str, repo: &Path, rev: &str, rel_path: &Path) -> Result<St
                 "spec file does not exist at revision; treating as empty (deps will surface as added/removed)"
             );
             return Ok(String::new());
+        }
+        // Defence in depth: `git_resolve_rev` already pre-checks `--from`
+        // and explicit `--to`, but in case git wording shifts or a code
+        // path skips the pre-check, surface a clearly-attributed
+        // revision-not-found message rather than a raw `git show failed:`
+        // dump the user has to parse manually.
+        let rev_unknown = stderr.contains("unknown revision")
+            || stderr.contains("bad revision")
+            || stderr.contains("ambiguous argument");
+        if rev_unknown {
+            anyhow::bail!(
+                "git revision not found (git: {}); try 'git log --oneline' to verify the revision exists",
+                stderr.trim()
+            );
         }
         anyhow::bail!("git show failed: {}", stderr.trim());
     }
@@ -419,7 +443,11 @@ fn render_human(
             target_set.targets.len(),
         ))
     )?;
-    writeln!(out, "{}", style.header(&format!("## {}", source.display_name())))?;
+    writeln!(
+        out,
+        "{}",
+        style.header(&format!("## {}", source.display_name()))
+    )?;
 
     if report.is_no_change() {
         writeln!(out)?;
@@ -430,12 +458,7 @@ fn render_human(
     for prof in &report.per_profile {
         writeln!(out)?;
         if prof.is_no_change() {
-            writeln!(
-                out,
-                "  {}: {}",
-                prof.profile_id,
-                style.dim("(no change)")
-            )?;
+            writeln!(out, "  {}: {}", prof.profile_id, style.dim("(no change)"))?;
             continue;
         }
         // Headline: total added/removed across compared tags +
@@ -450,10 +473,10 @@ fn render_human(
                 acc.1 + t.changes.removed.len(),
             )
         });
-        let (script_added, script_removed): (usize, usize) =
-            prof.script_sections.iter().fold((0, 0), |acc, s| {
-                (acc.0 + s.added, acc.1 + s.removed)
-            });
+        let (script_added, script_removed): (usize, usize) = prof
+            .script_sections
+            .iter()
+            .fold((0, 0), |acc, s| (acc.0 + s.added, acc.1 + s.removed));
         let added_n = dep_added + script_added;
         let removed_n = dep_removed + script_removed;
         writeln!(

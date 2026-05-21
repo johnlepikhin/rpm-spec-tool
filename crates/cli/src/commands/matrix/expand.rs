@@ -345,8 +345,7 @@ fn render_human(
                     if let Some(top) = cond_stack.last_mut() {
                         if matches!(kind, ConditionalKind::ElseOrElif) {
                             top.siblings.push(borrow_status(&info.status));
-                            top.current_branch_status =
-                                Some(borrow_status(&info.status));
+                            top.current_branch_status = Some(borrow_status(&info.status));
                             updated = true;
                         }
                     }

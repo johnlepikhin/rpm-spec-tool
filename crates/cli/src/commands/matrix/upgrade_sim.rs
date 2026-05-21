@@ -120,8 +120,8 @@ pub fn run(
     }
 
     let cache_root = opts.repo_args.resolve_cache_root()?;
-    let dirs = CacheDirs::ensure(cache_root)
-        .context("preparing the repo cache directory layout")?;
+    let dirs =
+        CacheDirs::ensure(cache_root).context("preparing the repo cache directory layout")?;
     let profiles: Vec<&_> = ctx.resolved.targets.iter().map(|t| &t.profile).collect();
     let universes = cache_universes(&profiles, &dirs)?;
 
@@ -131,10 +131,7 @@ pub fn run(
             .with_context(|| format!("reading {}", spec_path.display()))?;
         for resolved in &ctx.resolved.targets {
             let profile = &resolved.profile;
-            let universe = universes
-                .get(&profile.identity.name)
-                .cloned()
-                .flatten();
+            let universe = universes.get(&profile.identity.name).cloned().flatten();
             let row = simulate_one(spec_path, &source, profile, universe.as_deref())?;
             report.rows.push(row);
         }
@@ -212,9 +209,7 @@ fn simulate_one(
     let arch_filter = ArchFilter::from_profile(profile);
     let best: Option<NEVRA> = candidates
         .into_iter()
-        .filter(|(_pref, n)| {
-            n.name.as_ref() == spec_nevr.name && arch_filter.matches(&n.arch)
-        })
+        .filter(|(_pref, n)| n.name.as_ref() == spec_nevr.name && arch_filter.matches(&n.arch))
         .map(|(_pref, n)| n)
         // `cmp_strict` — provider best-pick must not invoke the
         // dnf-compatible set:/empty-release short-circuits (those
@@ -257,8 +252,16 @@ fn simulate_one(
 /// epoch as monotonically greater regardless of version/release.
 fn classify(proposed: &EVR, current: &EVR, proposed_epoch: u32, current_epoch: u32) -> Verdict {
     use std::cmp::Ordering::{Equal, Greater, Less};
-    let proposed = EVR::new(Some(proposed_epoch), proposed.version.as_str(), proposed.release.as_str());
-    let current = EVR::new(Some(current_epoch), current.version.as_str(), current.release.as_str());
+    let proposed = EVR::new(
+        Some(proposed_epoch),
+        proposed.version.as_str(),
+        proposed.release.as_str(),
+    );
+    let current = EVR::new(
+        Some(current_epoch),
+        current.version.as_str(),
+        current.release.as_str(),
+    );
     // `EVR` has no `Ord` impl — call `compare_rpm` directly.
     match proposed.compare_rpm(&current) {
         Greater => Verdict::Upgrade,
@@ -404,11 +407,20 @@ mod tests {
 
     #[test]
     fn verdict_serialises_as_snake_case() {
-        assert_eq!(serde_json::to_string(&Verdict::Upgrade).unwrap(), "\"upgrade\"");
+        assert_eq!(
+            serde_json::to_string(&Verdict::Upgrade).unwrap(),
+            "\"upgrade\""
+        );
         assert_eq!(serde_json::to_string(&Verdict::Same).unwrap(), "\"same\"");
-        assert_eq!(serde_json::to_string(&Verdict::Regress).unwrap(), "\"regress\"");
+        assert_eq!(
+            serde_json::to_string(&Verdict::Regress).unwrap(),
+            "\"regress\""
+        );
         assert_eq!(serde_json::to_string(&Verdict::New).unwrap(), "\"new\"");
-        assert_eq!(serde_json::to_string(&Verdict::Skipped).unwrap(), "\"skipped\"");
+        assert_eq!(
+            serde_json::to_string(&Verdict::Skipped).unwrap(),
+            "\"skipped\""
+        );
     }
 
     #[test]
@@ -429,11 +441,22 @@ mod tests {
         // platform-portable without pulling in `std::os::unix`.
         let regress_dbg = format!("{:?}", report.exit_code(FailOn::Regress));
         let never_dbg = format!("{:?}", report.exit_code(FailOn::Never));
-        assert!(regress_dbg.contains('1'), "expected non-zero exit, got {regress_dbg}");
-        assert!(never_dbg.contains('0'), "expected zero exit, got {never_dbg}");
+        assert!(
+            regress_dbg.contains('1'),
+            "expected non-zero exit, got {regress_dbg}"
+        );
+        assert!(
+            never_dbg.contains('0'),
+            "expected zero exit, got {never_dbg}"
+        );
 
         // SAME / NEW / SKIPPED must NOT fail under `regress` policy.
-        for v in [Verdict::Same, Verdict::New, Verdict::Skipped, Verdict::Upgrade] {
+        for v in [
+            Verdict::Same,
+            Verdict::New,
+            Verdict::Skipped,
+            Verdict::Upgrade,
+        ] {
             let mut r = UpgradeSimReport::default();
             r.rows.push(UpgradeRow {
                 spec_path: "x".into(),

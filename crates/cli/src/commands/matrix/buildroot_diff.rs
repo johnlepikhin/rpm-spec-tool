@@ -129,8 +129,8 @@ pub fn run(opts: DiffOpts, config_path: Option<&Path>, color: ColorChoice) -> Re
     }
 
     let cache_root = opts.repo_args.resolve_cache_root()?;
-    let dirs = CacheDirs::ensure(cache_root)
-        .context("preparing the repo cache directory layout")?;
+    let dirs =
+        CacheDirs::ensure(cache_root).context("preparing the repo cache directory layout")?;
     let profiles: Vec<&_> = ctx.resolved.targets.iter().map(|t| &t.profile).collect();
     let universes = cache_universes(&profiles, &dirs)?;
 
@@ -172,10 +172,7 @@ pub fn run(opts: DiffOpts, config_path: Option<&Path>, color: ColorChoice) -> Re
     let mut sides: Vec<SideResult> = Vec::with_capacity(2);
     for resolved in &ctx.resolved.targets {
         let profile = &resolved.profile;
-        let universe = universes
-            .get(&profile.identity.name)
-            .cloned()
-            .flatten();
+        let universe = universes.get(&profile.identity.name).cloned().flatten();
         sides.push(solve_side(&source, profile, universe.as_deref()));
     }
     debug_assert_eq!(sides.len(), 2, "early exit above guarantees two targets");
@@ -185,18 +182,16 @@ pub fn run(opts: DiffOpts, config_path: Option<&Path>, color: ColorChoice) -> Re
     Ok(report.exit_code(opts.fail_on))
 }
 
-fn solve_side(
-    source: &str,
-    profile: &Profile,
-    universe: Option<&RepoUniverse>,
-) -> SideResult {
+fn solve_side(source: &str, profile: &Profile, universe: Option<&RepoUniverse>) -> SideResult {
     let profile_name = profile.identity.name.clone();
     let Some(universe) = universe else {
         tracing::debug!(
             profile = %profile_name,
             "no cached universe for profile; diff side will be `Skipped`",
         );
-        return SideResult::Skipped { profile: profile_name };
+        return SideResult::Skipped {
+            profile: profile_name,
+        };
     };
 
     // Repo-side DB failures are infrastructure errors — degrade to
@@ -225,7 +220,9 @@ fn solve_side(
                 .map(|n| (n.name.to_string(), n))
                 .collect(),
         },
-        Solution::Unsatisfiable(_) => SideResult::Unsat { profile: profile_name },
+        Solution::Unsatisfiable(_) => SideResult::Unsat {
+            profile: profile_name,
+        },
     }
 }
 
@@ -378,9 +375,7 @@ impl DiffReport {
         match fail_on {
             FailOn::Never => ExitCode::SUCCESS,
             FailOn::AnyDiff => {
-                if self.only_a.is_empty()
-                    && self.only_b.is_empty()
-                    && self.version_only.is_empty()
+                if self.only_a.is_empty() && self.only_b.is_empty() && self.version_only.is_empty()
                 {
                     ExitCode::SUCCESS
                 } else {
@@ -431,10 +426,7 @@ fn render(report: &DiffReport, format: OutputFormat, style: &Style) -> Result<()
                         SolveVerdict::Error => style.dead_tag("ERROR"),
                         SolveVerdict::Ok => unreachable!("filtered above"),
                     };
-                    writeln!(
-                        out,
-                        "  {tag}  {label} (no closure to diff against)",
-                    )?;
+                    writeln!(out, "  {tag}  {label} (no closure to diff against)",)?;
                 }
             }
             if report.verdict_a != SolveVerdict::Ok || report.verdict_b != SolveVerdict::Ok {
@@ -530,7 +522,10 @@ mod tests {
     #[test]
     fn diff_buckets_common_only_and_version_drift() {
         let a = ok_side("a", &[("bash", "5.1"), ("glibc", "2.34"), ("gcc", "11")]);
-        let b = ok_side("b", &[("bash", "5.1"), ("glibc", "2.38"), ("python", "3.12")]);
+        let b = ok_side(
+            "b",
+            &[("bash", "5.1"), ("glibc", "2.38"), ("python", "3.12")],
+        );
         let report = build_diff(Path::new("/x.spec"), &a, &b);
         assert_eq!(report.common.len(), 1, "{:?}", report.common);
         assert_eq!(report.common[0].name.as_ref(), "bash");
@@ -562,11 +557,16 @@ mod tests {
     #[test]
     fn unsat_side_yields_degraded_report() {
         let a = ok_side("a", &[("bash", "5.1")]);
-        let b = SideResult::Unsat { profile: "b".to_string() };
+        let b = SideResult::Unsat {
+            profile: "b".to_string(),
+        };
         let report = build_diff(Path::new("/x.spec"), &a, &b);
         assert_eq!(report.verdict_a, SolveVerdict::Ok);
         assert_eq!(report.verdict_b, SolveVerdict::Unsat);
-        assert!(report.common.is_empty(), "no diff possible against unsat side");
+        assert!(
+            report.common.is_empty(),
+            "no diff possible against unsat side"
+        );
         let dbg = format!("{:?}", report.exit_code(FailOn::Unsat));
         assert!(dbg.contains('1'), "{dbg}");
     }

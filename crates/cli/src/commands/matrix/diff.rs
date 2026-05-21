@@ -329,13 +329,19 @@ impl DiffReport {
             // `matrix impact` keeps the directives — there an added
             // `%if` block IS the visible change between revisions.
             let lines_a: Vec<String> = rpm_spec_analyzer::collect_active_section_lines(
-                spec, coverage, &a.profile_id, label,
+                spec,
+                coverage,
+                &a.profile_id,
+                label,
             )
             .into_iter()
             .filter(|l| !is_conditional_directive(l))
             .collect();
             let lines_b: Vec<String> = rpm_spec_analyzer::collect_active_section_lines(
-                spec, coverage, &b.profile_id, label,
+                spec,
+                coverage,
+                &b.profile_id,
+                label,
             )
             .into_iter()
             .filter(|l| !is_conditional_directive(l))
@@ -513,23 +519,24 @@ fn collect_scalar_diffs(
     let mut values_b: std::collections::HashMap<&'static str, String> =
         std::collections::HashMap::new();
 
-    let collect_into = |sel: &ProfileBranchSelection,
-                        out: &mut std::collections::HashMap<&'static str, String>| {
-        rpm_spec_analyzer::walk_active_preamble(spec, sel, |item| {
-            for (tag, label) in SCALAR_TAGS {
-                if &item.tag == tag {
-                    if let TagValue::Text(t) = &item.value {
-                        let rendered = rpm_spec_analyzer::render_text_with_macros(t);
-                        // First-write-wins: subpackage preamble can
-                        // declare the same tag again with a different
-                        // value, but the top-level scalar is what we
-                        // want for cross-profile comparison.
-                        out.entry(label).or_insert(rendered);
+    let collect_into =
+        |sel: &ProfileBranchSelection,
+         out: &mut std::collections::HashMap<&'static str, String>| {
+            rpm_spec_analyzer::walk_active_preamble(spec, sel, |item| {
+                for (tag, label) in SCALAR_TAGS {
+                    if &item.tag == tag {
+                        if let TagValue::Text(t) = &item.value {
+                            let rendered = rpm_spec_analyzer::render_text_with_macros(t);
+                            // First-write-wins: subpackage preamble can
+                            // declare the same tag again with a different
+                            // value, but the top-level scalar is what we
+                            // want for cross-profile comparison.
+                            out.entry(label).or_insert(rendered);
+                        }
                     }
                 }
-            }
-        });
-    };
+            });
+        };
     collect_into(sel_a, &mut values_a);
     collect_into(sel_b, &mut values_b);
 
@@ -562,8 +569,16 @@ fn is_conditional_directive(line: &str) -> bool {
     // `%elif`, etc. A trailing alphanumeric character means this is
     // a longer keyword we don't want to swallow (e.g. `%ifoobar`).
     for kw in [
-        "%elifarch", "%elifos", "%ifarch", "%ifnarch", "%ifnos", "%ifos", "%endif", "%elif",
-        "%else", "%if",
+        "%elifarch",
+        "%elifos",
+        "%ifarch",
+        "%ifnarch",
+        "%ifnos",
+        "%ifos",
+        "%endif",
+        "%elif",
+        "%else",
+        "%if",
     ] {
         if let Some(rest) = trimmed.strip_prefix(kw) {
             let next = rest.chars().next();
@@ -660,9 +675,9 @@ fn collect_subpackages(
                         let suffix = rpm_spec_analyzer::render_text_with_macros(t);
                         format!("{}-{}", main_name, suffix.trim())
                     }
-                    PackageName::Absolute(t) => {
-                        rpm_spec_analyzer::render_text_with_macros(t).trim().to_string()
-                    }
+                    PackageName::Absolute(t) => rpm_spec_analyzer::render_text_with_macros(t)
+                        .trim()
+                        .to_string(),
                     _ => return,
                 };
                 if !name.is_empty() {
@@ -906,13 +921,7 @@ fn render_human(
         any_printed = true;
         writeln!(out)?;
         writeln!(out, "  {}", style.header("Sources/Patches"))?;
-        write_bucket(
-            &mut out,
-            "    common",
-            &sp.common,
-            |s| style.dim(s),
-            style,
-        )?;
+        write_bucket(&mut out, "    common", &sp.common, |s| style.dim(s), style)?;
         write_bucket(
             &mut out,
             &format!("    only {}", report.profile_a),
@@ -1151,8 +1160,16 @@ mod tests {
     #[test]
     fn cond_directive_recognises_canonical_keywords() {
         for kw in [
-            "%if", "%elif", "%else", "%endif", "%ifarch", "%ifnarch", "%ifos", "%ifnos",
-            "%elifarch", "%elifos",
+            "%if",
+            "%elif",
+            "%else",
+            "%endif",
+            "%ifarch",
+            "%ifnarch",
+            "%ifos",
+            "%ifnos",
+            "%elifarch",
+            "%elifos",
         ] {
             assert!(
                 is_conditional_directive(kw),
@@ -1293,11 +1310,7 @@ mod tests {
             &target_set,
             &rpm_spec_analyzer::BcondOverrides::default(),
         );
-        let sel = ProfileBranchSelection::compute(
-            &coverage,
-            "generic",
-            IndeterminatePolicy::Skip,
-        );
+        let sel = ProfileBranchSelection::compute(&coverage, "generic", IndeterminatePolicy::Skip);
         (target_set, sel)
     }
 

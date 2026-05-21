@@ -117,8 +117,8 @@ pub fn run(opts: SolveOpts, config_path: Option<&Path>, color: ColorChoice) -> R
     }
 
     let cache_root = opts.repo_args.resolve_cache_root()?;
-    let dirs = CacheDirs::ensure(cache_root)
-        .context("preparing the repo cache directory layout")?;
+    let dirs =
+        CacheDirs::ensure(cache_root).context("preparing the repo cache directory layout")?;
     let profiles: Vec<&_> = ctx.resolved.targets.iter().map(|t| &t.profile).collect();
     let universes = cache_universes(&profiles, &dirs)?;
 
@@ -128,10 +128,7 @@ pub fn run(opts: SolveOpts, config_path: Option<&Path>, color: ColorChoice) -> R
             .with_context(|| format!("reading {}", spec_path.display()))?;
         for resolved in &ctx.resolved.targets {
             let profile = &resolved.profile;
-            let universe = universes
-                .get(&profile.identity.name)
-                .cloned()
-                .flatten();
+            let universe = universes.get(&profile.identity.name).cloned().flatten();
             let row = solve_one(spec_path, &source, profile, universe.as_deref())?;
             report.rows.push(row);
         }
@@ -204,11 +201,7 @@ fn solve_one(
 /// "tool missing" (file paths), "shared library missing" (`.so.N`
 /// sonames), or "version constraint" — and direct their next
 /// step accordingly.
-fn render_unsat<W: Write>(
-    out: &mut W,
-    row: &SolveRow,
-    style: &Style,
-) -> std::io::Result<()> {
+fn render_unsat<W: Write>(out: &mut W, row: &SolveRow, style: &Style) -> std::io::Result<()> {
     let unmet_total = row.unsatisfied.len();
     let conflict_total = row.conflicts.len();
     writeln!(
@@ -232,9 +225,7 @@ fn render_unsat<W: Write>(
     writeln!(
         out,
         "  {}",
-        style.dim(
-            "Common causes: spec was written for a different distro family (Mandriva-style"
-        ),
+        style.dim("Common causes: spec was written for a different distro family (Mandriva-style"),
     )?;
     writeln!(
         out,
@@ -298,8 +289,7 @@ fn render_unsat<W: Write>(
                 style.dim(&format!("via {}", c.via)),
             )?;
             if !c.cause_chain.is_empty() {
-                let chain: Vec<String> =
-                    c.cause_chain.iter().map(NEVRA::to_string).collect();
+                let chain: Vec<String> = c.cause_chain.iter().map(NEVRA::to_string).collect();
                 writeln!(
                     out,
                     "      {} {}",
@@ -308,8 +298,7 @@ fn render_unsat<W: Write>(
                 )?;
             }
             if !c.victim_chain.is_empty() {
-                let chain: Vec<String> =
-                    c.victim_chain.iter().map(NEVRA::to_string).collect();
+                let chain: Vec<String> = c.victim_chain.iter().map(NEVRA::to_string).collect();
                 writeln!(
                     out,
                     "      {} {}",
@@ -360,10 +349,13 @@ fn render_bucket<W: Write>(
     for item in items {
         writeln!(out, "    {}", item.dep)?;
         if item.required_by.is_empty() {
-            writeln!(out, "      {}", style.dim("required by: the spec / buildroot baseline"))?;
+            writeln!(
+                out,
+                "      {}",
+                style.dim("required by: the spec / buildroot baseline")
+            )?;
         } else {
-            let chain: Vec<String> =
-                item.required_by.iter().map(NEVRA::to_string).collect();
+            let chain: Vec<String> = item.required_by.iter().map(NEVRA::to_string).collect();
             writeln!(
                 out,
                 "      {} {}",
@@ -514,9 +506,8 @@ fn render(report: &SolveReport, format: OutputFormat, style: &Style) -> Result<(
                         // future refactor adopts the per-row Error
                         // pattern used by buildroot diff / deps
                         // explain.
-                        let hint = style.dead_tag(
-                            "ERROR  solver infrastructure failure (see logs)",
-                        );
+                        let hint =
+                            style.dead_tag("ERROR  solver infrastructure failure (see logs)");
                         writeln!(out, "  {hint}")?;
                     }
                 }
@@ -557,7 +548,11 @@ mod tests {
             unmet("bash"),
         ];
         let b = bucket_unmet(&items);
-        assert_eq!(b.sonames.len(), 2, "soname bucket should win over file_paths");
+        assert_eq!(
+            b.sonames.len(),
+            2,
+            "soname bucket should win over file_paths"
+        );
         assert_eq!(b.file_paths.len(), 1);
         assert_eq!(b.versioned.len(), 2);
         assert_eq!(b.plain.len(), 1);

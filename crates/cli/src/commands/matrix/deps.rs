@@ -80,11 +80,7 @@ pub enum FailOn {
     Error,
 }
 
-pub fn run(
-    opts: DepsOpts,
-    config_path: Option<&Path>,
-    color: ColorChoice,
-) -> Result<ExitCode> {
+pub fn run(opts: DepsOpts, config_path: Option<&Path>, color: ColorChoice) -> Result<ExitCode> {
     let style = Style::new(color);
 
     // Single-`--profile` is just a one-element ad-hoc set; fold it
@@ -111,8 +107,8 @@ pub fn run(
     }
 
     let cache_root = opts.repo_args.resolve_cache_root()?;
-    let dirs = CacheDirs::ensure(cache_root)
-        .context("preparing the repo cache directory layout")?;
+    let dirs =
+        CacheDirs::ensure(cache_root).context("preparing the repo cache directory layout")?;
 
     // Build the per-profile universe ONCE up-front. The (spec × profile)
     // grid touches the same profile repeatedly; per-spec DB opens would

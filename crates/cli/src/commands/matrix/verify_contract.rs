@@ -200,12 +200,7 @@ fn render_human(
                     )?;
                 }
                 ContractProfileStatus::Pass => {
-                    writeln!(
-                        out,
-                        "  {}: {}",
-                        entry.profile_id,
-                        style.always_tag("PASS")
-                    )?;
+                    writeln!(out, "  {}: {}", entry.profile_id, style.always_tag("PASS"))?;
                 }
                 ContractProfileStatus::Violations { violations } => {
                     writeln!(

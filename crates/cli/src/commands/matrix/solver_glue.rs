@@ -25,7 +25,7 @@ use anyhow::{Context, Result};
 use rpm_spec_analyzer::profile::Profile;
 use rpm_spec_analyzer::session::parse;
 use rpm_spec_repo_core::{Dependency, NEVRA, RepoUniverse};
-use rpm_spec_repo_resolver::{ConflictChain, SolveRequest, Solution, UnsatCore, solve};
+use rpm_spec_repo_resolver::{ConflictChain, Solution, SolveRequest, UnsatCore, solve};
 use serde::Serialize;
 
 /// Run the buildroot solver for one (spec source, profile) pair.
@@ -43,16 +43,10 @@ use serde::Serialize;
 /// verdict should match on the `Err` arm and inject their own
 /// degraded row rather than `?`-propagating (which would poison the
 /// whole report on one corrupt snapshot).
-pub fn solve_for(
-    source: &str,
-    profile: &Profile,
-    universe: &RepoUniverse,
-) -> Result<Solution> {
+pub fn solve_for(source: &str, profile: &Profile, universe: &RepoUniverse) -> Result<Solution> {
     let outcome = parse(source);
-    let requirements = rpm_spec_analyzer::rules::repo::shared::active_buildrequires(
-        &outcome.spec,
-        profile,
-    );
+    let requirements =
+        rpm_spec_analyzer::rules::repo::shared::active_buildrequires(&outcome.spec, profile);
     let (base_packages, implicit_brs) = match profile.repos.as_ref() {
         Some(rs) => (
             literal_dependencies(&rs.buildroot.base_packages),
@@ -77,7 +71,10 @@ pub fn solve_for(
 /// `implicit_brs` are require-side slots.
 #[must_use]
 pub fn literal_dependencies(names: &[String]) -> Vec<Dependency> {
-    names.iter().map(|n| Dependency::unversioned(n.as_str())).collect()
+    names
+        .iter()
+        .map(|n| Dependency::unversioned(n.as_str()))
+        .collect()
 }
 
 /// Convert the resolver's raw `UnsatCore` into the dedup'd shape
@@ -205,9 +202,18 @@ mod tests {
     #[test]
     fn verdict_serialises_as_snake_case() {
         assert_eq!(serde_json::to_string(&SolveVerdict::Ok).unwrap(), "\"ok\"");
-        assert_eq!(serde_json::to_string(&SolveVerdict::Unsat).unwrap(), "\"unsat\"");
-        assert_eq!(serde_json::to_string(&SolveVerdict::Skipped).unwrap(), "\"skipped\"");
-        assert_eq!(serde_json::to_string(&SolveVerdict::Error).unwrap(), "\"error\"");
+        assert_eq!(
+            serde_json::to_string(&SolveVerdict::Unsat).unwrap(),
+            "\"unsat\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SolveVerdict::Skipped).unwrap(),
+            "\"skipped\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SolveVerdict::Error).unwrap(),
+            "\"error\""
+        );
     }
 
     #[test]

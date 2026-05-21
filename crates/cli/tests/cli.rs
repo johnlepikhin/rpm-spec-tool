@@ -2193,7 +2193,7 @@ make %{?_smp_mflags}
             None,
         );
         assert_eq!(code, 0, "stderr={stderr}\nstdout={stdout}");
-        assert!(stdout.contains("`<ad-hoc>`"), "ad-hoc label missing");
+        assert!(stdout.contains("\"<ad-hoc>\""), "ad-hoc label missing");
         let generic_pos = stdout.find("\n  generic").expect("generic row");
         let rhel_pos = stdout.find("\n  rhel-9-x86_64").expect("rhel row");
         assert!(
@@ -2266,7 +2266,7 @@ profiles = ["generic", "rhel-9-x86_64"]
             None,
         );
         assert_eq!(code, 0, "stderr={stderr}");
-        assert!(stdout.contains("`smoke`"), "target set label missing");
+        assert!(stdout.contains("\"smoke\""), "target set label missing");
         assert!(stdout.contains("rhel-9-x86_64"));
         assert!(stdout.contains("generic"));
     }
@@ -3457,7 +3457,11 @@ defines = { foo_macro = "1" }
             serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
         let branches = v["files"][0]["conditionals"][0]["branches"][0].clone();
         let groups = branches["indeterminate_groups"].as_array().expect("groups");
-        assert_eq!(groups.len(), 1, "expected one reason group; got: {groups:?}");
+        assert_eq!(
+            groups.len(),
+            1,
+            "expected one reason group; got: {groups:?}"
+        );
         let g = &groups[0];
         let reason = g["reason"].as_str().expect("reason");
         assert!(
@@ -3633,7 +3637,10 @@ values = ["ent", "1c"]
         let v: serde_json::Value =
             serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
         let b = &v["files"][0]["conditionals"][0]["branches"][0];
-        assert_eq!(b["is_conditional"], true, "expected is_conditional=true in {b:?}");
+        assert_eq!(
+            b["is_conditional"], true,
+            "expected is_conditional=true in {b:?}"
+        );
         assert_eq!(b["is_dead"], false, "must not be dead when conditional");
         let cond_on = b["conditional_on"].as_array().expect("conditional_on");
         assert_eq!(cond_on.len(), 1);
@@ -5865,7 +5872,12 @@ B
         // Supplements, Enhances, BuildConflicts, OrderWithRequires)
         // are surfaced in JSON — extending `COMPARED_TAGS` is a wire-
         // format change so the count is pinned explicitly here.
-        assert_eq!(groups.len(), 11, "expected 11 dep tag groups; got {}", groups.len());
+        assert_eq!(
+            groups.len(),
+            11,
+            "expected 11 dep tag groups; got {}",
+            groups.len()
+        );
         // Per-group keys must use exactly these `snake_case` names.
         for g in groups {
             let obj = g.as_object().expect("group is object");
@@ -7451,14 +7463,9 @@ B
         // a `--with-llvm` configure flag) reported "no change" because
         // impact compared only preamble dep tags. Now the script-body
         // diff catches it.
-        let to_spec = BASE_SPEC.replace(
-            "%description\n",
-            "make install\n\n%description\n",
-        )
-        .replace(
-            "%files\n",
-            "%install\nmake install\n\n%files\n",
-        );
+        let to_spec = BASE_SPEC
+            .replace("%description\n", "make install\n\n%description\n")
+            .replace("%files\n", "%install\nmake install\n\n%files\n");
         let (_dir, spec, from, to) = two_commit_repo(BASE_SPEC, &to_spec);
         let (rc, stdout, stderr) = run(
             &[
@@ -7550,11 +7557,9 @@ B
         let v: serde_json::Value =
             serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
         let prof = &v["per_profile"][0];
-        let sections = prof["script_sections"]
-            .as_array()
-            .unwrap_or_else(|| {
-                panic!("expected `per_profile[0].script_sections` array; got:\n{stdout}")
-            });
+        let sections = prof["script_sections"].as_array().unwrap_or_else(|| {
+            panic!("expected `per_profile[0].script_sections` array; got:\n{stdout}")
+        });
         assert!(
             !sections.is_empty(),
             "expected non-empty script_sections; got:\n{stdout}"

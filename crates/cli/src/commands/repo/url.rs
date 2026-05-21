@@ -49,7 +49,11 @@ pub(crate) fn interpolate_url(url: &str, profile: &Profile) -> Result<String, St
         .identity
         .dist_tag
         .as_deref()
-        .map(|d| d.trim_start_matches('.').trim_start_matches("el").to_string())
+        .map(|d| {
+            d.trim_start_matches('.')
+                .trim_start_matches("el")
+                .to_string()
+        })
         .unwrap_or_default();
     let infra = "stock"; // dnf default; not configurable in M1
 
@@ -184,17 +188,19 @@ mod tests {
         // Chosen to cover the URL-structural metachars (`:`, `/`, `?`,
         // `#`, `@`), the percent-encoding sigil (`%`), whitespace
         // (` `, `\n`, `\t`), and a couple of common path attack chars.
-        let bad_chars = ['/', ':', '?', '#', '@', '%', ' ', '\n', '\t', '\\', '.', '_', '-']
-            .into_iter()
-            // Keep only the chars that are actually disallowed — `.`,
-            // `_`, `-` are the safe-set and must NOT trip the guard.
-            .filter(|c| !matches!(c, '.' | '_' | '-'))
-            .collect::<Vec<_>>();
+        let bad_chars = [
+            '/', ':', '?', '#', '@', '%', ' ', '\n', '\t', '\\', '.', '_', '-',
+        ]
+        .into_iter()
+        // Keep only the chars that are actually disallowed — `.`,
+        // `_`, `-` are the safe-set and must NOT trip the guard.
+        .filter(|c| !matches!(c, '.' | '_' | '-'))
+        .collect::<Vec<_>>();
         for c in bad_chars {
             let value = format!("a{c}b");
-            let err = validate_placeholder_value("basearch", &value).expect_err(
-                &format!("char {c:?} should have been rejected (value={value:?})"),
-            );
+            let err = validate_placeholder_value("basearch", &value).expect_err(&format!(
+                "char {c:?} should have been rejected (value={value:?})"
+            ));
             assert!(
                 err.contains("disallowed character"),
                 "error for {c:?} should mention `disallowed character`: {err}"

@@ -62,6 +62,12 @@ impl Cmd {
 
         let mut would_change = false;
         let mut any_io_error = false;
+        // Number of source files actually visited (skipped configs
+        // continue past this), used to phrase the `--check` summary.
+        let mut total_sources: usize = 0;
+        // How many of those would be reformatted — also the count of
+        // `would reformat:` lines printed inside the loop.
+        let mut would_change_count: usize = 0;
         // Print the cosmetic-indent warning at most once per command
         // invocation, regardless of how many source files are
         // processed and whether the indent comes from `--indent` or
@@ -95,12 +101,24 @@ impl Cmd {
             if changed {
                 would_change = true;
             }
+            total_sources += 1;
 
             if self.check {
                 if changed {
                     eprintln!("would reformat: {}", source.display_name());
+                    would_change_count += 1;
                 }
-            } else if self.in_place && !source.is_stdin {
+            } else if self.in_place && source.is_stdin {
+                // `--in-place` only makes sense when there is a file
+                // path to write back to. With stdin we'd either lose
+                // the formatted output silently or pretend success —
+                // surface the misuse instead so the user can pipe to a
+                // file or drop the flag.
+                eprintln!(
+                    "error: --in-place cannot be applied to stdin (no file to write back to)"
+                );
+                any_io_error = true;
+            } else if self.in_place {
                 if changed && let Err(e) = io::write_atomic(&source.path, &formatted) {
                     eprintln!("error writing {}: {e:#}", source.display_name());
                     any_io_error = true;
@@ -109,6 +127,25 @@ impl Cmd {
                 emit_diff(&source.display_name(), &source.contents, &formatted, color)?;
             } else {
                 print!("{formatted}");
+            }
+        }
+
+        if self.check {
+            if total_sources == 0 {
+                eprintln!("format --check: no files to check");
+            } else if would_change {
+                let file_noun = if would_change_count == 1 {
+                    "file"
+                } else {
+                    "files"
+                };
+                eprintln!("format --check: {would_change_count} {file_noun} would be reformatted");
+            } else {
+                let file_noun = if total_sources == 1 { "file" } else { "files" };
+                let verb = if total_sources == 1 { "is" } else { "are" };
+                eprintln!(
+                    "format --check: all {total_sources} {file_noun} {verb} properly formatted"
+                );
             }
         }
 

@@ -1,4 +1,4 @@
-//! `config init` — write a starter `.rpmspec.toml`.
+//! `config init` — write a starter `rpmspec.toml`.
 //!
 //! The file is built from [`Config::default`] serialized to TOML. With
 //! `--all-lints`, every built-in lint appears as a `# lint-name =
@@ -8,21 +8,44 @@
 //! act of overriding the default.
 
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Args;
 use rpm_spec_analyzer::config::Config;
+use rpm_spec_analyzer::config_cache::default_config_path;
 use rpm_spec_analyzer::diagnostic::{LintCategory, Severity};
 use rpm_spec_analyzer::registry;
 
-const DEFAULT_PATH: &str = ".rpmspec.toml";
+/// Resolve the default output path for `config init`.
+///
+/// Mirrors the lookup the loader uses
+/// ([`rpm_spec_analyzer::config_cache::default_config_path`]): the
+/// XDG location (`$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml` →
+/// `~/.config/rpm-spec-tool/rpmspec.toml` on Linux). The tool only
+/// auto-loads two locations — explicit `--config` and this XDG file —
+/// so `config init` defaults to the XDG path; the older project-local
+/// `./.rpmspec.toml` walk-up is gone and would not be picked up
+/// implicitly. Override via `--output PATH` and then point the tool
+/// at it explicitly with `--config PATH` if a project-local file is
+/// preferred.
+fn resolve_default_output() -> PathBuf {
+    // `default_config_path` returns `None` only on platforms where
+    // home dir lookup fails — vanishingly rare on Linux, where the
+    // tool is compile-gated. The fallback covers the corner case
+    // without crashing.
+    default_config_path().unwrap_or_else(|| PathBuf::from("rpmspec.toml"))
+}
 
 #[derive(Debug, Args)]
 pub struct InitOpts {
-    /// Output path. Defaults to `./.rpmspec.toml`.
+    /// Output path. Defaults to the XDG config location
+    /// (`$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml`, typically
+    /// `~/.config/rpm-spec-tool/rpmspec.toml`) — the same file the
+    /// tool auto-loads when no `--config` is passed. Parent
+    /// directories are created if missing.
     #[arg(long, value_name = "PATH")]
     pub output: Option<PathBuf>,
 
@@ -47,10 +70,33 @@ pub struct InitOpts {
     /// flag, init refuses to clobber an existing config.
     #[arg(long)]
     pub force: bool,
+
+    /// Skip the interactive overwrite confirmation that `--force`
+    /// triggers on a TTY, and required for `--force` in non-interactive
+    /// mode (CI, pipes). Mirrors `repo cache prune --yes`.
+    #[arg(long)]
+    pub yes: bool,
+
+    /// Print the rendered content to stdout (with a `dry-run: would
+    /// write to <path>` note on stderr) without touching the
+    /// filesystem. Wins over `--stdout` when both are passed.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 pub fn run(opts: InitOpts) -> Result<ExitCode> {
     let content = render(&opts)?;
+
+    // Dry-run wins over --stdout: still prints to stdout but adds the
+    // path note on stderr so users can see what *would* happen.
+    if opts.dry_run {
+        let path = opts.output.clone().unwrap_or_else(resolve_default_output);
+        eprintln!("dry-run: would write to {}", path.display());
+        std::io::stdout()
+            .write_all(content.as_bytes())
+            .context("failed to write to stdout")?;
+        return Ok(ExitCode::SUCCESS);
+    }
 
     if opts.stdout {
         std::io::stdout()
@@ -59,22 +105,82 @@ pub fn run(opts: InitOpts) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let path = opts
-        .output
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_PATH));
+    let path = opts.output.clone().unwrap_or_else(resolve_default_output);
 
     if path.exists() && !opts.force {
         eprintln!(
             "error: {} already exists; pass --force to overwrite or --stdout to preview",
             path.display()
         );
-        return Ok(ExitCode::from(1));
+        return Ok(ExitCode::from(2));
+    }
+
+    if path.exists() && opts.force {
+        eprintln!("warning: overwriting existing {}", path.display());
+        if let Some(code) = gate_overwrite(opts.yes)? {
+            return Ok(code);
+        }
+    }
+
+    // Create the parent directory (`~/.config/rpm-spec-tool/`) when it
+    // doesn't exist yet — this is the common first-run case for the
+    // XDG default path. `create_dir_all` is a no-op when the directory
+    // is already there.
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        // A parent that exists but isn't a directory would otherwise
+        // surface as a bare `File exists (os error 17)` from
+        // `create_dir_all` — friendlier to flag it explicitly.
+        if parent.exists() && !parent.is_dir() {
+            eprintln!(
+                "error: cannot create parent directory: {} exists but is not a directory",
+                parent.display()
+            );
+            return Ok(ExitCode::from(2));
+        }
+        let did_create = !parent.exists();
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create parent directory {}", parent.display()))?;
+        if did_create {
+            eprintln!("created directory {}", parent.display());
+        }
     }
 
     fs::write(&path, &content).with_context(|| format!("failed to write {}", path.display()))?;
     eprintln!("wrote {}", path.display());
+    let is_xdg = default_config_path().as_deref() == Some(path.as_path());
+    if is_xdg {
+        eprintln!("hint: rpm-spec-tool will auto-load this file on its next run");
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Gate the destructive `--force` overwrite behind a TTY confirmation
+/// (or an explicit `--yes`). Mirrors `repo cache prune`'s helper but
+/// kept local so the two commands can evolve independently. Returns
+/// `Ok(Some(code))` to short-circuit, `Ok(None)` to proceed.
+fn gate_overwrite(yes: bool) -> Result<Option<ExitCode>> {
+    if yes {
+        return Ok(None);
+    }
+    if !std::io::stdin().is_terminal() {
+        eprintln!("error: refusing to overwrite without --yes in non-interactive mode");
+        return Ok(Some(ExitCode::from(2)));
+    }
+    eprint!("Proceed? [y/N] ");
+    std::io::stderr().flush().ok();
+    let mut line = String::new();
+    let stdin = std::io::stdin();
+    let mut handle = stdin.lock();
+    handle.read_line(&mut line)?;
+    let answer = line.trim();
+    if matches!(answer, "y" | "Y" | "yes") {
+        Ok(None)
+    } else {
+        eprintln!("aborted");
+        Ok(Some(ExitCode::from(130)))
+    }
 }
 
 /// Render the `.rpmspec.toml` body. Public for the unit tests.
@@ -222,13 +328,13 @@ const SECTION_EXAMPLES: &[(&str, &str)] = &[
 ];
 
 const HEADER: &str = "\
-# .rpmspec.toml — configuration for rpm-spec-tool.
+# rpmspec.toml — configuration for rpm-spec-tool.
 #
-# Generated by `rpm-spec-tool config init`. Edit freely — schema is the
-# public contract and won't break across patch releases.
+# Generated by `rpm-spec-tool config init`. Edit freely — schema is
+# the public contract and won't break across patch releases.
 #
-# See `rpm-spec-tool lints` for the full catalogue or run
-# `rpm-spec-tool config init --all-lints` to embed it inline.
+# See `rpm-spec-tool lints` for the full catalogue. Run with
+# `--all-lints` to embed it here.
 ";
 
 const LINT_CATALOGUE_HEADER: &str = "\
@@ -306,6 +412,8 @@ mod tests {
             all_lints: false,
             stdout: false,
             force: false,
+            yes: false,
+            dry_run: false,
         }
     }
 

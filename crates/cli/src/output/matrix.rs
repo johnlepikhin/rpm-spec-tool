@@ -55,7 +55,7 @@ pub fn render_human(
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
-    writeln!(out, "# Matrix run: target set `{}`", target_set.id)?;
+    writeln!(out, "Matrix run: target set \"{}\"", target_set.id)?;
     writeln!(out, "  profiles: {}", target_set.targets.len())?;
     writeln!(out)?;
 
@@ -65,7 +65,7 @@ pub fn render_human(
     }
 
     for item in items {
-        writeln!(out, "## {}", item.source.display_name())?;
+        writeln!(out, "=== {} ===", item.source.display_name())?;
         render_table(&mut out, &item.result.per_profile)?;
         writeln!(out)?;
         if item.result.aggregated.is_empty() {

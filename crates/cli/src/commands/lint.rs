@@ -90,6 +90,14 @@ impl Cmd {
         let mut any_deny = false;
         let mut any_io_error = false;
         let mut all_diagnostics: Vec<(io::Source, Vec<Diagnostic>)> = Vec::new();
+        // Surface fix-application feedback only in `Human` mode — JSON
+        // and SARIF readers consume stdout machine-formatted, but
+        // status chatter on stderr is fine. We still gate it behind
+        // `Human` so the interactive UX stays the only one that emits
+        // these human-readable progress lines.
+        let human_format = self.format == OutputFormat::Human;
+        let mut total_applied: usize = 0;
+        let mut files_fixed: usize = 0;
 
         let has_overrides =
             !self.deny.is_empty() || !self.warn.is_empty() || !self.allow.is_empty();
@@ -167,6 +175,20 @@ impl Cmd {
                         any_io_error = true;
                         continue;
                     }
+                    if human_format {
+                        let noun = if report.applied == 1 {
+                            "issue"
+                        } else {
+                            "issues"
+                        };
+                        eprintln!(
+                            "fixed {} {noun} in {}",
+                            report.applied,
+                            source.display_name()
+                        );
+                    }
+                    total_applied += report.applied;
+                    files_fixed += 1;
                 }
             }
 
@@ -216,6 +238,19 @@ impl Cmd {
             OutputFormat::Human => output::human::render(&all_diagnostics, color)?,
             OutputFormat::Json => output::json::render(&all_diagnostics)?,
             OutputFormat::Sarif => output::sarif::render(&all_diagnostics)?,
+        }
+
+        if human_format && self.fix {
+            if total_applied > 0 {
+                let fix_noun = if total_applied == 1 { "fix" } else { "fixes" };
+                let file_noun = if files_fixed == 1 { "file" } else { "files" };
+                let preposition = if files_fixed == 1 { "in" } else { "across" };
+                eprintln!(
+                    "lint --fix: applied {total_applied} {fix_noun} {preposition} {files_fixed} {file_noun}"
+                );
+            } else {
+                eprintln!("lint --fix: no fixable issues found");
+            }
         }
 
         Ok(if any_io_error {

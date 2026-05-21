@@ -37,32 +37,35 @@ pub enum ColorChoice {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Run lint rules against one or more spec files.
+    /// Run lint rules against one or more spec files
     Lint(commands::lint::Cmd),
-    /// Pretty-print spec files (with --check / --in-place / --diff modes).
+    /// Reformat spec files (check / in-place / diff modes)
     Format(commands::format::Cmd),
-    /// Pretty-print spec files to stdout with ANSI syntax highlighting.
+    /// Pretty-print spec files with ANSI syntax highlighting
     Pretty(commands::pretty::Cmd),
-    /// Dump the parsed AST.
+    /// Print the parsed AST
     Ast(commands::ast::Cmd),
-    /// Lint and format-check in one invocation (CI shorthand).
+    /// Run lint + format-check in one invocation (CI shorthand)
     Check(commands::check::Cmd),
-    /// Inspect the resolved distribution profile.
+    /// Inspect the resolved distribution profile
     Profile(commands::profile::Cmd),
-    /// Inspect release target sets — collections of profiles used by `matrix`.
+    /// Inspect release target sets and their member profiles
     Target(commands::target::Cmd),
-    /// Multi-profile (release matrix) analysis.
+    /// Run multi-profile (release matrix) analysis
     Matrix(commands::matrix::Cmd),
     /// Manage RPM repository metadata for repo-aware analysis
-    /// (sync, show, cache management; lock/health land in later
-    /// milestones).
+    ///
+    /// Supports sync, show, and cache management. Lock and health
+    /// subcommands land in later milestones.
     Repo(commands::repo::Cmd),
-    /// List every built-in lint rule with a short description.
+    /// List every built-in lint rule with a short description
     Lints(commands::lints::Cmd),
-    /// Manage `.rpmspec.toml` — generate from defaults, validate, or
-    /// inspect (`init` / `validate`).
+    /// Manage `.rpmspec.toml` — generate / validate / inspect
+    ///
+    /// Subcommands: `init` to generate a config from defaults,
+    /// `validate` to check an existing one.
     Config(commands::config::Cmd),
-    /// Emit a shell completion script for the given shell on stdout.
+    /// Generate a shell completion script
     Completions(commands::completions::Cmd),
 }
 
@@ -107,9 +110,26 @@ impl MacroDefinesArg {
     /// own pipeline, so the early check exists only to fail-fast
     /// with a stable exit code (2 — soft user error) and to avoid
     /// repeating the same error per spec in a batch.
-    pub fn validate(&self) -> Result<(), rpm_spec_analyzer::profile::DefineParseError> {
+    ///
+    /// The error is returned as a pre-rendered `String` so we can mix
+    /// upstream [`rpm_spec_analyzer::profile::DefineParseError`]
+    /// messages with locally-detected UX cases (e.g. `NAME=VALUE`
+    /// instead of `NAME VALUE`) without extending the upstream enum
+    /// from this crate. Callers print the message verbatim.
+    pub fn validate(&self) -> Result<(), String> {
         for raw in &self.raw {
-            rpm_spec_analyzer::profile::parse_define(raw)?;
+            // Catch the common `--define NAME=VALUE` mistake (familiar
+            // from rpmbuild's `-D` for *other* tools, and from `make`-
+            // style assignments) before the resolver buries it as a
+            // cryptic InvalidName error deep in its pipeline. The
+            // signal: an `=` with no whitespace anywhere in the arg.
+            if raw.contains('=') && !raw.chars().any(char::is_whitespace) {
+                return Err(format!(
+                    "--define expects `NAME VALUE` (whitespace-separated), not `{raw}`\n\
+                     hint: use --define 'NAME VALUE' (shell-quote the pair as one argument)"
+                ));
+            }
+            rpm_spec_analyzer::profile::parse_define(raw).map_err(|e| e.to_string())?;
         }
         Ok(())
     }

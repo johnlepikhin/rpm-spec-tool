@@ -355,7 +355,10 @@ fn render_human(
         )?;
         write_reason_rollup(&mut out, &summary, style)?;
         if report.conditionals.is_empty() {
-            writeln!(out, "    (no conditionals — spec has no %if / %ifarch blocks)")?;
+            writeln!(
+                out,
+                "    (no conditionals — spec has no %if / %ifarch blocks)"
+            )?;
             writeln!(out)?;
             continue;
         }
@@ -380,9 +383,7 @@ fn render_human(
             }
         }
         if printed == 0 {
-            let banner = only
-                .map(only_filter_label)
-                .unwrap_or("matching");
+            let banner = only.map(only_filter_label).unwrap_or("matching");
             writeln!(out, "    (no {banner} branches)")?;
         }
         writeln!(out)?;
@@ -663,10 +664,7 @@ fn format_profile_list<S: AsRef<str>>(ids: &[S], total_profiles: usize) -> Strin
     if total_profiles >= COLLAPSE_THRESHOLD && ids.len() == total_profiles {
         return format!("(all {total_profiles})");
     }
-    ids.iter()
-        .map(AsRef::as_ref)
-        .collect::<Vec<_>>()
-        .join(", ")
+    ids.iter().map(AsRef::as_ref).collect::<Vec<_>>().join(", ")
 }
 
 /// Render `macro → {values}` as `macro={v1|v2}, macro2={v3}`.

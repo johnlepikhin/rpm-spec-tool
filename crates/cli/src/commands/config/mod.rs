@@ -33,9 +33,10 @@ pub struct Cmd {
 
 #[derive(Debug, Subcommand)]
 pub enum Action {
-    /// Write a `.rpmspec.toml` populated with defaults.
+    /// Write a starter `rpmspec.toml` (defaults to the XDG config
+    /// path: `~/.config/rpm-spec-tool/rpmspec.toml`).
     Init(InitOpts),
-    /// Parse a `.rpmspec.toml` and report any deserialization errors.
+    /// Parse an `rpmspec.toml` and report any deserialization errors.
     Validate(ValidateOpts),
     /// Emit the JSON Schema for `.rpmspec.toml`. Pipe to a file and
     /// point your TOML editor (taplo / VS Code / Helix / Zed) at it

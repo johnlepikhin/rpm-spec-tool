@@ -127,8 +127,8 @@ pub fn run(opts: ExplainOpts, config_path: Option<&Path>, color: ColorChoice) ->
     }
 
     let cache_root = opts.repo_args.resolve_cache_root()?;
-    let dirs = CacheDirs::ensure(cache_root)
-        .context("preparing the repo cache directory layout")?;
+    let dirs =
+        CacheDirs::ensure(cache_root).context("preparing the repo cache directory layout")?;
     let profiles: Vec<&_> = ctx.resolved.targets.iter().map(|t| &t.profile).collect();
     let universes = cache_universes(&profiles, &dirs)?;
 
@@ -138,10 +138,7 @@ pub fn run(opts: ExplainOpts, config_path: Option<&Path>, color: ColorChoice) ->
             .with_context(|| format!("reading {}", spec_path.display()))?;
         for resolved in &ctx.resolved.targets {
             let profile = &resolved.profile;
-            let universe = universes
-                .get(&profile.identity.name)
-                .cloned()
-                .flatten();
+            let universe = universes.get(&profile.identity.name).cloned().flatten();
             let row = explain_one(spec_path, &source, profile, universe.as_deref());
             if matches!(row.verdict, SolveVerdict::Ok) && !opts.show_ok {
                 continue;
@@ -268,7 +265,11 @@ fn render(report: &ExplainReport, format: OutputFormat, style: &Style) -> Result
     match format {
         OutputFormat::Human => {
             if report.rows.is_empty() {
-                writeln!(out, "{}", style.dim("(no unsat rows; pass --show-ok to see passing ones)"))?;
+                writeln!(
+                    out,
+                    "{}",
+                    style.dim("(no unsat rows; pass --show-ok to see passing ones)")
+                )?;
                 return Ok(());
             }
             for row in &report.rows {
@@ -290,7 +291,11 @@ fn render_row(out: &mut impl Write, row: &ExplainRow, style: &Style) -> std::io:
 
     match row.verdict {
         SolveVerdict::Ok => {
-            writeln!(out, "  {}  (no unsat — nothing to explain)", style.always_tag("OK"))?;
+            writeln!(
+                out,
+                "  {}  (no unsat — nothing to explain)",
+                style.always_tag("OK")
+            )?;
             return Ok(());
         }
         SolveVerdict::Skipped => {
@@ -378,10 +383,7 @@ fn render_chain(
     // append "(from spec)" as the implicit root.
     for (depth, parent) in chain.iter().enumerate() {
         let inner_indent = "   ".repeat(depth);
-        writeln!(
-            out,
-            "  {outer_cont} {inner_indent}└─ pulled by: {parent}",
-        )?;
+        writeln!(out, "  {outer_cont} {inner_indent}└─ pulled by: {parent}",)?;
     }
     let inner_indent = "   ".repeat(chain.len());
     writeln!(
@@ -417,10 +419,7 @@ fn render_conflict_side(
     }
     for (depth, parent) in chain.iter().enumerate() {
         let inner_indent = "   ".repeat(depth);
-        writeln!(
-            out,
-            "  {outer_cont}{side_cont}{inner_indent}└─ {parent}",
-        )?;
+        writeln!(out, "  {outer_cont}{side_cont}{inner_indent}└─ {parent}",)?;
     }
     let inner_indent = "   ".repeat(chain.len());
     writeln!(

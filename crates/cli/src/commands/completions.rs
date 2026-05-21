@@ -12,6 +12,9 @@ use clap_complete::{Shell, generate};
 
 #[derive(Debug, Args)]
 #[command(after_help = "\
+This command writes a completion script to stdout. Pipe it into the
+appropriate directory for your shell — examples below.
+
 Installation examples:
   # Bash (system-wide):
   rpm-spec-tool completions bash | sudo tee /etc/bash_completion.d/rpm-spec-tool > /dev/null

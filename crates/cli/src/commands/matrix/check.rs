@@ -77,8 +77,14 @@ pub struct CheckOpts {
     /// `warn` to `deny`.
     #[arg(long = "deny", value_name = "LINT")]
     pub deny: Vec<String>,
+
+    /// Override lint severity to `warn` for the named rule. Repeatable.
     #[arg(long = "warn", value_name = "LINT")]
     pub warn: Vec<String>,
+
+    /// Override lint severity to `allow` (silence) for the named rule.
+    /// Repeatable. The `warnings` meta-name clears any earlier
+    /// `--deny warnings` promotion.
     #[arg(long = "allow", value_name = "LINT")]
     pub allow: Vec<String>,
 

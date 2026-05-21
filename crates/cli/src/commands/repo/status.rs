@@ -225,7 +225,12 @@ pub fn run(
         }
 
         match RepoDb::open(&db_path) {
-            Ok(db) => match (db.revision(), db.fetched_at(), db.meta("backend_kind"), db.package_count()) {
+            Ok(db) => match (
+                db.revision(),
+                db.fetched_at(),
+                db.meta("backend_kind"),
+                db.package_count(),
+            ) {
                 (Ok(rev), Ok(ts), Ok(kind), Ok(count)) => {
                     row.revision = Some(rev);
                     row.fetched_at = Some(ts.to_string());
@@ -233,10 +238,7 @@ pub fn run(
                     row.package_count = Some(count);
                     row.status = if count == 0 { "EMPTY" } else { "OK" };
                 }
-                (Err(e), _, _, _)
-                | (_, Err(e), _, _)
-                | (_, _, Err(e), _)
-                | (_, _, _, Err(e)) => {
+                (Err(e), _, _, _) | (_, Err(e), _, _) | (_, _, Err(e), _) | (_, _, _, Err(e)) => {
                     row.status = "ERROR";
                     row.detail = Some(e.to_string());
                 }

@@ -435,14 +435,10 @@ impl Cmd {
             Action::Impact(opts) => impact::run(opts, self.config.as_deref(), color),
             Action::Deps(cmd) => match cmd.action {
                 DepsAction::Check(opts) => deps::run(opts, self.config.as_deref(), color),
-                DepsAction::Explain(opts) => {
-                    deps_explain::run(opts, self.config.as_deref(), color)
-                }
+                DepsAction::Explain(opts) => deps_explain::run(opts, self.config.as_deref(), color),
             },
             Action::Buildroot(cmd) => match cmd.action {
-                BuildrootAction::Solve(opts) => {
-                    buildroot::run(opts, self.config.as_deref(), color)
-                }
+                BuildrootAction::Solve(opts) => buildroot::run(opts, self.config.as_deref(), color),
                 BuildrootAction::Diff(opts) => {
                     buildroot_diff::run(opts, self.config.as_deref(), color)
                 }
