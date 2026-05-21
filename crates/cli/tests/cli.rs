@@ -384,13 +384,17 @@ URL: https://e.org\n\
 
 #[test]
 fn hardcoded_paths_flags_install_script() {
-    // Use a `%{buildroot}`-prefixed target so the literal path still
-    // exercises RPM050 hardcoded-paths (Warn) without simultaneously
-    // tripping Phase 19's install-writes-outside-buildroot (Deny).
+    // Use a non-write `%install` line that references a literal path
+    // outside `%{buildroot}` / `$RPM_BUILD_ROOT` so it trips RPM050
+    // (Warn) without tripping Phase 19's install-writes-outside-buildroot
+    // (Deny). Buildroot-prefixed paths are deliberately exempt from
+    // RPM050 — the macro replacement (`%{_libdir}`) would expand back
+    // to the same literal under the install root, so the warning would
+    // amount to "rewrite `/usr/lib` as a macro that expands to `/usr/lib`".
     let spec = write_temp(
         "Name: hello\nVersion: 1\nRelease: 1\nSummary: Demo\nLicense: MIT\n\
 URL: https://e.org\n\
-%install\nmkdir -p %{buildroot}/usr/lib/foo\n\
+%install\nls /usr/lib/foo || :\n\
 %description\nBody.\n%changelog\n* Mon Jan 01 2024 a <a@b> - 1-1\n- init\n",
     );
     let (code, stdout, _) = run(&["lint", spec.path().to_str().unwrap()], None);
@@ -563,6 +567,50 @@ fn format_indent_rejects_huge_value() {
     assert!(
         stderr.contains("not in") || stderr.contains("invalid value"),
         "expected clap range-validation error, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn config_validate_honours_global_config_flag() {
+    // Regression: the global `--config PATH` flag must be honoured by
+    // `config validate` even when no positional `<path>` argument is
+    // given. Previously the subcommand ignored the global flag and
+    // walked up from cwd, failing with exit 2 in a directory with no
+    // `.rpmspec.toml`. After Fix 3 the global flag is plumbed through
+    // and `config validate --config X` exits 0 on a valid file.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = dir.path().join("x.toml");
+    std::fs::write(&cfg, "[lints]\n").expect("write config");
+    let (code, _stdout, stderr) = run(
+        &["--config", cfg.to_str().unwrap(), "config", "validate"],
+        None,
+    );
+    assert_eq!(
+        code, 0,
+        "global --config must be honoured by `config validate`; stderr={stderr}"
+    );
+}
+
+#[test]
+fn config_validate_honours_env_var() {
+    // `RPM_SPEC_TOOL_CONFIG` is the env-cascade rung between the
+    // explicit flag and the XDG default. `config validate` invoked with
+    // neither a positional path nor `--config` must still pick the file
+    // pointed to by this env var.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = dir.path().join("x.toml");
+    std::fs::write(&cfg, "[lints]\n").expect("write config");
+    let mut cmd = Command::new(binary());
+    cmd.args(["config", "validate"])
+        .env("RPM_SPEC_TOOL_CONFIG", cfg.to_str().unwrap())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let out = cmd.output().expect("spawn rpm-spec-tool");
+    let code = out.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        code, 0,
+        "RPM_SPEC_TOOL_CONFIG must be honoured by `config validate`; stderr={stderr}"
     );
 }
 

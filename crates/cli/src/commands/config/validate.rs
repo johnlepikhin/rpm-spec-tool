@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::Args;
 use rpm_spec_analyzer::config::Config;
+use rpm_spec_analyzer::config_cache::default_config_path;
 
 use crate::app::ColorChoice;
 use crate::output::resolve_color;
@@ -20,6 +21,11 @@ use codespan_reporting::term;
 use codespan_reporting::term::termcolor::StandardStream;
 use std::io::IsTerminal;
 
+/// Environment-variable override mirroring [`crate::config`]. Kept in
+/// sync so all entry points (lint/check/format and `config validate`)
+/// agree on which file gets loaded.
+const ENV_CONFIG_OVERRIDE: &str = "RPM_SPEC_TOOL_CONFIG";
+
 #[derive(Debug, Args)]
 pub struct ValidateOpts {
     /// `.rpmspec.toml` to validate. When omitted, walks upward from
@@ -28,13 +34,34 @@ pub struct ValidateOpts {
     pub path: Option<PathBuf>,
 }
 
-pub fn run(opts: ValidateOpts, color: ColorChoice) -> Result<ExitCode> {
-    let path = match opts.path {
+pub fn run(
+    opts: ValidateOpts,
+    color: ColorChoice,
+    config_override: Option<PathBuf>,
+) -> Result<ExitCode> {
+    // Resolution cascade — matches the loader in `crate::config`:
+    //   1. positional `<path>` to `config validate`
+    //   2. global `--config <path>` flag
+    //   3. `$RPM_SPEC_TOOL_CONFIG` env var
+    //   4. XDG default (only if the file actually exists)
+    //   5. upward walk from cwd for `.rpmspec.toml`
+    let candidate = opts
+        .path
+        .clone()
+        .or(config_override)
+        .or_else(|| std::env::var(ENV_CONFIG_OVERRIDE).ok().map(PathBuf::from))
+        .or_else(|| default_config_path().filter(|p| p.exists()));
+
+    let path = match candidate {
         Some(p) => p,
         None => match discover_upward()? {
             Some(p) => p,
             None => {
-                eprintln!("error: no .rpmspec.toml found in the current directory or any ancestor");
+                eprintln!("error: no rpmspec.toml found");
+                eprintln!(
+                    "hint:  pass --config PATH, set RPM_SPEC_TOOL_CONFIG, \
+                     or place one at ~/.config/rpm-spec-tool/rpmspec.toml"
+                );
                 return Ok(ExitCode::from(2));
             }
         },
@@ -106,7 +133,7 @@ mod tests {
         let path = tmp.path().to_path_buf();
 
         let opts = ValidateOpts { path: Some(path) };
-        let code = run(opts, ColorChoice::Never).unwrap();
+        let code = run(opts, ColorChoice::Never, None).unwrap();
         assert_eq!(code, ExitCode::from(1));
     }
 
@@ -130,7 +157,7 @@ mod tests {
         let path = tmp.path().to_path_buf();
 
         let opts = ValidateOpts { path: Some(path) };
-        let code = run(opts, ColorChoice::Never).unwrap();
+        let code = run(opts, ColorChoice::Never, None).unwrap();
         assert_eq!(code, ExitCode::SUCCESS);
     }
 }

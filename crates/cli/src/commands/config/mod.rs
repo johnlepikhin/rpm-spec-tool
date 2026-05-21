@@ -10,6 +10,7 @@
 //!   the first deserialization error with file:line pointing at the
 //!   offending span.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Result;
@@ -49,10 +50,17 @@ pub enum Action {
 }
 
 impl Cmd {
-    pub fn run(self, color: crate::app::ColorChoice) -> Result<ExitCode> {
+    pub fn run(
+        self,
+        color: crate::app::ColorChoice,
+        config_override: Option<PathBuf>,
+    ) -> Result<ExitCode> {
         match self.action {
+            // `init` writes a starter file — it owns the destination via
+            // its own `--output` flag, so the global `--config` (which
+            // points at an *input* config to read) does not apply here.
             Action::Init(opts) => init::run(opts),
-            Action::Validate(opts) => validate::run(opts, color),
+            Action::Validate(opts) => validate::run(opts, color, config_override),
             Action::Schema(opts) => schema::run(opts),
             Action::Doc(opts) => doc::run(opts),
         }

@@ -16,8 +16,38 @@
 //!   nothing useful; the proper fix (`Requires(pre): shadow-utils`)
 //!   belongs to a separate rule.
 //!
-//! Everywhere else (`%files` entries, shell-script bodies) we suggest
-//! the macro replacement.
+//! ## Context exclusions
+//!
+//! After a QA run against 31 upstream specs, the rule fired 24/31
+//! times — 77% — and the bulk of those hits were not real defects.
+//! Three context families produced the noise:
+//!
+//! 1. **Scriptlet bodies** (`%post`, `%pre`, `%postun`, `%pretrans`, …
+//!    plus `%trigger*`). These execute on the target system. Macros
+//!    like `%{_sysconfdir}` are not expanded at runtime in the
+//!    installed scriptlet — they were expanded at build time, in which
+//!    case they would have produced the same literal `/etc` they
+//!    replace. A line like `[ -x /sbin/restorecon ] && /sbin/restorecon
+//!    /etc/rndc.*` is the actual runtime target, not a build-time
+//!    install path. We skip scriptlets and triggers entirely.
+//!
+//! 2. **Buildroot-prefixed paths** — `$RPM_BUILD_ROOT/etc/foo`,
+//!    `${RPM_BUILD_ROOT}/etc/foo`, `%{buildroot}/etc/foo`. The
+//!    canonical `install -d $RPM_BUILD_ROOT/etc/pam.d/` pattern is
+//!    flagged by RPM050 pre-fix, but the macro replacement
+//!    (`%{_sysconfdir}`) expands to the same literal `/etc` on every
+//!    supported profile — the warning amounts to "rewrite `/etc` as a
+//!    macro that expands to `/etc`".
+//!
+//! 3. **Comments with quoted strings**. The pre-existing comment
+//!    heuristic bailed out as soon as it saw a `"` or `'` between the
+//!    `#` and the matched slash. Real specs quote constantly in
+//!    documentation prose (`# 'make install' insists on /usr/sbin`);
+//!    the quote-guard cost dwarfed its hypothetical benefit on
+//!    `echo "#/usr/bin"`.
+//!
+//! Everywhere else (`%files` entries, plain `%build` / `%install` shell
+//! bodies, preamble tag values) we still suggest the macro replacement.
 //!
 //! ## Span precision
 //!
@@ -136,6 +166,13 @@ impl HardcodedPaths {
                 }
                 continue;
             }
+            if is_buildroot_prefixed(slice, slash_pos) {
+                // `$RPM_BUILD_ROOT/etc/foo` and friends — the path is
+                // part of the install layout; the macro replacement
+                // expands to the same literal and adds no value.
+                idx = slash_pos + 1;
+                continue;
+            }
             if let Some(literal_len) = match_well_known_literal(&slice[slash_pos..]) {
                 // Canonical path everybody greps by literal name — skip
                 // both the suggestion and the prefix-match below.
@@ -214,17 +251,18 @@ fn match_well_known_literal(text: &str) -> Option<usize> {
 }
 
 /// `true` when the byte at `slash_pos` lives on a line whose first
-/// non-whitespace character is `#` and no quote character (`"`/`'`)
-/// appears between that `#` and `slash_pos`. Used to silence the rule
-/// on shell/spec comments — these are documentation, not code, and
-/// real-world specs (kernel.spec, systemd.spec, …) routinely mention
-/// hardcoded paths in comments.
+/// non-whitespace character is `#`. Used to silence the rule on
+/// shell/spec comments — these are documentation, not code, and
+/// real-world specs (kernel.spec, systemd.spec, glibc.spec, …)
+/// routinely mention hardcoded paths in comments.
 ///
-/// The quote heuristic guards against the unusual case of a literal
-/// `#` inside a quoted string starting a line — e.g. `echo "#/usr/bin"`.
-/// "First non-space is `#`" alone would over-silence such lines, so we
-/// require no `"` or `'` between the `#` and the slash to treat the
-/// line as a real comment.
+/// We don't bother trying to distinguish "real comment" from "literal
+/// `#` inside a quoted string starting a line" (e.g. `echo "#/usr/bin"`):
+/// that pattern is exotic and never appeared in the QA corpus, whereas
+/// the over-eager quote heuristic that used to live here turned every
+/// comment containing a quoted phrase (`# 'make install' insists on
+/// /usr/sbin`) into a false positive. The simpler "first non-space is
+/// `#`" rule wins on signal-to-noise.
 fn is_on_hash_comment_line(slice: &str, slash_pos: usize) -> bool {
     let bytes = slice.as_bytes();
     // Walk back to the start of the current line.
@@ -237,11 +275,31 @@ fn is_on_hash_comment_line(slice: &str, slash_pos: usize) -> bool {
     let Some(&first) = prefix.iter().find(|&&b| b != b' ' && b != b'\t') else {
         return false;
     };
-    if first != b'#' {
-        return false;
-    }
-    // No quote between the `#` and the slash → treat as a real comment.
-    !prefix.iter().any(|&b| b == b'"' || b == b'\'')
+    first == b'#'
+}
+
+/// Buildroot prefixes that, when they immediately precede a matched
+/// path, mean the path is part of the rpm install layout rather than
+/// a runtime reference. The macro suggestion is meaningless here:
+/// `%{_sysconfdir}` resolves to `/etc` on every supported profile, so
+/// rewriting `$RPM_BUILD_ROOT/etc/foo` to `$RPM_BUILD_ROOT%{_sysconfdir}/foo`
+/// produces the identical installed path with strictly more characters.
+///
+/// Ordering: longest first so the `${RPM_BUILD_ROOT}` form is checked
+/// before the bare `$RPM_BUILD_ROOT` it contains as a suffix.
+const BUILDROOT_PREFIXES: &[&str] = &[
+    "${RPM_BUILD_ROOT}",
+    "%{?buildroot}",
+    "%{buildroot}",
+    "$RPM_BUILD_ROOT",
+];
+
+/// `true` when the byte at `slash_pos` is the leading `/` of a path
+/// that immediately follows one of [`BUILDROOT_PREFIXES`].
+fn is_buildroot_prefixed(slice: &str, slash_pos: usize) -> bool {
+    BUILDROOT_PREFIXES
+        .iter()
+        .any(|prefix| slice[..slash_pos].ends_with(prefix))
 }
 
 fn is_safe_tag(tag: &Tag) -> bool {
@@ -284,12 +342,19 @@ impl<'ast> Visit<'ast> for HardcodedPaths {
     }
 
     fn visit_scriptlet(&mut self, node: &'ast Scriptlet<Span>) {
-        self.scan_anchor(node.data);
+        // Scriptlet bodies (%post, %pre, %postun, %pretrans, …) execute
+        // on the target system. Their literal paths are the actual
+        // runtime targets, not build-time install locations — the macro
+        // replacement either expands to the same literal (`%{_sysconfdir}`
+        // → `/etc`) or is meaningless at runtime. Skip the body entirely;
+        // still walk children so nested visitors (none today, but
+        // defensive) see the node.
         visit::walk_scriptlet(self, node);
     }
 
     fn visit_trigger(&mut self, node: &'ast Trigger<Span>) {
-        self.scan_anchor(node.data);
+        // Same reasoning as `visit_scriptlet`: trigger bodies run on the
+        // target system.
         visit::walk_trigger(self, node);
     }
 }

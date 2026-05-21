@@ -188,6 +188,7 @@ impl BcondOverridesArg {
 impl Application {
     pub fn run(self) -> anyhow::Result<ExitCode> {
         let color = self.color;
+        let config = self.config;
         match self.command {
             Command::Lint(cmd) => cmd.run(color),
             Command::Format(cmd) => cmd.run(color),
@@ -199,7 +200,7 @@ impl Application {
             Command::Matrix(cmd) => cmd.run(color),
             Command::Repo(cmd) => cmd.run(color),
             Command::Lints(cmd) => cmd.run(color),
-            Command::Config(cmd) => cmd.run(color),
+            Command::Config(cmd) => cmd.run(color, config),
             Command::Completions(cmd) => cmd.run(),
         }
     }
