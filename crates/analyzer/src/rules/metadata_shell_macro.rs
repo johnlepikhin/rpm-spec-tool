@@ -60,6 +60,7 @@ impl MacroShellExpansionInMetadata {
         for item in items {
             match item {
                 SpecItem::Preamble(p) => self.check_item(p),
+                #[allow(clippy::collapsible_match)]
                 SpecItem::Section(boxed) => {
                     if let Section::Package { content, .. } = boxed.as_ref() {
                         self.walk_preamble_content(content);

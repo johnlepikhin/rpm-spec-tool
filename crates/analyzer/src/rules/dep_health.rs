@@ -396,6 +396,7 @@ fn walk_spec_items_weak(
     }
     for item in items {
         match item {
+            #[allow(clippy::collapsible_match)]
             SpecItem::Preamble(p) => {
                 if let Some(label) = weak_label(&p.tag) {
                     check_weak_item(p, label, &local_strong, out);
@@ -436,6 +437,7 @@ fn walk_preamble_content_weak(
     }
     for item in items {
         match item {
+            #[allow(clippy::collapsible_match)]
             PreambleContent::Item(p) => {
                 if let Some(label) = weak_label(&p.tag) {
                     check_weak_item(p, label, &local_strong, out);

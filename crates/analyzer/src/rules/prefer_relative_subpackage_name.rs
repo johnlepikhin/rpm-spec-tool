@@ -131,6 +131,7 @@ impl<'ast> Visit<'ast> for PreferRelativeSubpackageName {
                 continue;
             };
             match boxed.as_ref() {
+                #[allow(clippy::collapsible_match)]
                 Section::Package { name_arg, data, .. } => {
                     if let Some(t) = package_name_absolute_text(name_arg) {
                         self.check("%package", t, &main, *data);

@@ -131,11 +131,10 @@ fn is_single_macro_ref(t: &Text, name: &str) -> bool {
     let mut macros = Vec::new();
     for seg in &t.segments {
         match seg {
-            TextSegment::Literal(s) => {
-                if !s.trim().is_empty() {
-                    return false;
-                }
+            TextSegment::Literal(s) if !s.trim().is_empty() => {
+                return false;
             }
+            TextSegment::Literal(_) => {}
             TextSegment::Macro(m) => macros.push(m),
             _ => return false,
         }

@@ -646,10 +646,8 @@ fn collect_active_from_section(
     out: &mut Vec<String>,
 ) {
     match section {
-        Section::BuildScript { kind, body, data } => {
-            if buildscript_kind_label(*kind) == label {
-                out.extend(active_shell_lines(body, *data, coverage, profile_id));
-            }
+        Section::BuildScript { kind, body, data } if buildscript_kind_label(*kind) == label => {
+            out.extend(active_shell_lines(body, *data, coverage, profile_id));
         }
         Section::Scriptlet(s) => {
             let l = label_with_subpkg(scriptlet_kind_label(s.kind), s.subpkg.as_ref());
@@ -689,10 +687,8 @@ fn collect_active_from_section(
                 out.extend(render_text_body_lines(body));
             }
         }
-        Section::Changelog { entries, .. } => {
-            if label == "%changelog" {
-                out.extend(render_changelog_entries(entries));
-            }
+        Section::Changelog { entries, .. } if label == "%changelog" => {
+            out.extend(render_changelog_entries(entries));
         }
         Section::Files {
             subpkg,
@@ -712,15 +708,11 @@ fn collect_active_from_section(
                 }
             }
         }
-        Section::SourceList { entries, .. } => {
-            if label == "%sourcelist" {
-                out.extend(entries.iter().map(render_text_with_macros));
-            }
+        Section::SourceList { entries, .. } if label == "%sourcelist" => {
+            out.extend(entries.iter().map(render_text_with_macros));
         }
-        Section::PatchList { entries, .. } => {
-            if label == "%patchlist" {
-                out.extend(entries.iter().map(render_text_with_macros));
-            }
+        Section::PatchList { entries, .. } if label == "%patchlist" => {
+            out.extend(entries.iter().map(render_text_with_macros));
         }
         _ => {}
     }

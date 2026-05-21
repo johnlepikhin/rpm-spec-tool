@@ -135,6 +135,7 @@ fn scan_top_items<B>(
                 }
                 prev = Some(c);
             }
+            #[allow(clippy::collapsible_match)]
             None => {
                 // Skip Blanks/Comments — they don't break adjacency.
                 if !is_filler(item) {

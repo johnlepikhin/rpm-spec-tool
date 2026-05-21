@@ -152,6 +152,7 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
     // Some filesystems (tmpfs, overlayfs) reject `sync_all` on directories;
     // we surface that at debug level rather than fail the write.
     match fs::File::open(&dir) {
+        #[allow(clippy::collapsible_match)]
         Ok(dir_file) => {
             if let Err(e) = dir_file.sync_all() {
                 tracing::debug!(

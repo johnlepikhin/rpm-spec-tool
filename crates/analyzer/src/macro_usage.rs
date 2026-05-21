@@ -193,19 +193,15 @@ impl MacroUsageCollector {
 
     fn scan_item_for_local_defs(&mut self, item: &SpecItem<Span>) {
         match item {
-            SpecItem::MacroDef(def) => {
-                if !def.name.is_empty() {
-                    self.local_defs.insert(def.name.clone());
-                }
+            SpecItem::MacroDef(def) if !def.name.is_empty() => {
+                self.local_defs.insert(def.name.clone());
             }
-            SpecItem::BuildCondition(bc) => {
-                // `%bcond_with foo` registers `%{with foo}` /
-                // `%{without foo}` (handled by builtin path) AND
-                // the bare name `foo` becomes a referenceable
-                // macro in some setups. Be generous — record it.
-                if !bc.name.is_empty() {
-                    self.local_defs.insert(bc.name.clone());
-                }
+            // `%bcond_with foo` registers `%{with foo}` /
+            // `%{without foo}` (handled by builtin path) AND
+            // the bare name `foo` becomes a referenceable
+            // macro in some setups. Be generous — record it.
+            SpecItem::BuildCondition(bc) if !bc.name.is_empty() => {
+                self.local_defs.insert(bc.name.clone());
             }
             SpecItem::Statement(mr) => {
                 // `%{!?name:%global name 1}` — conditional-define

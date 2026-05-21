@@ -197,6 +197,7 @@ fn walk_spec_item<'ast, F>(
             // %package sub-packages carry their own preamble; other
             // section kinds (description, build scripts, files,
             // changelog, …) hold no preamble items.
+            #[allow(clippy::collapsible_match)]
             if let Section::Package { content, .. } = section.as_ref() {
                 for pc in content {
                     walk_preamble_content(pc, selection, on);

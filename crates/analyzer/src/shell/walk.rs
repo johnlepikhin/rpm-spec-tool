@@ -165,6 +165,7 @@ where
     }
     for item in items {
         match item {
+            #[allow(clippy::collapsible_match)]
             SpecItem::Section(boxed) => {
                 if let Section::Scriptlet(s) = boxed.as_ref() {
                     f(s);

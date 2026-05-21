@@ -122,11 +122,10 @@ fn body_is_single_macro(node: &MacroDef<Span>) -> Option<String> {
     let mut macros = Vec::new();
     for seg in &node.body.segments {
         match seg {
-            TextSegment::Literal(s) => {
-                if !s.trim().is_empty() {
-                    return None;
-                }
+            TextSegment::Literal(s) if !s.trim().is_empty() => {
+                return None;
             }
+            TextSegment::Literal(_) => {}
             TextSegment::Macro(m) => macros.push(m),
             _ => return None,
         }

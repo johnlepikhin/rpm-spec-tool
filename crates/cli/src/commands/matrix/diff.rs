@@ -438,6 +438,7 @@ fn collect_files_from_content(
     use rpm_spec_analyzer::SelectedBody;
     for fc in content {
         match fc {
+            #[allow(clippy::collapsible_match)]
             FilesContent::Entry(e) => {
                 if let Some(path) = &e.path {
                     let s = rpm_spec_analyzer::render_text_with_macros(&path.path);

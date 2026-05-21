@@ -61,6 +61,7 @@ impl SingleUsePrivateMacro {
 
     fn record_expr(&mut self, expr: &ExprAst<Span>) {
         match expr {
+            #[allow(clippy::collapsible_match)]
             ExprAst::Macro { text, .. } => {
                 if let Some(name) = extract_simple_macro_name(text) {
                     *self.counts.entry(name).or_insert(0) += 1;

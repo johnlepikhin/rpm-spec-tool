@@ -525,6 +525,7 @@ fn complement_status<'a>(siblings: &[BranchStatus<'a>]) -> BranchStatus<'a> {
     for s in siblings {
         match s {
             BranchStatus::Active => return BranchStatus::Inactive,
+            #[allow(clippy::collapsible_match)]
             BranchStatus::Indeterminate(_) => {
                 if indet.is_none() {
                     indet = Some(s);

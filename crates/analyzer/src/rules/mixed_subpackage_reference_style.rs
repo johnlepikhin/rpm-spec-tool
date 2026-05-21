@@ -56,6 +56,7 @@ impl<'ast> Visit<'ast> for MixedSubpackageReferenceStyle {
                 continue;
             };
             match boxed.as_ref() {
+                #[allow(clippy::collapsible_match)]
                 Section::Package { name_arg, data, .. } => {
                     if let Some((canon, style)) = classify_package_name(name_arg, &main) {
                         occurrences.entry(canon).or_default().push((style, *data));

@@ -121,6 +121,7 @@ fn scan_adjacent<B>(
                 }
                 prev = Some(c);
             }
+            #[allow(clippy::collapsible_match)]
             None => {
                 if item.body_span().is_some() {
                     prev = None;

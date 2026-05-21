@@ -117,10 +117,8 @@ pub fn parse(text: &str) -> Result<ReleaseFile, AptRpmParseError> {
             // singular `Architecture: <single-arch>`. Treat it as a
             // 1-element architectures list so callers don't need
             // two different code paths.
-            "Architecture" => {
-                if !value.is_empty() {
-                    architectures = vec![value.to_string()];
-                }
+            "Architecture" if !value.is_empty() => {
+                architectures = vec![value.to_string()];
             }
             "Components" => {
                 components = value.split_whitespace().map(str::to_string).collect();

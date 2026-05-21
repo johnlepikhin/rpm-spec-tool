@@ -54,6 +54,7 @@ pub fn parse(bytes: &[u8]) -> Result<Repomd, RepoError> {
                     }
                 }
             }
+            #[allow(clippy::collapsible_match)]
             Event::Empty(e) if e.name().as_ref() == b"location" => {
                 if let Some(ct) = current_type.clone() {
                     for attr in e.attributes().with_checks(false).flatten() {

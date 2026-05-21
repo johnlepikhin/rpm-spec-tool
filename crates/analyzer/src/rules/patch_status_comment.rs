@@ -127,11 +127,10 @@ fn scan_conditional(cond: &Conditional<Span, SpecItem<Span>>, out: &mut Vec<Diag
 fn preceding_comments_have_marker(items: &[SpecItem<Span>], idx: usize) -> bool {
     for item in items[..idx].iter().rev() {
         match item {
-            SpecItem::Comment(c) => {
-                if comment_has_marker(&c.text) {
-                    return true;
-                }
+            SpecItem::Comment(c) if comment_has_marker(&c.text) => {
+                return true;
             }
+            SpecItem::Comment(_) => {}
             SpecItem::Blank => continue,
             _ => return false,
         }

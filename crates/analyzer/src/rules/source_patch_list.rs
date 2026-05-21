@@ -58,6 +58,7 @@ impl<'ast> Visit<'ast> for SourcePatchListMixing {
                 continue;
             };
             match boxed.as_ref() {
+                #[allow(clippy::collapsible_match)]
                 Section::SourceList { data, .. } => {
                     if let Some(src_span) = first_source {
                         self.diagnostics.push(
@@ -71,6 +72,7 @@ impl<'ast> Visit<'ast> for SourcePatchListMixing {
                         );
                     }
                 }
+                #[allow(clippy::collapsible_match)]
                 Section::PatchList { data, .. } => {
                     if let Some(patch_span) = first_patch {
                         self.diagnostics.push(

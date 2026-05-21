@@ -86,11 +86,10 @@ fn detect_equality_range(operands: &[&ExprAst<Span>]) -> Option<(i64, i64)> {
         let (var, n) = extract_eq_int(op)?;
         match anchor {
             None => anchor = Some(var),
-            Some(prev) => {
-                if !exprs_equiv(prev, var) {
-                    return None;
-                }
+            Some(prev) if !exprs_equiv(prev, var) => {
+                return None;
             }
+            Some(_) => {}
         }
         if !values.insert(n) {
             return None; // duplicate value — RPM104 territory

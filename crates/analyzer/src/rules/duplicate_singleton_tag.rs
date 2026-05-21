@@ -82,6 +82,7 @@ impl<'ast> Visit<'ast> for DuplicateSingletonTag {
 impl DuplicateSingletonTag {
     fn walk_subpackages(&mut self, item: &SpecItem<Span>) {
         match item {
+            #[allow(clippy::collapsible_match)]
             SpecItem::Section(boxed) => {
                 if let Section::Package { content, .. } = boxed.as_ref() {
                     let mut sub_seen: Seen = HashMap::new();

@@ -301,6 +301,7 @@ fn iter_subpackage_contents(spec: &SpecFile<Span>) -> Vec<&[PreambleContent<Span
 
 fn collect_into(expr: &DepExpr, out: &mut Vec<ProjectedDep>, macros: &MacroRegistry, span: Span) {
     match expr {
+        #[allow(clippy::collapsible_match)]
         DepExpr::Atom(atom) => {
             if let Some(projected) = project_atom(atom, macros, span) {
                 out.push(projected);
@@ -469,6 +470,7 @@ fn collect_active_build_scripts_inner<'a>(
 ) {
     for item in items {
         match item {
+            #[allow(clippy::collapsible_match)]
             SpecItem::Section(boxed) => {
                 if let Section::BuildScript { kind, body, data } = boxed.as_ref() {
                     out.push((*kind, body, *data));

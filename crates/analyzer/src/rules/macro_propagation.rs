@@ -557,6 +557,7 @@ impl UnusedConditionalGlobal {
 
     fn record_expr(&mut self, expr: &ExprAst<Span>) {
         match expr {
+            #[allow(clippy::collapsible_match)]
             ExprAst::Macro { text, .. } => {
                 if let Some((_, name)) = parse_macro_ref(text) {
                     self.reads.insert(name);
@@ -732,6 +733,7 @@ fn walk_preamble_content_118(c: &PreambleContent<Span>, r: &mut UnusedConditiona
 
 fn walk_files_content_118(c: &FilesContent<Span>, r: &mut UnusedConditionalGlobal) {
     match c {
+        #[allow(clippy::collapsible_match)]
         FilesContent::Entry(e) => {
             if let Some(p) = &e.path {
                 r.record_text(&p.path);

@@ -65,11 +65,13 @@ impl<'ast> Visit<'ast> for ArchPolicyContradiction {
                         buildarch_noarch = Some(item.data);
                     }
                 }
+                #[allow(clippy::collapsible_match)]
                 Tag::ExclusiveArch => {
                     if let TagValue::ArchList(list) = &item.value {
                         exclusive.push((item.data, literal_archs(list).unwrap_or_default()));
                     }
                 }
+                #[allow(clippy::collapsible_match)]
                 Tag::ExcludeArch => {
                     if let TagValue::ArchList(list) = &item.value {
                         exclude.push((item.data, literal_archs(list).unwrap_or_default()));

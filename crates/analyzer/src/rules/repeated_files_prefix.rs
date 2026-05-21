@@ -96,6 +96,7 @@ fn collect_parents(
 ) {
     for it in content {
         match it {
+            #[allow(clippy::collapsible_match)]
             FilesContent::Entry(e) => {
                 if let Some(parent) = parent_of(e, classifier) {
                     *out.entry(parent).or_insert(0) += 1;

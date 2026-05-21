@@ -274,6 +274,7 @@ fn apply_override(
     target: bool,
 ) {
     match entries.get_mut(name) {
+        #[allow(clippy::collapsible_match)]
         Some(entry) => {
             if entry.with_active != Some(target) {
                 entry.with_active = Some(target);

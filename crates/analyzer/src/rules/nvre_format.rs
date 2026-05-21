@@ -51,18 +51,21 @@ impl<'ast> Visit<'ast> for InvalidNvreFormat {
     fn visit_spec(&mut self, spec: &'ast SpecFile<Span>) {
         for item in collect_top_level_preamble(spec) {
             match (&item.tag, &item.value) {
+                #[allow(clippy::collapsible_match)]
                 (Tag::Name, TagValue::Text(t)) => {
                     if let Some(reason) = check_name(t) {
                         self.diagnostics
                             .push(diag(reason, item.data, Severity::Deny));
                     }
                 }
+                #[allow(clippy::collapsible_match)]
                 (Tag::Version, TagValue::Text(t)) => {
                     if let Some(reason) = check_version_or_release(t, "Version") {
                         self.diagnostics
                             .push(diag(reason, item.data, Severity::Deny));
                     }
                 }
+                #[allow(clippy::collapsible_match)]
                 (Tag::Release, TagValue::Text(t)) => {
                     if let Some(reason) = check_version_or_release(t, "Release") {
                         self.diagnostics

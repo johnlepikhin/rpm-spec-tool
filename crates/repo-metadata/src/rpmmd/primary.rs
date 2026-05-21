@@ -134,6 +134,7 @@ pub fn parse(xml: &[u8], repo_id: RepoId) -> Result<Vec<Package>, RepoError> {
                     }
                 }
                 b"rpm:sourcerpm" => {}
+                #[allow(clippy::collapsible_match)]
                 b"rpm:entry" => {
                     if let Some(kind) = dep_collector {
                         let cap = parse_entry(&e)?;

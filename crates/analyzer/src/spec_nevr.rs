@@ -77,16 +77,19 @@ impl SpecMainNevr {
         let mut epoch: Option<u32> = None;
         for item in collect_top_level_preamble(spec) {
             match item.tag {
+                #[allow(clippy::collapsible_match)]
                 Tag::Name => {
                     if let Some(t) = item_text(item, macros) {
                         name = Some(t);
                     }
                 }
+                #[allow(clippy::collapsible_match)]
                 Tag::Version => {
                     if let Some(t) = item_text(item, macros) {
                         version = Some((t, item.data));
                     }
                 }
+                #[allow(clippy::collapsible_match)]
                 Tag::Release => {
                     if let Some(t) = item_text(item, macros) {
                         release = Some(t);

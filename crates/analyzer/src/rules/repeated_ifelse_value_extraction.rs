@@ -74,6 +74,7 @@ impl<'ast> Visit<'ast> for RepeatedIfelseValueExtraction {
                     self.try_record_top(c);
                     self.recurse_top(c);
                 }
+                #[allow(clippy::collapsible_match)]
                 SpecItem::Section(boxed) => {
                     if let Section::Package { content, .. } = boxed.as_ref() {
                         for sub in content {

@@ -96,6 +96,7 @@ fn find_buildarch_span(items: &[SpecItem<Span>]) -> Option<Span> {
     for item in items {
         match item {
             SpecItem::Preamble(p) if matches!(p.tag, Tag::BuildArch) => return Some(p.data),
+            #[allow(clippy::collapsible_match)]
             SpecItem::Conditional(c) => {
                 if let Some(s) = find_buildarch_in_conditional(c) {
                     return Some(s);

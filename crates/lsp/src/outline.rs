@@ -38,6 +38,7 @@ fn push_item(
     out: &mut Vec<DocumentSymbol>,
 ) {
     match item {
+        #[allow(clippy::collapsible_match)]
         SpecItem::Section(boxed) => {
             if let Some(sym) = section_to_symbol(boxed.as_ref(), source, index, enc) {
                 out.push(sym);

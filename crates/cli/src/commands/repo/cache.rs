@@ -304,11 +304,10 @@ fn prune_candidates(dirs: &CacheDirs, repo: Option<&str>) -> Result<Vec<std::pat
     for entry in std::fs::read_dir(&dirs.repos)? {
         let entry = entry?;
         match repo {
-            Some(prefix) => {
-                if entry.file_name().to_string_lossy().starts_with(prefix) {
-                    candidates.push(entry.path());
-                }
+            Some(prefix) if entry.file_name().to_string_lossy().starts_with(prefix) => {
+                candidates.push(entry.path());
             }
+            Some(_) => {}
             None => candidates.push(entry.path()),
         }
     }

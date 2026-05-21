@@ -95,6 +95,7 @@ struct Collector {
 impl Collector {
     fn record(&mut self, node: &Section<Span>) {
         match node {
+            #[allow(clippy::collapsible_match)]
             Section::Package { name_arg, data, .. } => {
                 if let Some(name) = canonical_package_name(self.main_name.as_deref(), name_arg) {
                     self.declared.push((name, *data));

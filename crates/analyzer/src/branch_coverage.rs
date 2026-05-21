@@ -1615,6 +1615,7 @@ fn expand_text(t: &Text, macros: &MacroRegistry) -> Result<String, EvalError> {
                 let defined = macros.get(&mr.name).is_some();
                 use rpm_spec::ast::ConditionalMacro;
                 match mr.conditional {
+                    #[allow(clippy::collapsible_match)]
                     ConditionalMacro::IfDefined => {
                         if defined {
                             let v = macros
@@ -1623,6 +1624,7 @@ fn expand_text(t: &Text, macros: &MacroRegistry) -> Result<String, EvalError> {
                             out.push_str(&v);
                         }
                     }
+                    #[allow(clippy::collapsible_match)]
                     ConditionalMacro::IfNotDefined => {
                         if !defined && let Some(wv) = mr.with_value.as_ref() {
                             let expanded = expand_text(wv, macros)?;

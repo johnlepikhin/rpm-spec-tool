@@ -131,6 +131,7 @@ fn collect_entries(
     ) {
         for it in content {
             match it {
+                #[allow(clippy::collapsible_match)]
                 FilesContent::Entry(e) => {
                     if let Some(view) = build_view(e, classifier) {
                         out.push(view);

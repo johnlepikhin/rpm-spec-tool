@@ -245,6 +245,7 @@ fn collect_active_files_entries(
 ) {
     for item in items {
         match item {
+            #[allow(clippy::collapsible_match)]
             SpecItem::Section(boxed) => {
                 if let Section::Files { content, data, .. } = boxed.as_ref() {
                     collect_active_files_content(content, profile, bcond, *data, out);

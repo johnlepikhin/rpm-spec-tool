@@ -304,6 +304,7 @@ fn walk_cond_expr(expr: &CondExpr<Span>, anchor: Span, out: &mut BcondUsage) {
 /// span via the `data` field, so no anchor parameter is needed.
 fn walk_expr_ast(ast: &ExprAst<Span>, out: &mut BcondUsage) {
     match ast {
+        #[allow(clippy::collapsible_match)]
         ExprAst::Macro { text, data } => {
             if let Some((form, name)) = rpm_spec::ast::parse_bcond_verbatim(text) {
                 let kind = match form {

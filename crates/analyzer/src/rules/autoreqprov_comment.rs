@@ -90,6 +90,7 @@ fn walk_top_conditional(cond: &Conditional<Span, SpecItem<Span>>, out: &mut Vec<
 
 fn walk_subpackages(item: &SpecItem<Span>, out: &mut Vec<Diagnostic>) {
     match item {
+        #[allow(clippy::collapsible_match)]
         SpecItem::Section(boxed) => {
             if let Section::Package { content, .. } = boxed.as_ref() {
                 walk_preamble_contents(content, out);
