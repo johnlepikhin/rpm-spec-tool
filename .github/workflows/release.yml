@@ -46,9 +46,13 @@ jobs:
           shared-key: release-${{ matrix.name }}
 
       - name: Install packaging tools
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deb,cargo-generate-rpm
+        # Build from source on the runner so the resulting binaries
+        # link against the runner's glibc (2.35 on ubuntu-22.04). The
+        # prebuilt `taiki-e/install-action` downloads ship glibc-2.39
+        # binaries that fail to start on 22.04.
+        run: |
+          cargo install --locked --no-default-features cargo-deb
+          cargo install --locked cargo-generate-rpm
 
       - name: Verify tag matches Cargo.toml version
         run: |
