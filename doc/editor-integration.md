@@ -133,10 +133,11 @@ is measurably faster on non-ASCII specs.
 
 ## Configuration
 
-The server reads the same `rpmspec.toml` as the CLI and walks upward
-from the opened file's directory. Save the file, and
-`didChangeWatchedFiles` triggers a reload — diagnostics refresh
-without restarting the server.
+The server reads the same `rpmspec.toml` as the CLI via the same
+cascade (`--config` if launched with one, `$RPM_SPEC_TOOL_CONFIG`,
+then `$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml`, then built-in
+defaults). Save the file, and `didChangeWatchedFiles` triggers a
+reload — diagnostics refresh without restarting the server.
 
 The schema and the four `config` subcommands are documented in
 [configuration.md](configuration.md).

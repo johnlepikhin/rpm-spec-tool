@@ -105,7 +105,8 @@ impl MatrixPrepareError {
 /// Standard prelude every `matrix` subcommand runs:
 ///
 /// 1. Validate `--define` syntax.
-/// 2. Load `.rpmspec.toml` from `config_override` or the cwd walk-up.
+/// 2. Load `.rpmspec.toml` via the standard cascade (`config_override`
+///    / `$RPM_SPEC_TOOL_CONFIG` / XDG default / built-in defaults).
 /// 3. Resolve `--target-set NAME` / `--profiles a,b,c` into one
 ///    [`ResolvedTargetSet`] via [`resolve_matrix_source`].
 ///

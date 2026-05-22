@@ -1,13 +1,13 @@
 # Repositories — guide
 
 > Status snapshot — what ships **today**:
-> rpm-md fetch + on-disk cache + `repo sync` / `show` / `status` /
-> `cache`. Repo-aware lints are wired up through the `matrix deps *`,
-> `matrix buildroot *`, and `matrix upgrade-sim` subcommands —
-> see [matrix.md](matrix.md) for their flags and exit codes.
-> apt-rpm support and a lockfile workflow are tracked for later
-> milestones (see [§ What's not here yet](#whats-not-here-yet) at the
-> bottom of this page).
+> rpm-md and apt-rpm fetch + on-disk cache + `repo sync` / `show` /
+> `status` / `cache`. Repo-aware lints are wired up through the
+> `matrix deps *`, `matrix buildroot *`, and `matrix upgrade-sim`
+> subcommands — see [matrix.md](matrix.md) for their flags and exit
+> codes. A lockfile workflow is tracked for a later milestone (see
+> [§ What's not here yet](#whats-not-here-yet) at the bottom of this
+> page).
 
 `rpm-spec-tool` can attach RPM repositories to each profile. With a configured repo set the tool stops being a pure-text linter and starts answering questions a release engineer asks before submitting a build:
 
@@ -15,7 +15,7 @@
 - Will the new EVR actually be picked up as an upgrade against what's already in the repository?
 - Does a file in `%files` already belong to another package?
 
-This document covers what M1 ships: the configuration shape, the `repo` CLI subcommand, the on-disk cache layout, and the offline/online policy. Later milestones add lints, lockfile, apt-rpm support, and security scanning.
+This document covers what ships today: the configuration shape, the `repo` CLI subcommand (rpm-md and apt-rpm backends), the on-disk cache layout, and the offline/online policy. Later milestones add a lockfile workflow and security scanning.
 
 ## Concepts
 
@@ -32,7 +32,7 @@ This document covers what M1 ships: the configuration shape, the `repo` CLI subc
 The TOML schema sits inside the existing `[profiles.<name>]` block. Field names follow `dnf`'s conventions so packagers recognise them.
 
 ```toml
-[profile = "my-rhel-9"]                          # active profile
+profile = "my-rhel-9"                            # active profile
 
 [profiles."my-rhel-9"]
 extends = "rhel-9-x86_64"                        # built-in baseline
@@ -145,7 +145,7 @@ Every command other than `repo sync` runs in **offline** mode by default. That's
 | `CacheOnly` (`--cache-only`) | no | hard error | CI invariant: "the cache must be populated" |
 | `Online` (`--allow-fetch`) | yes | fetch | `repo sync`; explicit ad-hoc invocations |
 
-Environment overrides: `RPM_SPEC_TOOL_OFFLINE=1`, `RPM_SPEC_TOOL_CACHE_ONLY=1`, `RPM_SPEC_TOOL_CACHE_DIR=/path`.
+Environment overrides: `RPM_SPEC_TOOL_CACHE_DIR=/path` overrides the cache root. The network-mode flags (`--offline`, `--cache-only`, `--allow-fetch`) are the only way to switch modes — there are no env-var equivalents.
 
 The HTTP client respects `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` natively — no extra flag needed inside a corporate network.
 
@@ -201,7 +201,6 @@ Tracked for later milestones:
 
 - `repo lock {create,update,verify,pin-closure,status}` lockfile
   workflow — record a frozen snapshot for reproducible builds.
-- apt-rpm backend (ALT Linux) + ALT built-in repo defaults.
 - `repo health`, `repo impact`, `workspace build-order`,
   `repo security scan` — operator-oriented repo introspection
   beyond `repo show`.

@@ -60,7 +60,7 @@ rpm-spec-tool lint myproject.spec
 ```
 
 Without `--profile` the analyzer runs in the generic baseline — every
-core lint fires, but family-gated rules (RHEL / Fedora / SUSE / ALT
+core lint fires, but family-gated rules (RHEL / SUSE / ALT Linux
 conventions) stay silent. Pick a target so those wake up:
 
 ```bash

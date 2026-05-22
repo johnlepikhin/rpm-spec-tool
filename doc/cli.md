@@ -15,7 +15,7 @@ detail (severity, fix levels, category filters) see
 | Flag | Scope | Purpose |
 | ---- | ----- | ------- |
 | `--color auto\|always\|never` | every subcommand | ANSI colour policy; default `auto` follows TTY detection. |
-| `--config <PATH>`             | every subcommand | Explicit `rpmspec.toml` path. Without it, the tool checks `$RPM_SPEC_TOOL_CONFIG`, then `$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml`, then walks upward from each input. |
+| `--config <PATH>`             | every subcommand | Explicit `rpmspec.toml` path. Without it, the tool checks `$RPM_SPEC_TOOL_CONFIG`, then `$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml`, then falls back to built-in defaults. |
 
 Every command that processes spec files reads from **stdin** when the
 path is `-` or omitted, and accepts any number of paths for batch
@@ -205,13 +205,13 @@ documentation in [repos.md](repos.md).
 rpm-spec-tool repo sync   [--profile NAME | --all-profiles | --target-set ID] --allow-fetch
 rpm-spec-tool repo show   [--profile NAME] [--repo ID] [--package N | --provides N | --provides-like P | --file PATH] [--full]
 rpm-spec-tool repo status [--profile NAME] [--format human|json]
-rpm-spec-tool repo cache  ls | gc [--keep N] | prune [--repo ID] [--yes]
+rpm-spec-tool repo cache  ls | gc [--keep N] [--yes] [--dry-run] | prune [--repo ID] [--yes] [--dry-run]
 ```
 
 Network policy is a 3-state ladder — `Offline` (default), `CacheOnly`
-(strict CI), `Online` (`--allow-fetch`). The environment variables
-`RPM_SPEC_TOOL_OFFLINE=1`, `RPM_SPEC_TOOL_CACHE_ONLY=1`, and
-`RPM_SPEC_TOOL_CACHE_DIR=/path` override the defaults.
+(strict CI), `Online` (`--allow-fetch`). Pass `--offline` /
+`--cache-only` / `--allow-fetch` to switch modes; set
+`RPM_SPEC_TOOL_CACHE_DIR=/path` to override the cache root.
 
 The `--insecure-tls` flag disables certificate verification entirely.
 **Do not use it in production CI** — fix the trust store via
@@ -256,8 +256,9 @@ rpm-spec-tool config doc      [--field NAME]
   it next to your specs instead.
 * `--all-lints` embeds every built-in rule as a commented severity
   entry, turning the file into a discoverable catalogue.
-* `validate` walks upward from the current directory when no path is
-  given, mirroring discovery.
+* `validate` resolves the file via the same cascade as the rest of
+  the tool (`--config`, `$RPM_SPEC_TOOL_CONFIG`, XDG default) and, as
+  a final fallback, walks upward from CWD looking for `.rpmspec.toml`.
 * `schema --format json` writes the JSON-Schema you'd point a TOML
   editor (taplo / VS Code / Helix / Zed) at for completion.
 * `doc --field <NAME>` prints the markdown reference page for one

@@ -11,7 +11,7 @@ Pretty-printer and static analyzer CLI for RPM `.spec` files.
 
 Built on top of the [`rpm-spec`](https://crates.io/crates/rpm-spec) parser and a
 visitor-based analyzer that ships with 24 built-in distribution profiles
-(generic, RHEL 8/9/10, Fedora-derived families, SUSE, ALT Linux variants).
+(generic, RHEL 8/9/10, ALT Linux, ALT Linux SPT, REDos, Rosa, MOSos, SLES).
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/johnlepikhin/rpm-spec-tool/main/doc/images/linter.png">
@@ -135,8 +135,8 @@ Long-form documentation lives under [`doc/`](doc/) — start with
 
 ## Configuration in 30 seconds
 
-Drop a `rpmspec.toml` next to your specs (or anywhere up the directory tree —
-the tool walks upward from each input). Minimal example:
+Drop a `rpmspec.toml` at `~/.config/rpm-spec-tool/rpmspec.toml` (the
+XDG default), or pass `--config PATH` per invocation. Minimal example:
 
 ```toml
 # Pick the active distribution profile. CLI `--profile` overrides this.

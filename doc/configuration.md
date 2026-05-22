@@ -19,18 +19,19 @@ tree](#the-config-subcommand-tree) below.
 
 ## Discovery
 
-The tool walks **upward** from the input file's directory until it
-finds an `rpmspec.toml`, or — for the global commands (`profile`,
-`target`, `lints`, etc.) — from the current working directory. The
-search order:
+The tool resolves `rpmspec.toml` via a fixed cascade — no walk-up,
+so the same spec lints the same way regardless of CWD:
 
 1. `--config PATH` on the command line. Explicit wins over everything.
 2. `$RPM_SPEC_TOOL_CONFIG` if set.
 3. `$XDG_CONFIG_HOME/rpm-spec-tool/rpmspec.toml`
    (typically `~/.config/rpm-spec-tool/rpmspec.toml`).
-4. Walk-up from the spec or CWD looking for `rpmspec.toml` or
-   `.rpmspec.toml`.
-5. Built-in defaults.
+4. Built-in defaults if none of the above exist.
+
+`config validate` is the one exception — when called with no path
+and the cascade above finds nothing, it walks upward from CWD
+looking for `.rpmspec.toml` as a last fallback (see
+[§ The `config` subcommand tree](#the-config-subcommand-tree) below).
 
 Paths inside the file (`showrc-file`, etc.) are resolved relative to
 the directory the config was found in, **not** the CWD — so multiple
@@ -51,7 +52,7 @@ rpm-spec-tool config init --output ./rpmspec.toml --profile rhel-9-x86_64
 rpm-spec-tool config init --all-lints --output ./rpmspec.toml
 ```
 
-Validate an existing file (walks upward when no path is given):
+Validate an existing file (uses the discovery cascade, with an upward walk from CWD as a final fallback unique to `validate`):
 
 ```bash
 rpm-spec-tool config validate
@@ -240,8 +241,10 @@ rpm-spec-tool config validate [PATH]
 ```
 
 Parses the TOML and reports any deserialisation errors with file:line
-spans. When `PATH` is omitted, walks upward from CWD looking for
-`rpmspec.toml` — same as every other subcommand's discovery.
+spans. When `PATH` is omitted, applies the same cascade as the rest
+of the tool (`--config`, `$RPM_SPEC_TOOL_CONFIG`, XDG default) and,
+as a final fallback unique to `validate`, walks upward from CWD
+looking for `.rpmspec.toml`.
 
 ### `config schema`
 

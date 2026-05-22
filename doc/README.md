@@ -32,8 +32,8 @@ lives here.
 ## Distribution targeting
 
 * **[Distribution profiles](profiles.md)** — what a profile is, the
-  built-in catalogue (RHEL, Fedora-derived, ALT, SUSE, …), layering
-  rules, and the `profile *` subcommand tree.
+  built-in catalogue (RHEL, ALT Linux, REDos, Rosa, MOSos, SLES, generic),
+  layering rules, and the `profile *` subcommand tree.
 * **[Release matrix and multi-profile analysis](matrix.md)** —
   `target-set`s, `matrix check`, baselines, portability, coverage,
   diff/impact/classes, contract verification, repo-aware deps.
